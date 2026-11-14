@@ -20,13 +20,14 @@ env:
   # varve itself; the tools (rivet) come from the layer varve.toml pins.
   VARVE_VERSION: v0.47.0
 
-# GitHub-hosted until a self-hosted runner serves this repository (DD-007).
-# Then light jobs switch to the fail-closed fork guard from docs/BRIEF.md.
+# Self-hosted with the fail-closed fork guard (DD-007): a pull request from
+# a fork always runs on ubuntu-latest. Light jobs take `light`, Rust builds
+# take `rust-cpu`. This workflow has no pull_request_target trigger.
 jobs:
   # clippy.toml's disallowed-methods is the lint layer of DD-006.
   check:
     name: fmt, clippy, test
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","rust-cpu"]') || 'ubuntu-latest' }}
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -54,7 +55,7 @@ jobs:
   # rivet: verifies REQ-FAULT-001
   planted-faults:
     name: planted faults
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","rust-cpu"]') || 'ubuntu-latest' }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -76,7 +77,7 @@ jobs:
   # rivet: verifies DD-001
   rivet:
     name: rivet validate
-    runs-on: ubuntu-24.04
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
