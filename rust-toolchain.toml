@@ -1,3 +1,6 @@
 [toolchain]
+# Keep in step with RUST_TOOLCHAIN in ci.yml and release.yml. No
+# `components` here: CI installs rustfmt and clippy itself, and listing them
+# made rustup re-add rustfmt over the release job's toolchain and fail with
+# a cargo-fmt conflict (v0.1.0 release run).
 channel = "1.96.1"
-components = ["rustfmt", "clippy"]
