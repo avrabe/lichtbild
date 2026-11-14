@@ -51,6 +51,45 @@ jobs:
       - name: cargo test
         run: cargo test --locked --no-fail-fast
 
+  # The release build steps on every PR, so release.yml is not first run at
+  # the tag (the v0.1.0 run failed on a toolchain conflict CI never saw).
+  # Same toolchain install as release.yml: no components, musl target.
+  # rivet: verifies REQ-REL-001
+  release-build:
+    name: release build (dry run)
+    # GitHub-hosted on purpose: a fresh toolchain install, as in release.yml.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CARGO_ZIGBUILD_VERSION: 0.24.1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install cargo-zigbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig"
+          "$RUNNER_TEMP/zig/bin/pip" install --quiet "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          echo "$RUNNER_TEMP/zig/bin" >> "$GITHUB_PATH"
+
+      - name: Build (zigbuild)
+        run: cargo zigbuild --locked --release -p lichtbild --target x86_64-unknown-linux-musl
+
+      - name: Check binary version and linkage
+        run: |
+          bin=target/x86_64-unknown-linux-musl/release/lichtbild
+          want="lichtbild $(cargo metadata --no-deps --format-version 1 --locked | jq -r '.packages[] | select(.name == "lichtbild") | .version')"
+          got="$("$bin" --version)"
+          test "$got" = "$want" || { echo "::error::binary reports '$got', expected '$want'"; exit 1; }
+          file "$bin" | tee /dev/stderr | grep -q 'statically linked'
+
   # REQ-FAULT-001: every check must fail with its planted fault.
   # rivet: verifies REQ-FAULT-001
   planted-faults:
