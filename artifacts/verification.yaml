@@ -377,6 +377,7 @@ artifacts:
       steps:
         - run: "cargo test --lib nearest_town_with_region_and_country"
         - run: "cargo test --lib nearest_crosses_cell_borders"
+        - run: "cargo test --lib crlf_line_endings"
     links:
       - type: verifies
         target: REQ-PLACE-001
