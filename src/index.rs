@@ -185,6 +185,89 @@ impl Index {
         Ok(out)
     }
 
+    /// Live items per month ("YYYY-MM"), newest first, for the timeline's
+    /// date scrubber. One label reads `by_root`; several read `by_time`.
+    pub fn months(&self, labels: &[String]) -> Result<Vec<(String, u64)>> {
+        let r = self.db.begin_read()?;
+        let mut out: Vec<(String, u64)> = Vec::new();
+        let mut add = |taken: &str| {
+            let ym = taken.get(..7).unwrap_or(taken);
+            match out.last_mut() {
+                Some((m, n)) if m == ym => *n += 1,
+                _ => out.push((ym.to_string(), 1)),
+            }
+        };
+        match labels {
+            [] => {}
+            [one] => {
+                let t = r.open_table(BY_ROOT)?;
+                for e in t
+                    .range((one.as_str(), "", 0)..(one.as_str(), TAKEN_MAX, 0))?
+                    .rev()
+                {
+                    add(e?.0.value().1);
+                }
+            }
+            many => {
+                let t = r.open_table(BY_TIME)?;
+                for e in t.iter()?.rev() {
+                    let (k, v) = e?;
+                    if many.iter().any(|l| l == v.value()) {
+                        add(k.value().0);
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// The neighbours of item `id` (taken at `taken`) in the timeline of
+    /// `labels`: (newer, older). Same order as `timeline`.
+    pub fn neighbours(
+        &self,
+        labels: &[String],
+        taken: &str,
+        id: u64,
+    ) -> Result<(Option<u64>, Option<u64>)> {
+        let r = self.db.begin_read()?;
+        match labels {
+            [] => Ok((None, None)),
+            [one] => {
+                let t = r.open_table(BY_ROOT)?;
+                let l = one.as_str();
+                let newer = match t.range((l, taken, id + 1)..(l, TAKEN_MAX, 0))?.next() {
+                    Some(e) => Some(e?.0.value().2),
+                    None => None,
+                };
+                let older = match t.range((l, "", 0)..(l, taken, id))?.next_back() {
+                    Some(e) => Some(e?.0.value().2),
+                    None => None,
+                };
+                Ok((newer, older))
+            }
+            many => {
+                let t = r.open_table(BY_TIME)?;
+                let mut newer = None;
+                for e in t.range((taken, id + 1)..(TAKEN_MAX, 0))? {
+                    let (k, v) = e?;
+                    if many.iter().any(|x| x == v.value()) {
+                        newer = Some(k.value().1);
+                        break;
+                    }
+                }
+                let mut older = None;
+                for e in t.range(("", 0)..(taken, id))?.rev() {
+                    let (k, v) = e?;
+                    if many.iter().any(|x| x == v.value()) {
+                        older = Some(k.value().1);
+                        break;
+                    }
+                }
+                Ok((newer, older))
+            }
+        }
+    }
+
     /// Keyset page, newest first. One label reads `by_root`; several read
     /// `by_time` and keep only those labels. `before` is (taken_local, id).
     pub fn timeline(

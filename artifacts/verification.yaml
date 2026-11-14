@@ -265,3 +265,45 @@ artifacts:
     links:
       - type: verifies
         target: REQ-THUMB-001
+
+  - id: VER-020
+    type: verification
+    title: Scrubber jumps to years and months and links back
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "date_scrubber_jumps_to_years_and_months"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web date_scrubber_jumps_to_years_and_months"
+    links:
+      - type: verifies
+        target: REQ-WEB-006
+
+  - id: VER-021
+    type: verification
+    title: Viewer steps through the timeline and returns to the same photo
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "viewer_steps_through_the_timeline"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web viewer_steps_through_the_timeline"
+    links:
+      - type: verifies
+        target: REQ-WEB-007
+
+  - id: VER-022
+    type: verification
+    title: Viewer only shows photos of the timeline it was opened from
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "viewer_respects_the_timeline_it_was_opened_from"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web viewer_respects_the_timeline_it_was_opened_from"
+    links:
+      - type: verifies
+        target: REQ-WEB-007

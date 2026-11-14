@@ -21,6 +21,7 @@ use crate::media::DateSource;
 
 const HTMX: &str = include_str!("../assets/htmx-2.0.4.min.js");
 const CSS: &str = include_str!("../assets/lichtbild.css");
+const JS: &str = include_str!("../assets/lichtbild.js");
 const PAGE_SIZE: u32 = 240;
 
 pub const CSP: &str = "default-src 'self'; img-src 'self'; media-src 'self'; script-src 'self'; \
@@ -61,6 +62,7 @@ pub fn router(state: AppState) -> Router {
     let app: Router<AppState> = Router::new()
         .route("/", get(home))
         .route("/t/{who}", get(timeline))
+        .route("/v/{who}/{id}", get(viewer))
         .route("/thumb/{id}", get(thumb))
         .route("/original/{id}", get(original))
         .route("/static/{file}", get(static_file))
@@ -160,8 +162,10 @@ fn page(base: &str, title: &str, body: &str) -> Html<String> {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <base href="{base}/">
 <title>{title}</title>
+<meta name="htmx-config" content='{{"includeIndicatorStyles":false}}'>
 <link rel="stylesheet" href="static/lichtbild.css">
 <script src="static/htmx-2.0.4.min.js" defer></script>
+<script src="static/lichtbild.js" defer></script>
 </head>
 <body>
 <header><a href="./" class="brand">lichtbild</a></header>
@@ -196,7 +200,14 @@ async fn home(State(st): State<AppState>) -> Response {
             l = esc(l)
         );
     }
-    body += "<li><a href=\"t/all\">merged</a></li>\n</ul>\n";
+    // The merged view counts the configured people only.
+    let total: u64 = st
+        .labels
+        .iter()
+        .map(|l| counts.get(l).copied().unwrap_or(0))
+        .sum();
+    body +=
+        &format!("<li><a href=\"t/all\">merged</a> <span class=\"n\">{total}</span></li>\n</ul>\n");
     page(&st.base_path, "lichtbild", &body).into_response()
 }
 
@@ -205,6 +216,82 @@ struct Cursor {
     before: Option<String>,
     id: Option<u64>,
     day: Option<String>,
+    /// Start at this year ("2023") or month ("2023-05") and go back in time.
+    from: Option<String>,
+}
+
+/// `from=YYYY` or `from=YYYY-MM` -> the exclusive upper bound of the page:
+/// the first instant after that year or month.
+pub fn parse_from(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let digits =
+        |r: std::ops::Range<usize>| b.get(r).is_some_and(|d| d.iter().all(u8::is_ascii_digit));
+    match b.len() {
+        4 if digits(0..4) => {
+            let y: u32 = v.parse().ok()?;
+            Some(format!("{:04}-01-01T00:00:00", y + 1))
+        }
+        7 if digits(0..4) && b[4] == b'-' && digits(5..7) => {
+            let y: u32 = v[..4].parse().ok()?;
+            let m: u32 = v[5..].parse().ok()?;
+            if !(1..=12).contains(&m) {
+                return None;
+            }
+            let (y, m) = if m == 12 { (y + 1, 1) } else { (y, m + 1) };
+            Some(format!("{y:04}-{m:02}-01T00:00:00"))
+        }
+        _ => None,
+    }
+}
+
+/// The date scrubber: a rail along the right edge on wide screens (ticks
+/// sized by item count, see assets/lichtbild.js) and a "Jump to date" menu
+/// on phones. Both are plain links, so they work without JavaScript.
+pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
+    if months.is_empty() {
+        return String::new();
+    }
+    let who = esc(who);
+    let name = |ym: &str| {
+        let m: usize = ym.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
+        MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("")
+    };
+    let mut rail = String::from("<nav class=\"rail\" aria-label=\"Jump to date\">");
+    let mut menu = String::from(
+        "<details class=\"jumpmenu\"><summary>Jump to date</summary><div class=\"jm\">",
+    );
+    let mut year = "";
+    for (ym, n) in months {
+        let y = ym.get(..4).unwrap_or("");
+        if y != year {
+            if !year.is_empty() {
+                menu += "</div></div>";
+            }
+            year = y;
+            rail += &format!(
+                "<a class=\"y\" href=\"t/{who}?from={y}\">{y}</a>",
+                y = esc(y)
+            );
+            menu += &format!(
+                "<div class=\"jy\"><a class=\"y\" href=\"t/{who}?from={y}\">{y}</a><div class=\"chips\">",
+                y = esc(y)
+            );
+        }
+        let short = name(ym).get(..3).unwrap_or("");
+        rail += &format!(
+            "<a class=\"m\" data-n=\"{n}\" data-ym=\"{ym}\" href=\"t/{who}?from={ym}\" title=\"{full} {y} · {n}\"><span>{short}</span></a>",
+            ym = esc(ym),
+            full = name(ym),
+            y = esc(y),
+        );
+        menu += &format!(
+            "<a href=\"t/{who}?from={ym}\">{short} <span class=\"n\">{n}</span></a>",
+            ym = esc(ym)
+        );
+    }
+    menu += "</div></div></div></details>";
+    rail += "</nav>";
+    rail + &menu
 }
 
 const MONTHS: [&str; 12] = [
@@ -276,9 +363,10 @@ pub fn render_items(
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
         s += &format!(
-            "<a class=\"item{cls}\" href=\"original/{id}\" title=\"{t}\">{img}</a>",
+            "<a class=\"item{cls}\" id=\"i{id}\" href=\"v/{who}/{id}\" title=\"{t}\">{img}</a>",
             cls = if weak { " weak" } else { "" },
             id = it.id,
+            who = esc(who),
             t = esc(&title),
         );
     }
@@ -312,17 +400,39 @@ async fn timeline(
     } else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
+    let from_bound = match cur.from.as_deref() {
+        None => None,
+        Some(f) => match parse_from(f) {
+            Some(b) => Some(b),
+            None => {
+                return (StatusCode::BAD_REQUEST, "from: expected YYYY or YYYY-MM").into_response()
+            }
+        },
+    };
+    let full_page = !headers.contains_key("hx-request");
     let idx = st.index.clone();
-    let before = cur.before.clone().zip(cur.id);
+    // A continuation carries before/id; a jump carries from (id 0 sorts
+    // before every real id, so the bound month is excluded entirely).
+    let before = cur
+        .before
+        .clone()
+        .zip(cur.id)
+        .or_else(|| from_bound.clone().map(|b| (b, 0)));
     let res = tokio::task::spawn_blocking(move || {
-        idx.timeline(
+        let items = idx.timeline(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
             PAGE_SIZE as usize + 1,
-        )
+        )?;
+        let months = if full_page {
+            idx.months(&labels)?
+        } else {
+            Vec::new()
+        };
+        anyhow::Ok((items, months))
     })
     .await;
-    let mut items = match res {
+    let (mut items, months) = match res {
         Ok(Ok(i)) => i,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -330,7 +440,7 @@ async fn timeline(
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
     let fragment = render_items(&who, &items, cur.day.as_deref(), more);
-    if headers.contains_key("hx-request") {
+    if !full_page {
         return Html(fragment).into_response();
     }
     let title = if who == "all" {
@@ -338,9 +448,36 @@ async fn timeline(
     } else {
         who.clone()
     };
+    // After a jump, a link back up to the next newer month that has items.
+    let newer = match cur.from.as_deref() {
+        // A full page that starts at a cursor (the viewer's back link):
+        // offer the whole month it is in.
+        None => match cur.before.as_deref().and_then(|b| b.get(..7)) {
+            Some(ym) => format!(
+                "<p class=\"newer\"><a href=\"t/{}?from={}\">↑ Newer photos</a></p>\n",
+                esc(&who),
+                esc(ym)
+            ),
+            None => String::new(),
+        },
+        Some(f) => {
+            let up = months
+                .iter()
+                .rev()
+                .find(|(ym, _)| ym.as_str() > f && !ym.starts_with(f))
+                .map(|(ym, _)| ym.clone());
+            let href = match up {
+                Some(ym) => format!("t/{}?from={}", esc(&who), esc(&ym)),
+                None => format!("t/{}", esc(&who)),
+            };
+            format!("<p class=\"newer\"><a href=\"{href}\">↑ Newer photos</a></p>\n")
+        }
+    };
     let body = format!(
-        "<h1>{}</h1>\n<div class=\"timeline\">\n{}</div>\n{}",
+        "<h1>{}</h1>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
         esc(&title),
+        render_jump(&who, &months),
+        newer,
         fragment,
         if items.is_empty() {
             "<p>No items yet. Run <code>lichtbild scan</code>.</p>"
@@ -349,6 +486,77 @@ async fn timeline(
         }
     );
     page(&st.base_path, &title, &body).into_response()
+}
+
+/// GET /v/{who}/{id}: one photo, large, with the previous (newer) and next
+/// (older) photo of the same timeline. Arrow keys and swipes in
+/// assets/lichtbild.js follow the same links; without JavaScript they are
+/// plain links.
+async fn viewer(
+    State(st): State<AppState>,
+    UrlPath((who, id)): UrlPath<(String, u64)>,
+) -> Response {
+    let labels: Vec<String> = if who == "all" {
+        st.labels.to_vec()
+    } else if st.labels.contains(&who) {
+        vec![who.clone()]
+    } else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Option<(index::Record, Option<u64>, Option<u64>)>> {
+            let Some(rec) = idx.locate(id)? else {
+                return Ok(None);
+            };
+            // The item must belong to this timeline (prepares per-person scoping).
+            if !labels.contains(&rec.label) {
+                return Ok(None);
+            }
+            let (newer, older) = idx.neighbours(&labels, &rec.taken_local, id)?;
+            Ok(Some((rec, newer, older)))
+        },
+    )
+    .await;
+    let (rec, newer, older) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let w = esc(&who);
+    let link = |rel: &str, label: &str, target: Option<u64>| {
+        match target {
+        Some(t) => format!("<a class=\"{rel}\" rel=\"{rel}\" href=\"v/{w}/{t}\" aria-label=\"{label}\">{arrow}</a>",
+            arrow = if rel == "prev" { "‹" } else { "›" }),
+        None => format!("<span class=\"{rel} none\" aria-hidden=\"true\">{}</span>", if rel == "prev" { "‹" } else { "›" }),
+    }
+    };
+    let prefetch: String = [newer, older]
+        .iter()
+        .flatten()
+        .map(|t| format!("<link rel=\"prefetch\" href=\"original/{t}\">"))
+        .collect();
+    let when = if DateSource::is_weak(&rec.date_source) {
+        format!(
+            "{} <span class=\"weakdate\">(date from {})</span>",
+            esc(&rec.taken_local.replace('T', " ")),
+            esc(&rec.date_source)
+        )
+    } else {
+        esc(&rec.taken_local.replace('T', " "))
+    };
+    let body = format!(
+        "<div class=\"viewer\">\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span></div>\n\
+         <div class=\"stage\">{prev}<img class=\"photo\" src=\"original/{id}\" alt=\"\">{next}</div>\n\
+         {prefetch}</div>",
+        taken = esc(&rec.taken_local),
+        after = id + 1,
+        prev = link("prev", "Newer photo", newer),
+        next = link("next", "Older photo", older),
+    );
+    page(&st.base_path, "lichtbild", &body).into_response()
 }
 
 async fn thumb(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
@@ -442,6 +650,7 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
     let (body, ct) = match file.as_str() {
         "htmx-2.0.4.min.js" => (HTMX, "text/javascript; charset=utf-8"),
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
+        "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     (
@@ -455,6 +664,10 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
 }
 
 /// All embedded assets, for the no-outside-URL test (REQ-WEB-003).
-pub fn embedded_assets() -> [(&'static str, &'static str); 2] {
-    [("htmx-2.0.4.min.js", HTMX), ("lichtbild.css", CSS)]
+pub fn embedded_assets() -> [(&'static str, &'static str); 3] {
+    [
+        ("htmx-2.0.4.min.js", HTMX),
+        ("lichtbild.css", CSS),
+        ("lichtbild.js", JS),
+    ]
 }

@@ -116,6 +116,23 @@ async fn every_response_is_same_origin_only() {
     for (uri, text) in pages {
         let urls = outside_urls(&text);
         assert!(urls.is_empty(), "{uri} references {urls:?}");
+        // The CSP blocks inline style and script, so pages must not use them.
+        if !uri.starts_with("/static") && !uri.ends_with(".js") && !uri.ends_with(".css") {
+            assert!(
+                !text.contains(" style="),
+                "{uri} has an inline style attribute"
+            );
+            assert!(
+                !text.contains("<style"),
+                "{uri} has an inline style element"
+            );
+            for tag in text.split("<script").skip(1) {
+                assert!(
+                    tag.trim_start().starts_with("src="),
+                    "{uri} has an inline script"
+                );
+            }
+        }
     }
     // The CSP names no source other than 'self' and 'none'.
     for directive in web::CSP.split(';') {
@@ -330,5 +347,252 @@ async fn requests_for_other_hosts_are_refused() {
         );
         let (s, _, _) = get_host(&app, "/thumb/1", false, host).await;
         assert_eq!(s, StatusCode::MISDIRECTED_REQUEST, "{host:?}");
+    }
+}
+
+// rivet: verifies REQ-WEB-006
+#[tokio::test]
+async fn date_scrubber_jumps_to_years_and_months() {
+    let fx = fixture();
+    // 120 photos in May 2023 and 30 in January 2024 in p2, plus its 2022 photo.
+    for i in 0..150u32 {
+        let name = if i < 120 {
+            format!("IMG_20230515_{:06}.jpg", 100000 + i)
+        } else {
+            format!("IMG_20240120_{:06}.jpg", 100000 + i)
+        };
+        std::fs::write(fx.root2.join(name), jpeg(8, 8, (i % 250) as u8)).unwrap();
+    }
+    let cfg = config(&fx, &fx.data);
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    assert!(
+        scan::run(&cfg, &idx, &Options::default())
+            .unwrap()
+            .reconciled
+    );
+    let app = app(&cfg, &idx);
+
+    // The rail lists every month with its count, newest first, and the
+    // phone menu has the same links.
+    let (_, _, body) = get(&app, "/t/p2", false).await;
+    let html = String::from_utf8(body).unwrap();
+    let pos = |needle: &str| {
+        html.find(needle)
+            .unwrap_or_else(|| panic!("missing {needle}"))
+    };
+    let jan24 = pos(r#"data-n="30" data-ym="2024-01""#);
+    let may23 = pos(r#"data-n="120" data-ym="2023-05""#);
+    let mar22 = pos(r#"data-n="1" data-ym="2022-03""#);
+    assert!(jan24 < may23 && may23 < mar22, "rail not newest first");
+    assert!(html.contains(r#"<a class="y" href="t/p2?from=2023">2023</a>"#));
+    assert!(html.contains(r#"<details class="jumpmenu">"#));
+    assert_eq!(
+        html.matches(r#"href="t/p2?from=2023-05""#).count(),
+        2,
+        "rail and menu"
+    );
+
+    // Jump to a month: the page starts there and links back up.
+    let (s, _, body) = get(&app, "/t/p2?from=2023-05", false).await;
+    assert_eq!(s, StatusCode::OK);
+    let page = String::from_utf8(body).unwrap();
+    let timeline = page.split("<div class=\"timeline\">").nth(1).unwrap();
+    assert_eq!(
+        timeline.matches("class=\"item").count(),
+        121,
+        "May 2023 and the 2022 photo"
+    );
+    assert!(
+        !timeline.contains("2024-01-20"),
+        "a newer month leaked into the jump"
+    );
+    assert!(
+        page.contains(r#"<p class="newer"><a href="t/p2?from=2024-01">"#),
+        "{page}"
+    );
+
+    // Jump to a year; the newest month has a plain link back.
+    let (_, _, body) = get(&app, "/t/p2?from=2022", false).await;
+    let page = String::from_utf8(body).unwrap();
+    let timeline = page.split("<div class=\"timeline\">").nth(1).unwrap();
+    assert_eq!(timeline.matches("class=\"item").count(), 1);
+    assert!(page.contains(r#"<p class="newer"><a href="t/p2?from=2023-05">"#));
+    let (_, _, body) = get(&app, "/t/p2?from=2024-01", false).await;
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains(r#"<p class="newer"><a href="t/p2">"#));
+
+    // Bad input is refused, not guessed.
+    for bad in ["2023-13", "2023-5", "23", "2023-05-01", "abcd", "2023-00"] {
+        let (s, _, _) = get(&app, &format!("/t/p2?from={bad}"), false).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{bad}");
+    }
+
+    // The merged view's rail counts both people.
+    let (_, _, body) = get(&app, "/t/all", false).await;
+    let all = String::from_utf8(body).unwrap();
+    assert!(
+        all.contains(r#"data-ym="2021-06""#),
+        "p1's month missing from merged rail"
+    );
+    assert!(all.contains(r#"data-n="120" data-ym="2023-05""#));
+}
+
+#[test]
+fn from_bounds() {
+    assert_eq!(
+        web::parse_from("2023").as_deref(),
+        Some("2024-01-01T00:00:00")
+    );
+    assert_eq!(
+        web::parse_from("2023-05").as_deref(),
+        Some("2023-06-01T00:00:00")
+    );
+    assert_eq!(
+        web::parse_from("2023-12").as_deref(),
+        Some("2024-01-01T00:00:00")
+    );
+    assert_eq!(web::parse_from("2023-13"), None);
+    assert_eq!(web::parse_from("2023-00"), None);
+    assert_eq!(web::parse_from("２０２３"), None);
+}
+
+// rivet: verifies REQ-WEB-001
+#[tokio::test]
+async fn home_shows_counts_including_merged() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/", false).await;
+    let html = String::from_utf8(body).unwrap();
+    assert!(
+        html.contains(r#"<a href="t/p1">p1</a> <span class="n">4</span>"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a href="t/p2">p2</a> <span class="n">1</span>"#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a href="t/all">merged</a> <span class="n">5</span>"#),
+        "{html}"
+    );
+}
+
+fn item_ids(html: &str, who: &str) -> Vec<u64> {
+    let pat = format!("href=\"v/{who}/");
+    html.split(&pat)
+        .skip(1)
+        .map(|x| x.split('"').next().unwrap().parse().unwrap())
+        .collect()
+}
+
+fn link_target(html: &str, class: &str) -> Option<u64> {
+    let pat = format!("<a class=\"{class}\" rel=\"{class}\" href=\"v/");
+    html.split(&pat).nth(1).map(|x| {
+        x.split('"')
+            .next()
+            .unwrap()
+            .rsplit('/')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap()
+    })
+}
+
+// rivet: verifies REQ-WEB-007
+#[tokio::test]
+async fn viewer_steps_through_the_timeline() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/t/p1", false).await;
+    let ids = item_ids(&String::from_utf8(body).unwrap(), "p1");
+    assert_eq!(ids.len(), 4);
+    for (i, id) in ids.iter().enumerate() {
+        let (s, h, body) = get(&app, &format!("/v/p1/{id}"), false).await;
+        assert_eq!(s, StatusCode::OK);
+        assert!(h.get("content-security-policy").is_some());
+        let page = String::from_utf8(body).unwrap();
+        assert!(page.contains(&format!(r#"<img class="photo" src="original/{id}""#)));
+        // Previous = newer = the item before it in the timeline; next = older.
+        let want_prev = if i == 0 { None } else { Some(ids[i - 1]) };
+        assert_eq!(link_target(&page, "prev"), want_prev, "prev of {id}");
+        assert_eq!(
+            link_target(&page, "next"),
+            ids.get(i + 1).copied(),
+            "next of {id}"
+        );
+        assert!(!page.contains(" style="), "inline style in viewer");
+        for tag in page.split("<script").skip(1) {
+            assert!(
+                tag.trim_start().starts_with("src="),
+                "inline script in viewer"
+            );
+        }
+        // Back to the timeline lands on this photo: it is the page's first item.
+        let back = page
+            .split(r#"<a class="back" href=""#)
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .replace("&amp;", "&");
+        assert!(back.ends_with(&format!("#i{id}")), "{back}");
+        let (s, _, body) = get(
+            &app,
+            &format!("/{}", back.split('#').next().unwrap()),
+            false,
+        )
+        .await;
+        assert_eq!(s, StatusCode::OK);
+        let tl = String::from_utf8(body).unwrap();
+        let timeline = tl.split("<div class=\"timeline\">").nth(1).unwrap();
+        assert_eq!(
+            item_ids(timeline, "p1").first(),
+            Some(id),
+            "back did not land on {id}"
+        );
+        assert!(tl.contains(&format!("id=\"i{id}\"")));
+    }
+}
+
+// rivet: verifies REQ-WEB-007
+#[tokio::test]
+async fn viewer_respects_the_timeline_it_was_opened_from() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/t/p2", false).await;
+    let p2 = item_ids(&String::from_utf8(body).unwrap(), "p2");
+    assert_eq!(p2.len(), 1);
+    // p2's photo is not part of p1's timeline.
+    assert_eq!(
+        get(&app, &format!("/v/p1/{}", p2[0]), false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&app, &format!("/v/p2/{}", p2[0]), false).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        get(&app, &format!("/v/nobody/{}", p2[0]), false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&app, "/v/p1/999999", false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    // The merged view steps across both people in date order.
+    let (_, _, body) = get(&app, "/t/all", false).await;
+    let all = item_ids(&String::from_utf8(body).unwrap(), "all");
+    assert_eq!(all.len(), 5);
+    for (i, id) in all.iter().enumerate() {
+        let (_, _, body) = get(&app, &format!("/v/all/{id}"), false).await;
+        let page = String::from_utf8(body).unwrap();
+        assert_eq!(
+            link_target(&page, "next"),
+            all.get(i + 1).copied(),
+            "merged next of {id}"
+        );
     }
 }
