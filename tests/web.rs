@@ -596,3 +596,70 @@ async fn viewer_respects_the_timeline_it_was_opened_from() {
         );
     }
 }
+
+#[tokio::test]
+async fn asset_urls_change_with_their_content() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/", false).await;
+    let html = String::from_utf8(body).unwrap();
+    let v = web::asset_version();
+    assert_eq!(v.len(), 10);
+    assert!(
+        html.contains(&format!(r#"href="static/lichtbild.css?v={v}""#)),
+        "{html}"
+    );
+    assert!(html.contains(&format!(r#"src="static/lichtbild.js?v={v}""#)));
+    // The versioned URL is served.
+    let (s, h, _) = get(&app, &format!("/static/lichtbild.css?v={v}"), false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(h
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .starts_with("text/css"));
+}
+
+// A replaced file gets a new thumbnail URL, so a browser's cached thumbnail
+// for the old content is never shown for the new one.
+#[tokio::test]
+async fn thumbnail_urls_change_when_the_file_changes() {
+    let fx = fixture();
+    let cfg = config(&fx, &fx.data);
+    let url_of = |html: &str| {
+        html.split(r#"<img src=""#)
+            .nth(1)
+            .unwrap()
+            .split('"')
+            .next()
+            .unwrap()
+            .to_string()
+    };
+    let first = {
+        let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+        scan::run(&cfg, &idx, &Options::default()).unwrap();
+        let (_, _, body) = get(&app(&cfg, &idx), "/t/p2", false).await;
+        url_of(&String::from_utf8(body).unwrap())
+    };
+    assert!(
+        first.starts_with("thumb/") && first.contains("?h="),
+        "{first}"
+    );
+    std::fs::write(fx.root2.join("IMG_20220303_101010.jpg"), jpeg(24, 20, 99)).unwrap();
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    scan::run(&cfg, &idx, &Options::default()).unwrap();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/t/p2", false).await;
+    let second = url_of(&String::from_utf8(body).unwrap());
+    assert_ne!(first, second, "same thumbnail URL after the file changed");
+    assert_eq!(
+        first.split('?').next(),
+        second.split('?').next(),
+        "same item id"
+    );
+    assert_eq!(
+        get(&app, &format!("/{second}"), false).await.0,
+        StatusCode::OK
+    );
+}

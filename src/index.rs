@@ -82,6 +82,9 @@ pub struct Item {
     pub taken_local: String,
     pub date_source: String,
     pub thumb_ok: bool,
+    /// Content hash; part of the thumbnail URL so a replaced file gets a
+    /// new URL instead of a cached old thumbnail.
+    pub hash: String,
     pub width: u32,
     pub height: u32,
 }
@@ -318,6 +321,7 @@ impl Index {
                 taken_local: rec.taken_local,
                 date_source: rec.date_source,
                 thumb_ok: rec.thumb == "ok",
+                hash: rec.hash,
                 width: rec.width,
                 height: rec.height,
             });

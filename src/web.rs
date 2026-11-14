@@ -153,6 +153,19 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// A short hash of the embedded CSS and JS. It goes into their URLs, so a
+/// browser that cached them for a day still fetches the new ones after an
+/// upgrade.
+pub fn asset_version() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| {
+        let mut h = blake3::Hasher::new();
+        h.update(CSS.as_bytes());
+        h.update(JS.as_bytes());
+        h.finalize().to_hex()[..10].to_string()
+    })
+}
+
 fn page(base: &str, title: &str, body: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
@@ -163,9 +176,9 @@ fn page(base: &str, title: &str, body: &str) -> Html<String> {
 <base href="{base}/">
 <title>{title}</title>
 <meta name="htmx-config" content='{{"includeIndicatorStyles":false}}'>
-<link rel="stylesheet" href="static/lichtbild.css">
+<link rel="stylesheet" href="static/lichtbild.css?v={v}">
 <script src="static/htmx-2.0.4.min.js" defer></script>
-<script src="static/lichtbild.js" defer></script>
+<script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
 <header><a href="./" class="brand">lichtbild</a></header>
@@ -177,6 +190,7 @@ fn page(base: &str, title: &str, body: &str) -> Html<String> {
 "#,
         base = esc(base),
         title = esc(title),
+        v = asset_version(),
     ))
 }
 
@@ -353,8 +367,9 @@ pub fn render_items(
         };
         let img = if it.thumb_ok {
             format!(
-                "<img src=\"thumb/{id}\" loading=\"lazy\" alt=\"\" width=\"{w}\" height=\"{h}\">",
+                "<img src=\"thumb/{id}?h={hv}\" loading=\"lazy\" alt=\"\" width=\"{w}\" height=\"{h}\">",
                 id = it.id,
+                hv = esc(it.hash.get(..12).unwrap_or("")),
                 w = it.width.min(360),
                 h = (u64::from(it.height) * u64::from(it.width.min(360))
                     / u64::from(it.width.max(1))),
