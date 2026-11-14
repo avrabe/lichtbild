@@ -160,24 +160,29 @@ artifacts:
 
   - id: DD-007
     type: design-decision
-    title: CI on GitHub-hosted runners until a self-hosted runner serves this repository
+    title: CI on the repository's self-hosted runner behind the fail-closed fork guard
     status: implemented
     release: v0.1.0
     description: >
-      No self-hosted runner is registered for this repository (checked
-      2026-11-14), so CI jobs run on GitHub-hosted runners.
+      One self-hosted runner serves this repository (labels light and
+      rust-cpu, registered 2026-11-14). CI and hostname-scan jobs run on it
+      for pushes, merge groups and same-repository pull requests; pull
+      requests from forks run on GitHub-hosted runners.
     fields:
       decision: >
-        Light jobs use `ubuntu-24.04`. When a runner with the `light` label
-        serves this repository, they switch to the fail-closed fork guard
-        `(github.event_name != 'pull_request' ||
+        Every CI job uses `runs-on: (github.event_name != 'pull_request' ||
         github.event.pull_request.head.repo.full_name == github.repository)
-        && <self-hosted labels> || 'ubuntu-latest'`. No self-hosted job ever
-        sits in a pull_request_target workflow. Release jobs stay hosted.
+        && fromJSON('["self-hosted","linux","x64","<label>"]') ||
+        'ubuntu-latest'`, with `light` for rivet validate and hostname-scan
+        and `rust-cpu` for the Rust build, test and planted faults. No
+        workflow with a self-hosted job has a pull_request_target trigger.
+        Release jobs stay GitHub-hosted for signing provenance.
       rationale: >
-        A self-hosted label no runner serves leaves checks queued forever.
+        Code from a fork never runs on the house's runner; the expression
+        falls back to a hosted runner whenever the condition is false.
       alternatives: >
-        Use the guard now and wait for a runner.
+        GitHub-hosted only (no use of the runner); self-hosted without the
+        guard (fork code on our machine).
     links:
       - type: satisfies
         target: REQ-TRACE-001
