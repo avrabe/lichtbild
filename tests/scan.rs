@@ -30,7 +30,7 @@ fn scan_never_changes_the_source() {
     set_readonly(&fx.root2, false);
     let rep = rep.unwrap();
     assert!(rep.reconciled, "{}", rep.to_text());
-    assert_eq!(rep.roots[0].indexed, 4);
+    assert_eq!(rep.roots[0].indexed, 5);
 }
 
 // rivet: verifies REQ-SCAN-002
@@ -42,19 +42,19 @@ fn report_reconciles_and_names_every_skip() {
     let p1 = &rep.roots[0];
     assert_eq!(
         (p1.found, p1.indexed, p1.skipped),
-        (13, 4, 9),
+        (14, 5, 9),
         "{}",
         rep.to_text()
     );
     assert_eq!(
         (rep.total_found, rep.total_indexed, rep.total_skipped),
-        (14, 5, 9)
+        (15, 6, 9)
     );
     let want: BTreeMap<String, u64> = [
         ("broken symlink", 1),
-        ("decode error", 1),
+        ("decode error (heic)", 1),
+        ("decode error (jpeg)", 1),
         ("hidden or system file", 1),
-        ("not yet supported (heic)", 1),
         ("not yet supported (video)", 1),
         ("over size limit", 1),
         ("symlink outside root", 1),
@@ -65,7 +65,7 @@ fn report_reconciles_and_names_every_skip() {
     .map(|(k, v)| (k.to_string(), v))
     .collect();
     assert_eq!(p1.skipped_by_reason, want);
-    assert_eq!(p1.live_in_index, 4);
+    assert_eq!(p1.live_in_index, 5);
     assert!(p1.reconciled && rep.reconciled && rep.complete);
     assert_eq!((rep.roots[1].found, rep.roots[1].indexed), (1, 1));
 
@@ -95,7 +95,7 @@ fn rescan_is_idempotent_and_tracks_changes() {
             rep.roots[0].updated,
             rep.roots[0].unchanged
         ),
-        (0, 0, 4)
+        (0, 0, 5)
     );
     assert_eq!(rep.roots[0].thumbnails.generated, 0);
 
@@ -106,7 +106,7 @@ fn rescan_is_idempotent_and_tracks_changes() {
     let p1 = &rep.roots[0];
     assert_eq!(
         (p1.updated, p1.marked_missing, p1.live_in_index),
-        (1, 1, 3),
+        (1, 1, 4),
         "{}",
         rep.to_text()
     );
@@ -129,7 +129,7 @@ fn rescan_is_idempotent_and_tracks_changes() {
     )
     .unwrap();
     let rep = scan_once(&cfg, &Options::default());
-    assert_eq!(rep.roots[0].live_in_index, 4);
+    assert_eq!(rep.roots[0].live_in_index, 5);
     assert!(rep.reconciled);
 }
 
@@ -170,8 +170,8 @@ fn interrupted_scan_resumes_to_the_same_index() {
         v
     };
     assert_eq!(list(&a), list(&b));
-    // 5 items, 4 distinct contents (link_in.png is plain.png).
-    assert_eq!(list(&b).len(), 4);
+    // 6 items, 5 distinct contents (link_in.png is plain.png).
+    assert_eq!(list(&b).len(), 5);
     assert!(list(&b).iter().all(|n| n.ends_with(".jpg")));
 }
 
@@ -299,12 +299,12 @@ fn failed_thumbnails_are_retried_and_counted() {
     cfg.limits.thumb_cache_bytes = 0; // cache full from the start
     let rep = scan_once(&cfg, &Options::default());
     assert!(rep.reconciled, "{}", rep.to_text());
-    assert_eq!(rep.roots[0].thumbnails.failed.get("cache-full"), Some(&4));
+    assert_eq!(rep.roots[0].thumbnails.failed.get("cache-full"), Some(&5));
     // The next scan still reports them.
     let rep = scan_once(&cfg, &Options::default());
     assert_eq!(
         rep.roots[0].thumbnails.failed.get("cache-full"),
-        Some(&4),
+        Some(&5),
         "{}",
         rep.to_text()
     );
@@ -319,7 +319,65 @@ fn failed_thumbnails_are_retried_and_counted() {
     );
     assert_eq!(
         rep.roots[0].thumbnails.generated + rep.roots[0].thumbnails.reused,
-        4
+        5
     );
     assert_eq!(rep.roots[0].unchanged, 0, "retried items count as updated");
+}
+
+// rivet: verifies REQ-MEDIA-002
+#[test]
+fn heic_photos_are_indexed_with_thumbnail_and_preview() {
+    let fx = fixture();
+    let cfg = config(&fx, &fx.data);
+    let rep = scan_once(&cfg, &Options::default());
+    assert!(rep.reconciled, "{}", rep.to_text());
+    let idx = lichtbild::index::Index::open(&cfg.data_dir).unwrap();
+    let (_, rec) = idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.rel == b"b/IMG_20190704_102030.HEIC")
+        .expect("HEIC not indexed");
+    assert_eq!((rec.width, rec.height), (640, 480));
+    assert_eq!(rec.taken_local, "2019-07-04T10:20:30");
+    assert_eq!(rec.date_source, "file-name");
+    assert_eq!(rec.thumb, "ok");
+    assert!(rec.preview, "no preview recorded for HEIC");
+    let thumb = image::open(lichtbild::scan::thumb_path(&cfg.data_dir, &rec.hash)).unwrap();
+    assert_eq!((thumb.width(), thumb.height()), (360, 270));
+    let preview = image::open(lichtbild::scan::preview_path(&cfg.data_dir, &rec.hash)).unwrap();
+    // Smaller than the preview size: kept at its own size, not upscaled.
+    assert_eq!((preview.width(), preview.height()), (640, 480));
+    // JPEGs and PNGs get no preview.
+    let jpg = idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.rel == b"a/IMG_exif.jpg")
+        .unwrap()
+        .1;
+    assert!(!jpg.preview);
+}
+
+// The decoded pixels are the picture, not noise: the fixture is a gradient
+// with red rising left to right and green top to bottom.
+// rivet: verifies REQ-MEDIA-002
+#[test]
+fn heic_pixels_match_the_source_gradient() {
+    use lichtbild::media::{decode, Format};
+    let img = decode(HEIC_640X480, Format::Heic, 1_000_000)
+        .unwrap()
+        .to_rgb8();
+    assert_eq!(img.dimensions(), (640, 480));
+    for (x, y) in [(20u32, 20u32), (620, 20), (20, 460), (620, 460), (320, 240)] {
+        let p = img.get_pixel(x, y);
+        let want_r = (x * 255 / 640) as i32;
+        let want_g = (y * 255 / 480) as i32;
+        assert!(
+            (p[0] as i32 - want_r).abs() <= 24 && (p[1] as i32 - want_g).abs() <= 24,
+            "pixel ({x},{y}) = {p:?}, want about r={want_r} g={want_g}"
+        );
+    }
+    // The pixel limit is enforced before decoding.
+    assert!(decode(HEIC_640X480, Format::Heic, 100_000).is_err());
 }

@@ -307,3 +307,45 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-007
+
+  - id: VER-023
+    type: verification
+    title: HEIC is indexed with dimensions, date, thumbnail and preview
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "heic_photos_are_indexed_with_thumbnail_and_preview"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan heic_photos_are_indexed_with_thumbnail_and_preview"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-002
+
+  - id: VER-024
+    type: verification
+    title: Decoded HEIC pixels match the source gradient; the pixel limit holds
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "heic_pixels_match_the_source_gradient"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan heic_pixels_match_the_source_gradient"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-002
+
+  - id: VER-025
+    type: verification
+    title: The viewer shows the JPEG preview for HEIC and the original otherwise
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "viewer_shows_the_jpeg_preview_for_heic"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web viewer_shows_the_jpeg_preview_for_heic"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-002

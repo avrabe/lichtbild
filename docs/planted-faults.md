@@ -35,6 +35,8 @@ at nice 0.
 | F20 | REQ-THUMB-001 | thumbnails that failed for lack of cache space are never retried | `failed_thumbnails_are_retried_and_counted` |
 | F21 | REQ-WEB-006 | a jump ignores the chosen year or month | `date_scrubber_jumps_to_years_and_months` |
 | F22 | REQ-WEB-007 | the viewer shows a photo from another person's timeline | `viewer_respects_the_timeline_it_was_opened_from` |
+| F23 | REQ-MEDIA-002 | HEIC is classified as not supported again | `heic_photos_are_indexed_with_thumbnail_and_preview` |
+| F24 | REQ-MEDIA-002 | the viewer shows the HEIC original instead of its preview | `viewer_shows_the_jpeg_preview_for_heic` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the

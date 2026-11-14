@@ -17,6 +17,7 @@ anyhow = "1"
 axum = "0.8"
 blake3 = "1"
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+heic-rs = { version = "=0.1.4", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
 kamadak-exif = "0.6"
 libc = "0.2"

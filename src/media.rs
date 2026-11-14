@@ -13,8 +13,35 @@ use crate::source::Skip;
 /// What a file is, by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Class {
-    Image,
+    Image(Format),
     Skip(Skip),
+}
+
+/// The image formats lichtbild decodes. HEIC goes through heic-rs (pure
+/// Rust, no unsafe, DD-010); the others through the image crate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Jpeg,
+    Png,
+    Webp,
+    Gif,
+    Heic,
+}
+
+impl Format {
+    pub fn name(self) -> &'static str {
+        match self {
+            Format::Jpeg => "jpeg",
+            Format::Png => "png",
+            Format::Webp => "webp",
+            Format::Gif => "gif",
+            Format::Heic => "heic",
+        }
+    }
+    /// Formats a browser cannot be relied on to display get a JPEG preview.
+    pub fn needs_preview(self) -> bool {
+        self == Format::Heic
+    }
 }
 
 pub fn classify(rel: &Path) -> Class {
@@ -31,8 +58,11 @@ pub fn classify(rel: &Path) -> Class {
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     match ext.as_str() {
-        "jpg" | "jpeg" | "png" | "webp" | "gif" => Class::Image,
-        "heic" | "heif" => Class::Skip(Skip::NotYetSupported("heic".into())),
+        "jpg" | "jpeg" => Class::Image(Format::Jpeg),
+        "png" => Class::Image(Format::Png),
+        "webp" => Class::Image(Format::Webp),
+        "gif" => Class::Image(Format::Gif),
+        "heic" | "heif" => Class::Image(Format::Heic),
         "avif" => Class::Skip(Skip::NotYetSupported("avif".into())),
         "mp4" | "mov" | "m4v" | "3gp" | "mkv" | "avi" | "webm" => {
             Class::Skip(Skip::NotYetSupported("video".into()))
@@ -100,17 +130,25 @@ pub struct ImageInfo {
 /// Read dimensions, EXIF and hash from the bytes of an image file.
 pub fn inspect(
     bytes: &[u8],
+    format: Format,
     rel: &Path,
     mtime_ns: i64,
     max_pixels: u64,
 ) -> Result<ImageInfo, Skip> {
-    let (width, height) = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| Skip::DecodeError)?
-        .into_dimensions()
-        .map_err(|_| Skip::DecodeError)?;
+    let bad = || Skip::DecodeError(format.name().into());
+    let (width, height) = if format == Format::Heic {
+        // Displayed size, after rotation; reads the container, no pixels.
+        let p = heic_rs::probe(bytes).map_err(|_| bad())?;
+        (p.width, p.height)
+    } else {
+        ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()
+            .map_err(|_| bad())?
+            .into_dimensions()
+            .map_err(|_| bad())?
+    };
     if width == 0 || height == 0 {
-        return Err(Skip::DecodeError);
+        return Err(bad());
     }
     if u64::from(width) * u64::from(height) > max_pixels {
         return Err(Skip::OverLimit);
@@ -297,27 +335,53 @@ pub fn name_date(rel: &Path) -> Option<NaiveDateTime> {
     None
 }
 
-/// Decode under limits, orient, scale to fit `size`, encode as JPEG.
-pub fn thumbnail(bytes: &[u8], size: u32, max_pixels: u64) -> Result<Vec<u8>, Skip> {
+/// Decode under limits and orient (EXIF orientation, or HEIF irot/imir).
+pub fn decode(bytes: &[u8], format: Format, max_pixels: u64) -> Result<DynamicImage, Skip> {
+    let bad = || Skip::DecodeError(format.name().into());
+    if format == Format::Heic {
+        let opts = heic_rs::DecodeOptions {
+            layout: heic_rs::PixelLayout::Rgb8,
+            max_pixels: Some(max_pixels),
+            apply_transforms: true,
+            ..heic_rs::DecodeOptions::default()
+        };
+        let img = heic_rs::decode(bytes, &opts).map_err(|_| bad())?;
+        let rgb = image::RgbImage::from_raw(img.width, img.height, img.data).ok_or_else(bad)?;
+        return Ok(DynamicImage::ImageRgb8(rgb));
+    }
     let mut reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| Skip::DecodeError)?;
+        .map_err(|_| bad())?;
     let side = u32::try_from(max_pixels.isqrt().max(1) * 4).unwrap_or(u32::MAX);
     let mut limits = Limits::default();
     limits.max_image_width = Some(side);
     limits.max_image_height = Some(side);
     limits.max_alloc = Some((max_pixels * 4).max(64 * 1024 * 1024) * 2);
     reader.limits(limits);
-    let mut decoder = reader.into_decoder().map_err(|_| Skip::DecodeError)?;
-    let orientation = decoder.orientation().map_err(|_| Skip::DecodeError)?;
-    let mut img = DynamicImage::from_decoder(decoder).map_err(|_| Skip::DecodeError)?;
+    let mut decoder = reader.into_decoder().map_err(|_| bad())?;
+    let orientation = decoder.orientation().map_err(|_| bad())?;
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|_| bad())?;
     img.apply_orientation(orientation);
-    let thumb = img.thumbnail(size, size).to_rgb8();
+    Ok(img)
+}
+
+/// Scale to fit `size` and encode as JPEG.
+pub fn jpeg_fit(img: &DynamicImage, size: u32, quality: u8) -> Result<Vec<u8>, Skip> {
+    let fitted = if img.width() > size || img.height() > size {
+        img.thumbnail(size, size)
+    } else {
+        img.clone()
+    };
     let mut out = Vec::new();
-    let mut enc = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 80);
-    enc.encode_image(&thumb).map_err(|_| Skip::DecodeError)?;
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, quality)
+        .encode_image(&fitted.to_rgb8())
+        .map_err(|_| Skip::DecodeError("jpeg-encode".into()))?;
     Ok(out)
 }
+
+/// Longest side of the JPEG preview shown instead of an original the browser
+/// cannot display (HEIC).
+pub const PREVIEW_SIZE: u32 = 2048;
 
 #[cfg(test)]
 mod tests {
@@ -326,11 +390,8 @@ mod tests {
 
     #[test]
     fn classify_by_extension() {
-        assert_eq!(classify(Path::new("a/B.JPG")), Class::Image);
-        assert_eq!(
-            classify(Path::new("x.HEIC")),
-            Class::Skip(Skip::NotYetSupported("heic".into()))
-        );
+        assert_eq!(classify(Path::new("a/B.JPG")), Class::Image(Format::Jpeg));
+        assert_eq!(classify(Path::new("x.HEIC")), Class::Image(Format::Heic));
         assert_eq!(
             classify(Path::new("x.mov")),
             Class::Skip(Skip::NotYetSupported("video".into()))

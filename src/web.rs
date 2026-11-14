@@ -65,6 +65,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v/{who}/{id}", get(viewer))
         .route("/thumb/{id}", get(thumb))
         .route("/original/{id}", get(original))
+        .route("/preview/{id}", get(preview))
         .route("/static/{file}", get(static_file))
         .route("/healthz", get(|| async { "ok" }));
     // With a base path, "/base", "/base/" and "/base/..." reach the app;
@@ -504,7 +505,18 @@ async fn timeline(
 }
 
 /// A photo and its (newer, older) neighbours.
-type ViewerItem = (index::Record, Option<u64>, Option<u64>);
+/// A photo, its (newer, older) neighbours, and the URLs to prefetch for them.
+type ViewerItem = (index::Record, Option<u64>, Option<u64>, Vec<String>);
+
+/// What the viewer shows for an item: the JPEG preview when the original is
+/// a format browsers cannot display (HEIC), the original otherwise.
+pub fn photo_src(id: u64, rec: &index::Record) -> String {
+    if rec.preview {
+        format!("preview/{id}?h={}", rec.hash.get(..12).unwrap_or(""))
+    } else {
+        format!("original/{id}")
+    }
+}
 
 /// GET /v/{who}/{id}: one photo, large, with the previous (newer) and next
 /// (older) photo of the same timeline. Arrow keys and swipes in
@@ -531,10 +543,16 @@ async fn viewer(
             return Ok(None);
         }
         let (newer, older) = idx.neighbours(&labels, &rec.taken_local, id)?;
-        Ok(Some((rec, newer, older)))
+        let mut prefetch = Vec::new();
+        for n in [newer, older].into_iter().flatten() {
+            if let Some(r) = idx.locate(n)? {
+                prefetch.push(photo_src(n, &r));
+            }
+        }
+        Ok(Some((rec, newer, older, prefetch)))
     })
     .await;
-    let (rec, newer, older) = match res {
+    let (rec, newer, older, prefetch) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -548,10 +566,9 @@ async fn viewer(
         None => format!("<span class=\"{rel} none\" aria-hidden=\"true\">{}</span>", if rel == "prev" { "‹" } else { "›" }),
     }
     };
-    let prefetch: String = [newer, older]
+    let prefetch: String = prefetch
         .iter()
-        .flatten()
-        .map(|t| format!("<link rel=\"prefetch\" href=\"original/{t}\">"))
+        .map(|u| format!("<link rel=\"prefetch\" href=\"{}\">", esc(u)))
         .collect();
     let when = if DateSource::is_weak(&rec.date_source) {
         format!(
@@ -565,14 +582,44 @@ async fn viewer(
     let body = format!(
         "<div class=\"viewer\">\n\
          <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span></div>\n\
-         <div class=\"stage\">{prev}<img class=\"photo\" src=\"original/{id}\" alt=\"\">{next}</div>\n\
+         <div class=\"stage\">{prev}<img class=\"photo\" src=\"{src}\" alt=\"\">{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
+        src = esc(&photo_src(id, &rec)),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
     page(&st.base_path, "lichtbild", &body).into_response()
+}
+
+/// GET /preview/{id}: the JPEG preview of a HEIC original.
+async fn preview(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
+    let dd = st.data_dir.clone();
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(rec) = idx.locate(id)? else {
+            return Ok(None);
+        };
+        if !rec.preview {
+            return Ok(None);
+        }
+        Ok(std::fs::read(crate::scan::preview_path(&dd, &rec.hash)).ok())
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(b))) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            b,
+        )
+            .into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
 }
 
 async fn thumb(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
@@ -613,6 +660,7 @@ fn content_type(p: &std::path::Path) -> &'static str {
         Some("png") => "image/png",
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
+        Some("heic" | "heif") => "image/heic",
         _ => "application/octet-stream",
     }
 }

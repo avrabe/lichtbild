@@ -36,8 +36,8 @@ FAULTS = [
      "                    Class::Skip(Skip::HiddenOrSystem) => {}\n                    Class::Skip(s) => skip(&mut rr, s),\n",
      ["test", "--test", "scan", "report_reconciles_and_names_every_skip"]),
     ("F04", "REQ-SCAN-002", "src/scan.rs",
-     "                    tx_open.upsert(&root.label,",
-     "                    if rr.new == 1 { continue; }\n                    tx_open.upsert(&root.label,",
+     "                    tx_open.upsert(\n",
+     "                    if rr.new == 1 { continue; }\n                    tx_open.upsert(\n",
      ["test", "--test", "scan", "report_reconciles_and_names_every_skip"]),
     ("F05", "REQ-SCAN-003", "src/scan.rs",
      "                        if let (true, Some(k)) = (unchanged, k) {\n",
@@ -111,6 +111,14 @@ FAULTS = [
      "        if !labels.contains(&rec.label) {",
      "        if false {",
      ["test", "--test", "web", "viewer_respects_the_timeline_it_was_opened_from"]),
+    ("F23", "REQ-MEDIA-002", "src/media.rs",
+     "        \"heic\" | \"heif\" => Class::Image(Format::Heic),",
+     "        \"heic\" | \"heif\" => Class::Skip(Skip::NotYetSupported(\"heic\".into())),",
+     ["test", "--test", "scan", "heic_photos_are_indexed_with_thumbnail_and_preview"]),
+    ("F24", "REQ-MEDIA-002", "src/web.rs",
+     "    if rec.preview {\n        format!(\"preview/",
+     "    if false {\n        format!(\"preview/",
+     ["test", "--test", "web", "viewer_shows_the_jpeg_preview_for_heic"]),
 ]
 
 
@@ -120,9 +128,9 @@ def cargo(fid):
         sys.exit("cargo not found")
     if os.getpriority(os.PRIO_PROCESS, 0) != 0 and fid in NO_NICE:
         sys.exit(f"{fid} needs a process at nice 0; this one runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}")
-    nice = [] if fid in NO_NICE else ["nice", "-n", "19"]
-    if sys.platform == "darwin" and shutil.which("taskpolicy"):
-        return nice + ["taskpolicy", "-b", exe]  # background QoS, not a nice value
+    # Plain nice, not macOS background QoS: taskpolicy -b throttled builds
+    # to a crawl even on an idle machine.
+    nice = [] if fid in NO_NICE else ["nice", "-n", "10"]
     return nice + [exe]
 
 
