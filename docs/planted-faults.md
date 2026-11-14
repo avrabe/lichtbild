@@ -37,6 +37,8 @@ at nice 0.
 | F22 | REQ-WEB-007 | the viewer shows a photo from another person's timeline | `viewer_respects_the_timeline_it_was_opened_from` |
 | F23 | REQ-MEDIA-002 | HEIC is classified as not supported again | `heic_photos_are_indexed_with_thumbnail_and_preview` |
 | F24 | REQ-MEDIA-002 | the viewer shows the HEIC original instead of its preview | `viewer_shows_the_jpeg_preview_for_heic` |
+| F25 | REQ-PLACE-001 | the place lookup never finds a town | `viewer_info_panel_shows_date_place_and_camera` |
+| F26 | REQ-WEB-008 | the info panel drops the camera and exposure | `viewer_info_panel_shows_date_place_and_camera` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the

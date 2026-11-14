@@ -708,3 +708,70 @@ async fn viewer_shows_the_jpeg_preview_for_heic() {
         StatusCode::NOT_FOUND
     );
 }
+
+fn synthetic_places() -> lichtbild::places::Places {
+    let f = |n: &str| {
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures")
+            .join(n)
+    };
+    lichtbild::places::Places::load(
+        &f("places-cities.txt"),
+        Some(&f("places-admin1.txt")),
+        Some(&f("places-countries.txt")),
+    )
+    .unwrap()
+}
+
+// rivet: verifies REQ-WEB-008
+// rivet: verifies REQ-PLACE-001
+#[tokio::test]
+async fn viewer_info_panel_shows_date_place_and_camera() {
+    let (_fx, cfg, idx) = scanned();
+    let all = idx.all().unwrap();
+    let id_of = |rel: &[u8]| all.iter().find(|(_, r)| r.rel == rel).unwrap().0;
+    let exif_id = id_of(b"a/IMG_exif.jpg");
+    let named_id = id_of(b"a/IMG_20200102_030405.jpg");
+
+    let with_places =
+        web::router(AppState::new(&cfg, idx.clone()).with_places(Some(synthetic_places())));
+    let (s, _, body) = get(&with_places, &format!("/v/p1/{exif_id}"), false).await;
+    assert_eq!(s, StatusCode::OK);
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains(r#"<details class="info">"#), "{page}");
+    for want in [
+        "2021-06-15 10:11:12",
+        "UTC+02:00",
+        "from camera (EXIF)",
+        "near Ostdorf, Nordprovinz, Testland",
+        "10.50000, 20.25000",
+        "Lichtbild Testkamera 1",
+        "1/120 s",
+        "f/1.8",
+        "ISO 50",
+        "4.2 mm",
+        "64 × 48",
+        " kB</span>",
+        "IMG_exif.jpg",
+    ] {
+        assert!(page.contains(want), "info panel lacks {want:?}");
+    }
+    assert!(!page.contains(" style="), "inline style in viewer");
+
+    // No GPS: said so, no place.
+    let (_, _, body) = get(&with_places, &format!("/v/p1/{named_id}"), false).await;
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains("no position recorded"));
+    assert!(page.contains("from file name"));
+    assert!(
+        !page.contains("near "),
+        "a place for a photo without position"
+    );
+
+    // Without the GeoNames files: coordinates only.
+    let without = app(&cfg, &idx);
+    let (_, _, body) = get(&without, &format!("/v/p1/{exif_id}"), false).await;
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains("10.50000, 20.25000"));
+    assert!(!page.contains("Ostdorf"));
+}

@@ -25,6 +25,8 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_WORKERS    2
   LICHTBILD_SCAN_INTERVAL_HOURS  24              0 = scan only at start
   LICHTBILD_MAX_PIXELS / _MAX_FILE_MIB / _THUMB_CACHE_MIB / _THUMB_SIZE   limits
+  LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
+  LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
   LICHTBILD_DATA_DIR must exist; lichtbild creates nothing at startup.
   LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN  1 to listen beyond loopback before login exists
 
@@ -97,11 +99,27 @@ fn run_serve() -> Result<ExitCode> {
             cfg.listen
         );
     }
+    let places = match &cfg.places.cities {
+        None => None,
+        Some(c) => {
+            let p = lichtbild::places::Places::load(
+                c,
+                cfg.places.admin1.as_deref(),
+                cfg.places.countries.as_deref(),
+            )?;
+            tracing::info!(
+                "place names: {} towns ({} lines skipped)",
+                p.len(),
+                p.skipped_lines
+            );
+            Some(p)
+        }
+    };
     let idx = Arc::new(Index::open(&cfg.data_dir)?);
     spawn_scanner(cfg.clone(), idx.clone());
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let app = web::router(web::AppState::new(&cfg, idx));
+        let app = web::router(web::AppState::new(&cfg, idx).with_places(places));
         let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
         tracing::info!("listening on {}{}", cfg.listen, cfg.base_path);
         axum::serve(listener, app)

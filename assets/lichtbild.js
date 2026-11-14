@@ -69,6 +69,10 @@
     if (e.key === "ArrowLeft") go("a.prev");
     else if (e.key === "ArrowRight") go("a.next");
     else if (e.key === "Escape") go("a.back");
+    else if (e.key === "i") {
+      var d = viewer.querySelector("details.info");
+      if (d) d.open = !d.open;
+    }
   });
   var x0 = null, y0 = null, t0 = 0;
   var stage = viewer.querySelector(".stage") || viewer;

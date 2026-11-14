@@ -36,6 +36,9 @@ pub struct AppState {
     pub roots: Arc<HashMap<String, PathBuf>>,
     pub labels: Arc<Vec<String>>,
     pub allowed_hosts: Arc<Vec<String>>,
+    /// Offline place names, when the deployment supplies GeoNames files.
+    pub places: Option<Arc<crate::places::Places>>,
+    pub max_file_bytes: u64,
 }
 
 impl AppState {
@@ -52,7 +55,14 @@ impl AppState {
             ),
             labels: Arc::new(cfg.roots.iter().map(|r| r.label.clone()).collect()),
             allowed_hosts: Arc::new(cfg.allowed_hosts.clone()),
+            places: None,
+            max_file_bytes: cfg.limits.max_file_bytes,
         }
+    }
+
+    pub fn with_places(mut self, places: Option<crate::places::Places>) -> Self {
+        self.places = places.map(Arc::new);
+        self
     }
 }
 
@@ -504,9 +514,86 @@ async fn timeline(
     page(&st.base_path, &title, &body).into_response()
 }
 
-/// A photo and its (newer, older) neighbours.
-/// A photo, its (newer, older) neighbours, and the URLs to prefetch for them.
-type ViewerItem = (index::Record, Option<u64>, Option<u64>, Vec<String>);
+/// A photo, its (newer, older) neighbours, the URLs to prefetch for them,
+/// and the EXIF details for the info panel.
+type ViewerItem = (
+    index::Record,
+    Option<u64>,
+    Option<u64>,
+    Vec<String>,
+    Vec<(&'static str, String)>,
+);
+
+/// The viewer's info panel (REQ-WEB-008): date and its source, place,
+/// camera details, size and file. The place name comes from the offline
+/// GeoNames index (REQ-PLACE-001); nothing is looked up outside.
+pub fn render_info(
+    rec: &index::Record,
+    exif: &[(&'static str, String)],
+    places: Option<&crate::places::Places>,
+) -> String {
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    let mut taken = esc(&rec.taken_local.replace('T', " "));
+    if let Some(o) = &rec.taken_offset {
+        taken += &format!(" <span class=\"dim\">UTC{}</span>", esc(o));
+    }
+    let source = match rec.date_source.as_str() {
+        "exif" => "camera (EXIF)",
+        "exif-other" => "camera (EXIF, not the capture time)",
+        "file-name" => "file name",
+        "file-time" => "file time",
+        other => other,
+    };
+    taken += &format!("<br><span class=\"dim\">from {}</span>", esc(source));
+    rows.push(("Taken", taken));
+    match (rec.lat, rec.lon) {
+        (Some(lat), Some(lon)) => {
+            let coords = format!("{lat:.5}, {lon:.5}");
+            let place = places.and_then(|p| p.nearest(lat, lon));
+            let v = match place {
+                Some(n) => format!(
+                    "near {} <span class=\"dim\">({:.0} km)</span><br><span class=\"dim\">{}</span>",
+                    esc(&n.label),
+                    n.km.max(1.0),
+                    coords
+                ),
+                None => coords,
+            };
+            rows.push(("Place", v));
+        }
+        _ => rows.push((
+            "Place",
+            "<span class=\"dim\">no position recorded</span>".into(),
+        )),
+    }
+    for (k, v) in exif {
+        rows.push((k, esc(v)));
+    }
+    let bytes = if rec.size >= 1_048_576 {
+        format!("{:.1} MB", rec.size as f64 / 1_048_576.0)
+    } else {
+        format!("{} kB", rec.size.div_ceil(1024))
+    };
+    rows.push((
+        "Size",
+        format!(
+            "{} × {} <span class=\"dim\">· {bytes}</span>",
+            rec.width, rec.height
+        ),
+    ));
+    let rel = String::from_utf8_lossy(&rec.rel);
+    let file = rel.rsplit('/').next().unwrap_or(&rel);
+    rows.push(("File", esc(file)));
+    rows.push(("Library", esc(&rec.label)));
+    let mut s = String::from(
+        "<details class=\"info\"><summary title=\"Info (i)\" aria-label=\"Info\">ⓘ</summary><dl class=\"meta\">",
+    );
+    for (k, v) in rows {
+        s += &format!("<dt>{k}</dt><dd>{v}</dd>");
+    }
+    s += "</dl></details>";
+    s
+}
 
 /// What the viewer shows for an item: the JPEG preview when the original is
 /// a format browsers cannot display (HEIC), the original otherwise.
@@ -534,6 +621,8 @@ async fn viewer(
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
     let idx = st.index.clone();
+    let roots = st.roots.clone();
+    let max_file_bytes = st.max_file_bytes;
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ViewerItem>> {
         let Some(rec) = idx.locate(id)? else {
             return Ok(None);
@@ -549,10 +638,19 @@ async fn viewer(
                 prefetch.push(photo_src(n, &r));
             }
         }
-        Ok(Some((rec, newer, older, prefetch)))
+        // EXIF for the info panel, read from the original (read-only).
+        let exif = roots
+            .get(&rec.label)
+            .and_then(|root| {
+                crate::source::read_limited(root, &index::rel_from_bytes(&rec.rel), max_file_bytes)
+                    .ok()
+            })
+            .map(|b| crate::media::exif_details(&b))
+            .unwrap_or_default();
+        Ok(Some((rec, newer, older, prefetch, exif)))
     })
     .await;
-    let (rec, newer, older, prefetch) = match res {
+    let (rec, newer, older, prefetch, exif) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -581,12 +679,13 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{info}</div>\n\
          <div class=\"stage\">{prev}<img class=\"photo\" src=\"{src}\" alt=\"\">{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
         src = esc(&photo_src(id, &rec)),
+        info = render_info(&rec, &exif, st.places.as_deref()),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );

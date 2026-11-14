@@ -1,0 +1,3 @@
+1	Ostdorf	Ostdorf		10.52	20.27	P	PPL	ZZ		01				1200		300	Etc/UTC	2026-01-01
+2	Westdorf	Westdorf		10.40	19.90	P	PPL	ZZ		01				3000		280	Etc/UTC	2026-01-01
+3	Bergheim	Bergheim		11.30	20.10	P	PPL	ZZ		02				800		900	Etc/UTC	2026-01-01

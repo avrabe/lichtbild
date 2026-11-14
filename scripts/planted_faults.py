@@ -119,6 +119,14 @@ FAULTS = [
      "    if rec.preview {\n        format!(\"preview/",
      "    if false {\n        format!(\"preview/",
      ["test", "--test", "web", "viewer_shows_the_jpeg_preview_for_heic"]),
+    ("F25", "REQ-PLACE-001", "src/places.rs",
+     "        let (i, km) = best?;",
+     "        let (i, km) = None::<(u32, f64)>?;",
+     ["test", "--test", "web", "viewer_info_panel_shows_date_place_and_camera"]),
+    ("F26", "REQ-WEB-008", "src/media.rs",
+     "    let mut out = Vec::new();\n    let camera",
+     "    let mut out = Vec::new();\n    if !out.is_empty() || true { return out; }\n    let camera",
+     ["test", "--test", "web", "viewer_info_panel_shows_date_place_and_camera"]),
 ]
 
 
