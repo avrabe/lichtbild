@@ -34,6 +34,7 @@ pub struct AppState {
     pub base_path: String,
     pub roots: Arc<HashMap<String, PathBuf>>,
     pub labels: Arc<Vec<String>>,
+    pub allowed_hosts: Arc<Vec<String>>,
 }
 
 impl AppState {
@@ -49,6 +50,7 @@ impl AppState {
                     .collect(),
             ),
             labels: Arc::new(cfg.roots.iter().map(|r| r.label.clone()).collect()),
+            allowed_hosts: Arc::new(cfg.allowed_hosts.clone()),
         }
     }
 }
@@ -72,8 +74,48 @@ pub fn router(state: AppState) -> Router {
             .route(&format!("{base}/"), get(home))
             .nest(&base, app)
     };
+    let hosts = state.allowed_hosts.clone();
     app.with_state(state)
+        .layer(middleware::from_fn(move |req: Request, next: Next| {
+            let hosts = hosts.clone();
+            async move { check_host(&hosts, req, next).await }
+        }))
         .layer(middleware::from_fn(security_headers))
+}
+
+/// The host part of a Host header or authority: "[::1]:8080" -> "::1",
+/// "Photos.Example:443" -> "photos.example".
+pub fn host_name(authority: &str) -> String {
+    let a = authority.trim();
+    let h = if let Some(rest) = a.strip_prefix('[') {
+        rest.split(']').next().unwrap_or("")
+    } else {
+        a.rsplit_once(':')
+            .filter(|(_, port)| port.chars().all(|c| c.is_ascii_digit()))
+            .map_or(a, |(h, _)| h)
+    };
+    h.trim_end_matches('.').to_ascii_lowercase()
+}
+
+/// REQ-WEB-005: answer only requests addressed to localhost or a configured
+/// host name, so a page on another site cannot reach lichtbild through DNS
+/// rebinding while there is no login.
+async fn check_host(allowed: &[String], req: Request, next: Next) -> Response {
+    let authority = req
+        .headers()
+        .get(header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string)
+        .or_else(|| req.uri().authority().map(|a| a.to_string()));
+    let ok = authority.is_some_and(|a| {
+        let h = host_name(&a);
+        matches!(h.as_str(), "localhost" | "127.0.0.1" | "::1") || allowed.contains(&h)
+    });
+    if ok {
+        next.run(req).await
+    } else {
+        (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
+    }
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {

@@ -29,6 +29,7 @@ at nice 0.
 | F15 | REQ-WEB-004 | no containment check when resolving a stored path | `files_are_served_by_id_with_containment` |
 | F16 | REQ-WEB-002 | `<base href>` ignores the base path | `base_path_prefixes_everything` |
 | F17 | REQ-WEB-001 | a continuation page repeats the year and month headings | `timeline_groups_by_day_and_pages_with_htmx` |
+| F18 | REQ-WEB-005 | requests for any host are answered | `requests_for_other_hosts_are_refused` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the

@@ -91,6 +91,10 @@ FAULTS = [
      "    let mut prev = prev_day.map(str::to_string);\n",
      "    let mut prev: Option<String> = prev_day.and(None);\n",
      ["test", "--test", "web", "timeline_groups_by_day_and_pages_with_htmx"]),
+    ("F18", "REQ-WEB-005", "src/web.rs",
+     "    let ok = authority.is_some_and(",
+     "    let ok = true || authority.is_some_and(",
+     ["test", "--test", "web", "requests_for_other_hosts_are_refused"]),
 ]
 
 

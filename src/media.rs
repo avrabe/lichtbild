@@ -229,57 +229,68 @@ fn exif_position(e: &exif::Exif) -> Option<(f64, f64)> {
 
 /// A date in the file name: 8 digits YYYYMMDD (or YYYY-MM-DD), optionally
 /// followed by a separator and 6 digits HHMMSS (or HH.MM.SS / HH-MM-SS).
+/// Works on bytes and never slices a string, so any file name is safe.
 pub fn name_date(rel: &Path) -> Option<NaiveDateTime> {
-    let name = rel.file_stem()?.to_string_lossy();
-    let digits: Vec<(usize, char)> = name.char_indices().collect();
-    for start in 0..digits.len() {
-        let rest: String = digits[start..].iter().map(|(_, c)| *c).collect();
-        // Only accept runs that begin with a digit and follow a non-digit.
-        if !rest.starts_with(|c: char| c.is_ascii_digit())
-            || (start > 0 && digits[start - 1].1.is_ascii_digit())
-        {
+    let stem = rel.file_stem()?.as_encoded_bytes();
+    let digit = |i: usize| stem.get(i).is_some_and(u8::is_ascii_digit);
+    let num = |from: usize, len: usize| -> Option<u32> {
+        let mut n = 0u32;
+        for i in from..from + len {
+            let c = *stem.get(i)?;
+            if !c.is_ascii_digit() {
+                return None;
+            }
+            n = n * 10 + u32::from(c - b'0');
+        }
+        Some(n)
+    };
+    for start in 0..stem.len() {
+        if !digit(start) || (start > 0 && digit(start - 1)) {
             continue;
         }
-        let date_part = &rest[..rest.len().min(10)];
-        let date_digits: String = date_part.chars().filter(|c| c.is_ascii_digit()).collect();
-        let shaped = date_part.len() == 10
-            && date_part.as_bytes()[4] == b'-'
-            && date_part.as_bytes()[7] == b'-';
-        let (d8, after) = if rest.len() >= 8 && rest[..8].chars().all(|c| c.is_ascii_digit()) {
-            (rest[..8].to_string(), &rest[8..])
-        } else if shaped && date_digits.len() == 8 {
-            (date_digits, &rest[10..])
+        // YYYYMMDD or YYYY-MM-DD
+        let (y, m, d, mut i) = if (0..8).all(|k| digit(start + k)) {
+            (
+                num(start, 4)?,
+                num(start + 4, 2)?,
+                num(start + 6, 2)?,
+                start + 8,
+            )
+        } else if stem.get(start + 4) == Some(&b'-')
+            && stem.get(start + 7) == Some(&b'-')
+            && [0, 1, 2, 3, 5, 6, 8, 9].iter().all(|k| digit(start + k))
+        {
+            (
+                num(start, 4)?,
+                num(start + 5, 2)?,
+                num(start + 8, 2)?,
+                start + 10,
+            )
         } else {
             continue;
         };
-        let y: i32 = d8[0..4].parse().ok()?;
         if !(1990..=2100).contains(&y) {
             continue;
         }
-        let date = match NaiveDate::from_ymd_opt(y, d8[4..6].parse().ok()?, d8[6..8].parse().ok()?)
-        {
-            Some(d) => d,
-            None => continue,
+        let Some(date) = NaiveDate::from_ymd_opt(y as i32, m, d) else {
+            continue;
         };
-        let after = after.trim_start_matches(['_', '-', ' ', 'T']);
-        let t: String = after
-            .chars()
-            .take(8)
-            .filter(|c| c.is_ascii_digit())
-            .collect();
-        let shaped_time = after.len() >= 6 && after[..6].chars().all(|c| c.is_ascii_digit())
-            || after.len() >= 8 && {
-                let b = after.as_bytes();
-                b[2] == b[5] && (b[2] == b'.' || b[2] == b'-' || b[2] == b':')
-            };
-        if shaped_time && t.len() >= 6 {
-            if let Some(dt) = date.and_hms_opt(
-                t[0..2].parse().ok()?,
-                t[2..4].parse().ok()?,
-                t[4..6].parse().ok()?,
-            ) {
-                return Some(dt);
-            }
+        while matches!(stem.get(i), Some(b'_' | b'-' | b' ' | b'T')) {
+            i += 1;
+        }
+        // HHMMSS, or HH.MM.SS / HH-MM-SS / HH:MM:SS
+        let time = if (0..6).all(|k| digit(i + k)) {
+            Some((num(i, 2)?, num(i + 2, 2)?, num(i + 4, 2)?))
+        } else if matches!(stem.get(i + 2), Some(b'.' | b'-' | b':'))
+            && stem.get(i + 5) == stem.get(i + 2)
+            && [0, 1, 3, 4, 6, 7].iter().all(|k| digit(i + k))
+        {
+            Some((num(i, 2)?, num(i + 3, 2)?, num(i + 6, 2)?))
+        } else {
+            None
+        };
+        if let Some(dt) = time.and_then(|(h, mi, se)| date.and_hms_opt(h, mi, se)) {
+            return Some(dt);
         }
         return date.and_hms_opt(12, 0, 0);
     }
@@ -364,6 +375,18 @@ mod tests {
         assert_eq!(d("IMG_1234.jpg"), None);
         assert_eq!(d("20201345_000000.jpg"), None);
         assert_eq!(d("123456789012.jpg"), None);
+        // Multi-byte characters around and inside candidates never panic.
+        assert_eq!(d("Urlaub 2023 Müller.jpg"), None);
+        assert_eq!(d("2020010é.jpg"), None);
+        assert_eq!(
+            d("ü20200102_0304ö5.jpg").as_deref(),
+            Some("2020-01-02 12:00:00")
+        );
+        assert_eq!(
+            d("Ä2019-07-04 10.20.30ß.jpg").as_deref(),
+            Some("2019-07-04 10:20:30")
+        );
+        assert_eq!(d("2021-0é-15.jpg"), None);
     }
 
     #[test]

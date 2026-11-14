@@ -6,6 +6,8 @@ data_dir = "/var/lib/lichtbild"     # index, thumbnails, scan report; never insi
 base_path = "/lichtbild"            # served under this path behind the reverse proxy
 listen = "127.0.0.1:8080"           # loopback until login exists (REQ-AUTH-001)
 workers = 2                         # scan workers
+scan_interval_hours = 24            # serve rescans this often; 0 = only at start
+allowed_hosts = ["photos.example"]  # Host names answered besides localhost (REQ-WEB-005)
 
 [[roots]]                           # one per person; read-only
 label = "person1"

@@ -20,7 +20,19 @@ async fn get(
     uri: &str,
     htmx: bool,
 ) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    get_host(app, uri, htmx, Some("localhost:8080")).await
+}
+
+async fn get_host(
+    app: &axum::Router,
+    uri: &str,
+    htmx: bool,
+    host: Option<&str>,
+) -> (StatusCode, axum::http::HeaderMap, Vec<u8>) {
     let mut req = Request::builder().uri(uri);
+    if let Some(h) = host {
+        req = req.header("host", h);
+    }
     if htmx {
         req = req.header("hx-request", "true");
     }
@@ -260,4 +272,39 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
     let all = String::from_utf8(body).unwrap();
     assert!(all.contains("2021-06-15") || all.contains("hx-get"));
     assert_eq!(get(&app, "/t/nobody", false).await.0, StatusCode::NOT_FOUND);
+}
+
+// rivet: verifies REQ-WEB-005
+#[tokio::test]
+async fn requests_for_other_hosts_are_refused() {
+    let (_fx, mut cfg, idx) = scanned();
+    cfg.allowed_hosts = vec!["photos.example".into()];
+    let app = app(&cfg, &idx);
+    for host in [
+        "localhost",
+        "localhost:8080",
+        "127.0.0.1:18080",
+        "[::1]:8080",
+        "photos.example",
+        "Photos.Example:443",
+    ] {
+        let (s, _, _) = get_host(&app, "/t/p1", false, Some(host)).await;
+        assert_eq!(s, StatusCode::OK, "{host}");
+    }
+    for host in [
+        Some("evil.example"),
+        Some("photos.example.evil.example"),
+        Some("localhost.evil.example:8080"),
+        None,
+    ] {
+        let (s, h, body) = get_host(&app, "/t/p1", false, host).await;
+        assert_eq!(s, StatusCode::MISDIRECTED_REQUEST, "{host:?}");
+        assert!(h.get("content-security-policy").is_some());
+        assert!(
+            !String::from_utf8_lossy(&body).contains("item"),
+            "{host:?} got content"
+        );
+        let (s, _, _) = get_host(&app, "/thumb/1", false, host).await;
+        assert_eq!(s, StatusCode::MISDIRECTED_REQUEST, "{host:?}");
+    }
 }

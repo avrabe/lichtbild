@@ -21,6 +21,7 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_DATA_DIR   /path                     index, thumbnails, report
   LICHTBILD_BASE_PATH  /prefix                   when served under a path
   LICHTBILD_LISTEN     127.0.0.1:8080
+  LICHTBILD_ALLOWED_HOSTS  photos.example        host names besides localhost (comma-separated)
   LICHTBILD_WORKERS    2
   LICHTBILD_SCAN_INTERVAL_HOURS  24              0 = scan only at start
   LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN  1 to listen beyond loopback before login exists

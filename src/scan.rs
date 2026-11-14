@@ -318,7 +318,10 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     Ok(Some(j)) => j,
                     _ => break,
                 };
-                let out = process(&sh, &job);
+                // A panic in a decoder must not lose the file or the worker.
+                let out =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process(&sh, &job)))
+                        .unwrap_or(Outcome::Skipped(Skip::DecodeError));
                 if tx.send((job, out)).is_err() {
                     break;
                 }

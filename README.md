@@ -23,7 +23,7 @@ lichtbild scan     # one scan and its report, only while no server runs; exit 2 
 
 The index is a redb file in the data directory, owned by one process: `serve` scans in a low-priority background thread and logs the report; `scan` refuses while a server holds the index.
 
-All settings are in `lichtbild --help` and [config.example.toml](config.example.toml). lichtbild refuses to start when the data directory and a root overlap.
+All settings are in `lichtbild --help` and [config.example.toml](config.example.toml). lichtbild refuses to start when the data directory and a root overlap. Behind a reverse proxy, set `LICHTBILD_ALLOWED_HOSTS` to the public host name: requests for any other host get 421.
 
 ## Verification
 
@@ -33,7 +33,7 @@ Releases are signed like haus's: verify `SHA256SUMS.txt` with
 
 ```sh
 cosign verify-blob \
-  --certificate-identity-regexp '^https://github.com/avrabe/lichtbild/\.github/workflows/' \
+  --certificate-identity-regexp '^https://github\.com/avrabe/lichtbild/\.github/workflows/release\.yml@refs/tags/v[0-9][^/]*$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   --bundle SHA256SUMS.txt.cosign.bundle SHA256SUMS.txt
 sha256sum -c --ignore-missing SHA256SUMS.txt

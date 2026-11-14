@@ -52,6 +52,8 @@ pub struct Config {
     /// Opt-in to listen on a non-loopback address before login exists
     /// (REQ-AUTH-001).
     pub allow_remote_without_login: bool,
+    /// Host names requests may carry besides localhost (REQ-WEB-005).
+    pub allowed_hosts: Vec<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -79,6 +81,8 @@ struct FileConfig {
     workers: Option<usize>,
     scan_interval_hours: Option<u64>,
     #[serde(default)]
+    allowed_hosts: Vec<String>,
+    #[serde(default)]
     roots: Vec<FileRoot>,
     #[serde(default)]
     limits: FileLimits,
@@ -95,6 +99,7 @@ pub struct Settings {
     pub scan_interval_hours: Option<u64>,
     pub limits: Limits,
     pub allow_remote_without_login: bool,
+    pub allowed_hosts: Vec<String>,
 }
 
 impl Settings {
@@ -126,6 +131,13 @@ impl Settings {
         if let Some(v) = get("LICHTBILD_SCAN_INTERVAL_HOURS") {
             s.scan_interval_hours = Some(v.parse().context("LICHTBILD_SCAN_INTERVAL_HOURS")?);
         }
+        if let Some(v) = get("LICHTBILD_ALLOWED_HOSTS") {
+            s.allowed_hosts = v
+                .split(',')
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+                .collect();
+        }
         if let Some(v) = get("LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN") {
             s.allow_remote_without_login = v == "1";
         }
@@ -141,6 +153,9 @@ impl Settings {
         self.base_path = f.base_path.or(self.base_path.take());
         self.listen = f.listen.or(self.listen.take());
         self.workers = f.workers.or(self.workers);
+        if !f.allowed_hosts.is_empty() {
+            self.allowed_hosts = f.allowed_hosts;
+        }
         self.scan_interval_hours = f.scan_interval_hours.or(self.scan_interval_hours);
         let l = &mut self.limits;
         if let Some(v) = f.limits.max_pixels {
@@ -213,6 +228,11 @@ impl Settings {
             scan_interval_hours: self.scan_interval_hours.unwrap_or(24),
             limits: self.limits,
             allow_remote_without_login: self.allow_remote_without_login,
+            allowed_hosts: self
+                .allowed_hosts
+                .iter()
+                .map(|h| h.to_ascii_lowercase())
+                .collect(),
         })
     }
 }

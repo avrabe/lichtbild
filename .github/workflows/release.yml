@@ -210,7 +210,7 @@ jobs:
         working-directory: dist
         run: |
           cosign verify-blob \
-            --certificate-identity-regexp '^https://github.com/avrabe/lichtbild/\.github/workflows/' \
+            --certificate-identity-regexp '^https://github\.com/avrabe/lichtbild/\.github/workflows/release\.yml@refs/tags/v[0-9][^/]*$' \
             --certificate-oidc-issuer https://token.actions.githubusercontent.com \
             --bundle SHA256SUMS.txt.cosign.bundle SHA256SUMS.txt
           sha256sum -c SHA256SUMS.txt

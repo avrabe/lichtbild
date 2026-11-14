@@ -210,3 +210,15 @@ artifacts:
     links:
       - type: verifies
         target: REQ-IDX-001
+
+  - id: VER-018
+    type: verification
+    title: Requests for other hosts get 421 and no content
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "requests_for_other_hosts_are_refused"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-005

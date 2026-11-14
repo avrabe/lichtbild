@@ -40,3 +40,5 @@ artifacts:
         target: REQ-WEB-001
       - type: satisfies
         target: REQ-WEB-004
+      - type: satisfies
+        target: REQ-WEB-005

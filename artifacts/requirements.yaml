@@ -304,6 +304,23 @@ artifacts:
       - type: satisfies
         target: SSC-004
 
+  - id: REQ-WEB-005
+    type: requirement
+    title: Requests are answered only for localhost and configured host names
+    status: implemented
+    release: v0.1.0
+    description: >
+      Until login exists, a request whose Host (or authority) is not
+      localhost, 127.0.0.1, ::1 or a name in LICHTBILD_ALLOWED_HOSTS gets 421
+      and no library data, so a page on another site cannot read lichtbild
+      through DNS rebinding.
+    fields:
+      priority: must
+      category: constraint
+    links:
+      - type: satisfies
+        target: SSC-001
+
   # --- Later steps (seeded, not in v0.1.0) ---
   - id: REQ-AUTH-001
     type: requirement
