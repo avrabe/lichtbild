@@ -322,6 +322,36 @@ artifacts:
       - type: satisfies
         target: SSC-001
 
+  - id: REQ-WEB-006
+    type: requirement
+    title: Jump to any year or month of a timeline
+    status: implemented
+    release: v0.2.0
+    description: >
+      Every timeline page offers a date scrubber: on wide screens a rail along
+      the right edge with one tick per month that has items, sized by the
+      number of items and labelled on hover; on phones a "Jump to date" menu
+      of years and months. Choosing a year or month starts the timeline
+      there, with a link back to newer photos. Both work as plain links.
+    fields:
+      priority: must
+      category: functional
+
+  - id: REQ-WEB-007
+    type: requirement
+    title: A photo viewer that steps to the previous and next photo
+    status: implemented
+    release: v0.2.0
+    description: >
+      Choosing a photo opens it large. Previous (newer) and next (older)
+      follow the order of the timeline it was opened from, by link, arrow
+      key or horizontal swipe; Escape and the back link return to the
+      timeline at that photo. A photo is shown only in a timeline it belongs
+      to.
+    fields:
+      priority: must
+      category: functional
+
   # --- Later steps (seeded, not in v0.1.0) ---
   - id: REQ-AUTH-001
     type: requirement

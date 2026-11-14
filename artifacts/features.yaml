@@ -42,3 +42,23 @@ artifacts:
         target: REQ-WEB-004
       - type: satisfies
         target: REQ-WEB-005
+
+  - id: FEAT-002
+    type: feature
+    title: Timeline navigation - date scrubber and photo viewer
+    status: implemented
+    release: v0.2.0
+    description: >
+      Owner request 2026-11-14 after using v0.1.1: jump to a year or month
+      instead of scrolling, and step through photos with swipes or arrow
+      keys. The home page also shows the merged view's count.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - From any month in the rail or menu the timeline starts at that month
+        - Swiping left or right in the viewer goes to the next or previous photo
+    links:
+      - type: satisfies
+        target: REQ-WEB-006
+      - type: satisfies
+        target: REQ-WEB-007

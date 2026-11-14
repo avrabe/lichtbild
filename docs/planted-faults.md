@@ -33,6 +33,8 @@ at nice 0.
 | F18 | REQ-WEB-005 | requests for any host are answered | `requests_for_other_hosts_are_refused` |
 | F19 | REQ-CFG-002 | a root inside the data directory is not checked (half the condition) | `data_dir_overlapping_a_root_is_refused` |
 | F20 | REQ-THUMB-001 | thumbnails that failed for lack of cache space are never retried | `failed_thumbnails_are_retried_and_counted` |
+| F21 | REQ-WEB-006 | a jump ignores the chosen year or month | `date_scrubber_jumps_to_years_and_months` |
+| F22 | REQ-WEB-007 | the viewer shows a photo from another person's timeline | `viewer_respects_the_timeline_it_was_opened_from` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the

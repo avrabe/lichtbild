@@ -103,6 +103,14 @@ FAULTS = [
      "                                    \"decode-error\" => true,\n                                    _ => false,\n",
      "                                    _ => true,\n",
      ["test", "--test", "scan", "failed_thumbnails_are_retried_and_counted"]),
+    ("F21", "REQ-WEB-006", "src/web.rs",
+     ".or_else(|| from_bound.clone().map(|b| (b, 0)));",
+     ".or_else(|| from_bound.clone().map(|_| (String::from(\"\\u{7f}\"), 0)));",
+     ["test", "--test", "web", "date_scrubber_jumps_to_years_and_months"]),
+    ("F22", "REQ-WEB-007", "src/web.rs",
+     "        if !labels.contains(&rec.label) {",
+     "        if false {",
+     ["test", "--test", "web", "viewer_respects_the_timeline_it_was_opened_from"]),
 ]
 
 
