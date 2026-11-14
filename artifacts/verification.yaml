@@ -349,3 +349,34 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MEDIA-002
+
+  - id: VER-026
+    type: verification
+    title: The info panel shows date and source, town, coordinates, camera and exposure
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "viewer_info_panel_shows_date_place_and_camera"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web viewer_info_panel_shows_date_place_and_camera"
+    links:
+      - type: verifies
+        target: REQ-WEB-008
+      - type: verifies
+        target: REQ-PLACE-001
+
+  - id: VER-027
+    type: verification
+    title: Nearest-town lookup across cell borders, with region and country names
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "nearest_town_with_region_and_country"
+      test-location: src/places.rs
+      steps:
+        - run: "cargo test --lib nearest_town_with_region_and_country"
+        - run: "cargo test --lib nearest_crosses_cell_borders"
+    links:
+      - type: verifies
+        target: REQ-PLACE-001

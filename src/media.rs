@@ -188,6 +188,46 @@ pub fn inspect(
     })
 }
 
+/// Camera, lens and exposure from EXIF, for the viewer's info panel
+/// (REQ-WEB-008). Read on demand from the original; nothing is stored.
+pub fn exif_details(bytes: &[u8]) -> Vec<(&'static str, String)> {
+    use exif::Tag;
+    let Ok(e) = exif::Reader::new().read_from_container(&mut Cursor::new(bytes)) else {
+        return Vec::new();
+    };
+    let txt = |t: Tag| exif_ascii(&e, t).filter(|s| !s.is_empty());
+    let val = |t: Tag| {
+        e.get_field(t, exif::In::PRIMARY)
+            .map(|f| f.display_value().with_unit(&e).to_string())
+            .filter(|s| !s.is_empty())
+    };
+    let mut out = Vec::new();
+    let camera = match (txt(Tag::Make), txt(Tag::Model)) {
+        (Some(make), Some(model)) if model.starts_with(&make) => Some(model),
+        (Some(make), Some(model)) => Some(format!("{make} {model}")),
+        (a, b) => a.or(b),
+    };
+    if let Some(c) = camera {
+        out.push(("Camera", c));
+    }
+    if let Some(l) = txt(Tag::LensModel) {
+        out.push(("Lens", l));
+    }
+    let exposure: Vec<String> = [
+        val(Tag::ExposureTime),
+        val(Tag::FNumber),
+        val(Tag::PhotographicSensitivity).map(|v| format!("ISO {v}")),
+        val(Tag::FocalLength),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !exposure.is_empty() {
+        out.push(("Exposure", exposure.join(" · ")));
+    }
+    out
+}
+
 fn exif_ascii(e: &exif::Exif, tag: exif::Tag) -> Option<String> {
     let f = e.get_field(tag, exif::In::PRIMARY)?;
     match &f.value {

@@ -54,6 +54,17 @@ pub struct Config {
     pub allow_remote_without_login: bool,
     /// Host names requests may carry besides localhost (REQ-WEB-005).
     pub allowed_hosts: Vec<String>,
+    /// GeoNames files for offline place names (REQ-PLACE-001).
+    pub places: PlacesFiles,
+}
+
+/// Paths of the GeoNames dumps; only `cities` is required to enable names.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct PlacesFiles {
+    pub cities: Option<PathBuf>,
+    pub admin1: Option<PathBuf>,
+    pub countries: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -83,6 +94,8 @@ struct FileConfig {
     #[serde(default)]
     allowed_hosts: Vec<String>,
     #[serde(default)]
+    places: PlacesFiles,
+    #[serde(default)]
     roots: Vec<FileRoot>,
     #[serde(default)]
     limits: FileLimits,
@@ -100,6 +113,7 @@ pub struct Settings {
     pub limits: Limits,
     pub allow_remote_without_login: bool,
     pub allowed_hosts: Vec<String>,
+    pub places: PlacesFiles,
 }
 
 impl Settings {
@@ -148,6 +162,15 @@ impl Settings {
         if let Some(v) = num("LICHTBILD_THUMB_SIZE")? {
             s.limits.thumb_size = u32::try_from(v).context("LICHTBILD_THUMB_SIZE")?;
         }
+        if let Some(v) = get("LICHTBILD_PLACES") {
+            s.places.cities = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_PLACES_ADMIN1") {
+            s.places.admin1 = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_PLACES_COUNTRIES") {
+            s.places.countries = Some(PathBuf::from(v));
+        }
         if let Some(v) = get("LICHTBILD_ALLOWED_HOSTS") {
             s.allowed_hosts = v
                 .split(',')
@@ -172,6 +195,9 @@ impl Settings {
         self.workers = f.workers.or(self.workers);
         if !f.allowed_hosts.is_empty() {
             self.allowed_hosts = f.allowed_hosts;
+        }
+        if f.places != PlacesFiles::default() {
+            self.places = f.places;
         }
         self.scan_interval_hours = f.scan_interval_hours.or(self.scan_interval_hours);
         let l = &mut self.limits;
@@ -253,6 +279,7 @@ impl Settings {
                 .iter()
                 .map(|h| crate::web::host_name(h))
                 .collect(),
+            places: self.places,
         })
     }
 }
@@ -367,6 +394,25 @@ mod tests {
             ]
         );
         assert!(parse_roots("nolabel").is_err());
+    }
+
+    #[test]
+    fn places_from_file() {
+        let mut s = Settings::default();
+        s.apply_file(
+            "[places]\ncities = \"/x/cities1000.txt\"\ncountries = \"/x/countryInfo.txt\"\n",
+        )
+        .unwrap();
+        assert_eq!(s.places.cities, Some(PathBuf::from("/x/cities1000.txt")));
+        assert_eq!(s.places.admin1, None);
+        assert_eq!(
+            s.places.countries,
+            Some(PathBuf::from("/x/countryInfo.txt"))
+        );
+        assert!(
+            s.apply_file("[places]\ntowns = \"/x\"\n").is_err(),
+            "unknown key accepted"
+        );
     }
 
     #[test]

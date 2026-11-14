@@ -264,3 +264,51 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-MEDIA-002
+
+  - id: DD-011
+    type: design-decision
+    title: Town names from GeoNames files, looked up in memory
+    status: implemented
+    release: v0.1.3
+    description: >
+      Owner decision 2026-11-14: town-level place names, offline, rather than
+      street addresses from a local geocoding service or none.
+    fields:
+      decision: >
+        LICHTBILD_PLACES names a GeoNames cities file (cities1000.txt, about
+        10 MB, CC-BY 4.0), with optional admin1CodesASCII.txt and
+        countryInfo.txt. lichtbild loads it at start into a one-degree grid
+        and returns the nearest town by great-circle distance. The deployment
+        downloads a snapshot and pins its sha256.
+      rationale: >
+        A photo's position must not leave the house, which rules out online
+        geocoders. Town level fits in memory on the Pi and needs no second
+        service; street level would need Photon or Nominatim with gigabytes
+        of OpenStreetMap data.
+      alternatives: >
+        A local Photon or Nominatim service (street addresses, several GB per
+        country); coordinates only.
+    links:
+      - type: satisfies
+        target: REQ-PLACE-001
+
+  - id: DD-012
+    type: design-decision
+    title: Photo details are read from the original when the viewer opens
+    status: implemented
+    release: v0.1.3
+    description: >
+      Camera, lens and exposure are not stored in the index.
+    fields:
+      decision: >
+        The viewer reads the original (read-only, under the file size limit)
+        and extracts the EXIF fields with kamadak-exif for the info panel.
+      rationale: >
+        No index change and no rescan of the 31,000-file library; one file
+        read per photo opened is cheap on the local disk.
+      alternatives: >
+        Store the fields in the index (needs a schema change and a full
+        rescan).
+    links:
+      - type: satisfies
+        target: REQ-WEB-008

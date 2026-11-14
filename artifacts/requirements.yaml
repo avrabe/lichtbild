@@ -352,6 +352,38 @@ artifacts:
       priority: must
       category: functional
 
+  - id: REQ-WEB-008
+    type: requirement
+    title: The viewer shows a photo's details on request
+    status: implemented
+    release: v0.1.3
+    description: >
+      An info panel in the viewer, opened by a button or the i key and
+      working without JavaScript, shows when the photo was taken and where
+      that date came from, where it was taken, the camera, lens and exposure
+      read from the original's EXIF, the size, file name and library.
+    fields:
+      priority: should
+      category: functional
+
+  - id: REQ-PLACE-001
+    type: requirement
+    title: Positions are named offline, never by an outside service
+    status: implemented
+    release: v0.1.3
+    description: >
+      When the deployment supplies GeoNames files (towns with 1,000 or more
+      inhabitants, optional region and country names), the info panel names
+      the nearest town within about two degrees, with its distance, from an
+      index lichtbild holds in memory. No position is sent to any other host.
+      Without the files only coordinates are shown.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-003
+
   # --- Later steps (seeded, not in v0.1.0) ---
   - id: REQ-AUTH-001
     type: requirement

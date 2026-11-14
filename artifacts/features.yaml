@@ -79,3 +79,21 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-MEDIA-002
+
+  - id: FEAT-004
+    type: feature
+    title: Photo details and place names in the viewer
+    status: implemented
+    release: v0.1.3
+    description: >
+      Owner request 2026-11-14: a metadata view in the viewer, with the GPS
+      position turned into a place name, offline.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - The info panel names the nearest town for a photo with GPS when GeoNames files are configured
+    links:
+      - type: satisfies
+        target: REQ-WEB-008
+      - type: satisfies
+        target: REQ-PLACE-001

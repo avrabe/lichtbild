@@ -56,6 +56,29 @@ pub fn jpeg_with_exif(date: &str, offset: &str, gps: Option<(Dm, Dm)>, seed: u8)
     let mut fields = vec![
         ascii(Tag::DateTimeOriginal, date),
         ascii(Tag::OffsetTimeOriginal, offset),
+        // A made-up camera, for the viewer's info panel.
+        ascii(Tag::Make, "Lichtbild"),
+        ascii(Tag::Model, "Testkamera 1"),
+        Field {
+            tag: Tag::ExposureTime,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 1, denom: 120 }]),
+        },
+        Field {
+            tag: Tag::FNumber,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 18, denom: 10 }]),
+        },
+        Field {
+            tag: Tag::PhotographicSensitivity,
+            ifd_num: In::PRIMARY,
+            value: Value::Short(vec![50]),
+        },
+        Field {
+            tag: Tag::FocalLength,
+            ifd_num: In::PRIMARY,
+            value: Value::Rational(vec![Rational { num: 42, denom: 10 }]),
+        },
     ];
     if let Some(((la, lam, lar), (lo, lom, lor))) = gps {
         fields.push(ascii(Tag::GPSLatitudeRef, &lar.to_string()));
