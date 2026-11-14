@@ -32,8 +32,8 @@ FAULTS = [
      "    let f = open(root, rel)?;\n    std::fs::write(root.join(rel).with_extension(\"xmp\"), b\"\")?;\n",
      ["clippy", "--all-targets", "--", "-D", "warnings"]),
     ("F03", "REQ-SCAN-002", "src/scan.rs",
-     "                    Class::Skip(s) => skip(&mut rr, s),\n",
-     "                    Class::Skip(Skip::HiddenOrSystem) => {}\n                    Class::Skip(s) => skip(&mut rr, s),\n",
+     "                    Class::Skip(s) => skip(&mut rr, &mut problems, s, &rel),\n",
+     "                    Class::Skip(Skip::HiddenOrSystem) => {}\n                    Class::Skip(s) => skip(&mut rr, &mut problems, s, &rel),\n",
      ["test", "--test", "scan", "report_reconciles_and_names_every_skip"]),
     ("F04", "REQ-SCAN-002", "src/scan.rs",
      "                    tx_open.upsert(\n",
@@ -131,6 +131,14 @@ FAULTS = [
      "for line in admin1.unwrap_or(\"\").lines() {",
      "for line in admin1.unwrap_or(\"\").split('\\n') {",
      ["test", "--lib", "crlf_line_endings"]),
+    ("F28", "REQ-SCAN-002", "src/scan.rs",
+     "            problems.push(problem_line(\"thumbnail\", &reason, &label, rel));",
+     "",
+     ["test", "--test", "scan", "undecodable_heic_is_counted_by_format_and_listed"]),
+    ("F29", "REQ-MEDIA-002", "src/web.rs",
+     "    if browser_cannot_show && !rec.preview {",
+     "    if false {",
+     ["test", "--test", "web", "viewer_explains_an_undecodable_heic"]),
 ]
 
 

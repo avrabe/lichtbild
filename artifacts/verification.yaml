@@ -381,3 +381,33 @@ artifacts:
     links:
       - type: verifies
         target: REQ-PLACE-001
+
+  - id: VER-028
+    type: verification
+    title: Undecodable HEIC is counted by format and listed for the operator
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "undecodable_heic_is_counted_by_format_and_listed"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan undecodable_heic_is_counted_by_format_and_listed"
+    links:
+      - type: verifies
+        target: REQ-SCAN-002
+      - type: verifies
+        target: REQ-MEDIA-002
+
+  - id: VER-029
+    type: verification
+    title: The viewer explains a HEIC without preview and offers the original
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "viewer_explains_an_undecodable_heic"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web viewer_explains_an_undecodable_heic"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-002
