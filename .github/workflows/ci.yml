@@ -14,12 +14,64 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  CARGO_TERM_COLOR: always
+  # Keep in step with release.yml and rust-toolchain.toml.
+  RUST_TOOLCHAIN: 1.96.1
   # varve itself; the tools (rivet) come from the layer varve.toml pins.
   VARVE_VERSION: v0.47.0
 
 # GitHub-hosted until a self-hosted runner serves this repository (DD-007).
 # Then light jobs switch to the fail-closed fork guard from docs/BRIEF.md.
 jobs:
+  # clippy.toml's disallowed-methods is the lint layer of DD-006.
+  check:
+    name: fmt, clippy, test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: cargo fmt
+        run: cargo fmt --all --check
+
+      - name: cargo clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: cargo test
+        run: cargo test --locked --no-fail-fast
+
+  # REQ-FAULT-001: every check must fail with its planted fault.
+  # rivet: verifies REQ-FAULT-001
+  planted-faults:
+    name: planted faults
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable branch
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Plant each fault and expect its check to fail
+        run: python3 scripts/planted_faults.py
+
   # rivet: verifies REQ-TRACE-001
   # rivet: verifies DD-001
   rivet:

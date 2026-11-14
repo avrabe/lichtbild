@@ -1,0 +1,359 @@
+//! Configuration from LICHTBILD_* variables and an optional TOML file
+//! (REQ-CFG-001, DD-009), and the overlap check between the data directory
+//! and the source roots (REQ-CFG-002, SC-001).
+
+use std::net::SocketAddr;
+use std::path::{Component, Path, PathBuf};
+
+use anyhow::{bail, Context, Result};
+use serde::Deserialize;
+
+/// One person's library folder, read-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Root {
+    /// Short label used in URLs and the report (letters, digits, '-', '_').
+    pub label: String,
+    /// Canonical absolute path.
+    pub path: PathBuf,
+}
+
+/// Limits that bound decoder and cache resource use (SC-005).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Limits {
+    pub max_pixels: u64,
+    pub max_file_bytes: u64,
+    pub thumb_cache_bytes: u64,
+    pub thumb_size: u32,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            max_pixels: 100_000_000,
+            max_file_bytes: 200 * 1024 * 1024,
+            thumb_cache_bytes: 20 * 1024 * 1024 * 1024,
+            thumb_size: 360,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Config {
+    pub roots: Vec<Root>,
+    /// Canonical absolute path of lichtbild's own data directory.
+    pub data_dir: PathBuf,
+    /// "" or a prefix like "/lichtbild".
+    pub base_path: String,
+    pub listen: SocketAddr,
+    pub workers: usize,
+    /// Hours between scans inside `serve`; 0 scans only at start.
+    pub scan_interval_hours: u64,
+    pub limits: Limits,
+    /// Opt-in to listen on a non-loopback address before login exists
+    /// (REQ-AUTH-001).
+    pub allow_remote_without_login: bool,
+    /// Host names requests may carry besides localhost (REQ-WEB-005).
+    pub allowed_hosts: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileRoot {
+    label: String,
+    path: PathBuf,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileLimits {
+    max_pixels: Option<u64>,
+    max_file_mib: Option<u64>,
+    thumb_cache_mib: Option<u64>,
+    thumb_size: Option<u32>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FileConfig {
+    data_dir: Option<PathBuf>,
+    base_path: Option<String>,
+    listen: Option<String>,
+    workers: Option<usize>,
+    scan_interval_hours: Option<u64>,
+    #[serde(default)]
+    allowed_hosts: Vec<String>,
+    #[serde(default)]
+    roots: Vec<FileRoot>,
+    #[serde(default)]
+    limits: FileLimits,
+}
+
+/// Raw settings before validation; the environment overrides the file.
+#[derive(Debug, Default, Clone)]
+pub struct Settings {
+    pub roots: Vec<(String, PathBuf)>,
+    pub data_dir: Option<PathBuf>,
+    pub base_path: Option<String>,
+    pub listen: Option<String>,
+    pub workers: Option<usize>,
+    pub scan_interval_hours: Option<u64>,
+    pub limits: Limits,
+    pub allow_remote_without_login: bool,
+    pub allowed_hosts: Vec<String>,
+}
+
+impl Settings {
+    /// Read LICHTBILD_CONFIG (if set) and then the LICHTBILD_* variables.
+    pub fn from_env() -> Result<Settings> {
+        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
+        let mut s = Settings::default();
+        if let Some(file) = get("LICHTBILD_CONFIG") {
+            let text = std::fs::read_to_string(&file)
+                .with_context(|| format!("LICHTBILD_CONFIG {file}"))?;
+            s.apply_file(&text)
+                .with_context(|| format!("LICHTBILD_CONFIG {file}"))?;
+        }
+        if let Some(v) = get("LICHTBILD_ROOTS") {
+            s.roots = parse_roots(&v)?;
+        }
+        if let Some(v) = get("LICHTBILD_DATA_DIR") {
+            s.data_dir = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_BASE_PATH") {
+            s.base_path = Some(v);
+        }
+        if let Some(v) = get("LICHTBILD_LISTEN") {
+            s.listen = Some(v);
+        }
+        if let Some(v) = get("LICHTBILD_WORKERS") {
+            s.workers = Some(v.parse().context("LICHTBILD_WORKERS")?);
+        }
+        if let Some(v) = get("LICHTBILD_SCAN_INTERVAL_HOURS") {
+            s.scan_interval_hours = Some(v.parse().context("LICHTBILD_SCAN_INTERVAL_HOURS")?);
+        }
+        if let Some(v) = get("LICHTBILD_ALLOWED_HOSTS") {
+            s.allowed_hosts = v
+                .split(',')
+                .map(|h| h.trim().to_string())
+                .filter(|h| !h.is_empty())
+                .collect();
+        }
+        if let Some(v) = get("LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN") {
+            s.allow_remote_without_login = v == "1";
+        }
+        Ok(s)
+    }
+
+    pub fn apply_file(&mut self, text: &str) -> Result<()> {
+        let f: FileConfig = toml::from_str(text)?;
+        if !f.roots.is_empty() {
+            self.roots = f.roots.into_iter().map(|r| (r.label, r.path)).collect();
+        }
+        self.data_dir = f.data_dir.or(self.data_dir.take());
+        self.base_path = f.base_path.or(self.base_path.take());
+        self.listen = f.listen.or(self.listen.take());
+        self.workers = f.workers.or(self.workers);
+        if !f.allowed_hosts.is_empty() {
+            self.allowed_hosts = f.allowed_hosts;
+        }
+        self.scan_interval_hours = f.scan_interval_hours.or(self.scan_interval_hours);
+        let l = &mut self.limits;
+        if let Some(v) = f.limits.max_pixels {
+            l.max_pixels = v;
+        }
+        if let Some(v) = f.limits.max_file_mib {
+            l.max_file_bytes = v * 1024 * 1024;
+        }
+        if let Some(v) = f.limits.thumb_cache_mib {
+            l.thumb_cache_bytes = v * 1024 * 1024;
+        }
+        if let Some(v) = f.limits.thumb_size {
+            l.thumb_size = v;
+        }
+        Ok(())
+    }
+
+    /// Validate, create the data directory if needed, and check overlaps.
+    pub fn resolve(self) -> Result<Config> {
+        if self.roots.is_empty() {
+            bail!("no source roots: set LICHTBILD_ROOTS (label=/path;label=/path) or [[roots]] in LICHTBILD_CONFIG");
+        }
+        let data_dir = self
+            .data_dir
+            .context("no data directory: set LICHTBILD_DATA_DIR or data_dir in LICHTBILD_CONFIG")?;
+        if !data_dir.is_absolute() {
+            bail!("data directory must be an absolute path");
+        }
+        let mut roots = Vec::new();
+        for (label, path) in self.roots {
+            check_label(&label)?;
+            if roots.iter().any(|r: &Root| r.label == label) {
+                bail!("root label {label:?} is given twice");
+            }
+            if !path.is_absolute() {
+                bail!("root {label:?}: path must be absolute");
+            }
+            let canon = path
+                .canonicalize()
+                .with_context(|| format!("root {label:?}: cannot open its folder"))?;
+            if !canon.is_dir() {
+                bail!("root {label:?}: not a directory");
+            }
+            roots.push(Root { label, path: canon });
+        }
+        // Check the lexical path first, so the data directory is never
+        // created inside a root, then create it and check the real path.
+        let lexical = normalize(&data_dir);
+        check_overlap(&roots, &lexical)?;
+        crate::datadir::ensure_dir(&data_dir)?;
+        let data_dir = data_dir
+            .canonicalize()
+            .context("data directory: cannot resolve")?;
+        check_overlap(&roots, &data_dir)?;
+
+        let base_path = parse_base_path(self.base_path.as_deref())?;
+        let listen: SocketAddr = self
+            .listen
+            .as_deref()
+            .unwrap_or("127.0.0.1:8080")
+            .parse()
+            .context("listen address")?;
+        let workers = self.workers.unwrap_or(2).clamp(1, 16);
+        Ok(Config {
+            roots,
+            data_dir,
+            base_path,
+            listen,
+            workers,
+            scan_interval_hours: self.scan_interval_hours.unwrap_or(24),
+            limits: self.limits,
+            allow_remote_without_login: self.allow_remote_without_login,
+            allowed_hosts: self
+                .allowed_hosts
+                .iter()
+                .map(|h| h.to_ascii_lowercase())
+                .collect(),
+        })
+    }
+}
+
+/// `label=/path;label=/path`
+pub fn parse_roots(v: &str) -> Result<Vec<(String, PathBuf)>> {
+    v.split(';')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|pair| {
+            let (l, p) = pair
+                .split_once('=')
+                .context("LICHTBILD_ROOTS: expected label=/path pairs separated by ';'")?;
+            Ok((l.trim().to_string(), PathBuf::from(p.trim())))
+        })
+        .collect()
+}
+
+fn check_label(label: &str) -> Result<()> {
+    let ok = !label.is_empty()
+        && label.len() <= 32
+        && label
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        && label != "all";
+    if !ok {
+        bail!("root label {label:?}: use 1-32 letters, digits, '-' or '_' (and not \"all\")");
+    }
+    Ok(())
+}
+
+/// SC-001: no root inside the data directory, no data directory inside a
+/// root, no root inside another root.
+pub fn check_overlap(roots: &[Root], data_dir: &Path) -> Result<()> {
+    for (i, r) in roots.iter().enumerate() {
+        if data_dir.starts_with(&r.path) || r.path.starts_with(data_dir) {
+            bail!(
+                "data directory and root {:?} overlap; lichtbild never writes inside a root",
+                r.label
+            );
+        }
+        for o in &roots[i + 1..] {
+            if o.path.starts_with(&r.path) || r.path.starts_with(&o.path) {
+                bail!("roots {:?} and {:?} overlap", r.label, o.label);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Lexical normalisation: drop "." and resolve ".." without touching the disk.
+fn normalize(p: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for c in p.components() {
+        match c {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// LICHTBILD_BASE_PATH: unset, empty or "/" is no prefix; otherwise "/"
+/// followed by segments of letters, digits, '-', '_' and '.', without "."
+/// or "..". A trailing "/" is dropped. Same rule as haus's HAUS_BASE_PATH.
+pub fn parse_base_path(v: Option<&str>) -> Result<String> {
+    let v = v.unwrap_or("").trim();
+    let v = v.strip_suffix('/').unwrap_or(v);
+    if v.is_empty() {
+        return Ok(String::new());
+    }
+    let ok = v.starts_with('/')
+        && v[1..].split('/').all(|seg| {
+            !seg.is_empty()
+                && seg != "."
+                && seg != ".."
+                && seg
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || "-_.".contains(c))
+        });
+    if !ok {
+        bail!("LICHTBILD_BASE_PATH {v:?}: expected a path like /lichtbild");
+    }
+    Ok(v.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base_path_rules() {
+        assert_eq!(parse_base_path(None).unwrap(), "");
+        assert_eq!(parse_base_path(Some("/")).unwrap(), "");
+        assert_eq!(parse_base_path(Some("/photos/")).unwrap(), "/photos");
+        assert!(parse_base_path(Some("photos")).is_err());
+        assert!(parse_base_path(Some("/a/../b")).is_err());
+        assert!(parse_base_path(Some("/a b")).is_err());
+    }
+
+    #[test]
+    fn roots_from_env_string() {
+        let r = parse_roots("a=/x/y; b = /z ;").unwrap();
+        assert_eq!(
+            r,
+            vec![
+                ("a".to_string(), PathBuf::from("/x/y")),
+                ("b".to_string(), PathBuf::from("/z"))
+            ]
+        );
+        assert!(parse_roots("nolabel").is_err());
+    }
+
+    #[test]
+    fn labels() {
+        assert!(check_label("p1").is_ok());
+        assert!(check_label("all").is_err());
+        assert!(check_label("a/b").is_err());
+        assert!(check_label("").is_err());
+    }
+}

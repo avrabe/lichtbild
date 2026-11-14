@@ -59,5 +59,6 @@ provider, and verification and traceability with rivet from commit one.
    a location leaking to an outside service; an index that silently skips
    files. Then requirements linked to them.
 2. A skeleton binary: config, read-only scan with a report of files found
-   and skipped, a SQLite index, a thumbnail cache, and a timeline page.
+   and skipped, a redb index (owner decision 2026-11-14: redb, no SQLite),
+   a thumbnail cache, and a timeline page.
 3. The map with PMTiles, then video, then OIDC and nav, then faces.

@@ -1,0 +1,45 @@
+[package]
+name = "lichtbild"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+description = "lichtbild: the household's own photo and video library, as one binary"
+repository = "https://github.com/avrabe/lichtbild"
+license = "Apache-2.0"
+publish = false
+
+[[bin]]
+name = "lichtbild"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+axum = "0.8"
+blake3 = "1"
+chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif"] }
+kamadak-exif = "0.6"
+libc = "0.2"
+redb = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "fs"] }
+tokio-util = { version = "0.7", features = ["io"] }
+toml = "0.9"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+sha2 = "0.10"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true
+
+# Dependencies (image decoding, hashing) optimised in test builds too.
+[profile.dev.package."*"]
+opt-level = 2

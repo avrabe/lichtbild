@@ -1,0 +1,44 @@
+artifacts:
+  - id: FEAT-001
+    type: feature
+    title: Skeleton - read-only scan, redb index, thumbnails, timeline
+    status: implemented
+    release: v0.1.0
+    description: >
+      Step 2 of docs/BRIEF.md. `lichtbild scan` walks each root read-only,
+      indexes JPEG, PNG, WebP and GIF with capture date and position and
+      their source, writes thumbnails atomically into a bounded cache, and
+      reports found, indexed and skipped per root so they reconcile.
+      `lichtbild serve` renders the timeline per person or merged under a
+      base path, with a same-origin CSP.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - cargo test passes, and scripts/planted_faults.py reports every fault caught
+        - A scan of a synthetic tree leaves it byte-identical, also when read-only
+        - The scan report reconciles found = indexed + skipped per root
+    links:
+      - type: satisfies
+        target: REQ-FAULT-001
+      - type: satisfies
+        target: REQ-PRIV-001
+      - type: satisfies
+        target: REQ-CFG-002
+      - type: satisfies
+        target: REQ-SCAN-002
+      - type: satisfies
+        target: REQ-SCAN-003
+      - type: satisfies
+        target: REQ-SCAN-004
+      - type: satisfies
+        target: REQ-SCAN-005
+      - type: satisfies
+        target: REQ-META-001
+      - type: satisfies
+        target: REQ-THUMB-001
+      - type: satisfies
+        target: REQ-WEB-001
+      - type: satisfies
+        target: REQ-WEB-004
+      - type: satisfies
+        target: REQ-WEB-005

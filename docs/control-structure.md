@@ -5,31 +5,37 @@ analyses share this control structure. Names are roles, not hosts.
 
 ```
   household member (browser)
-        |  requests pages, thumbnails, originals     ^ HTML, images, video
+        |  requests pages, thumbnails, originals     ^ HTML, images
         v                                            |
-  reverse proxy (TLS, base path)  <-- identity provider (OIDC)
+  reverse proxy (TLS, base path)  <-- identity provider (OIDC, planned)
         |
         v
-  lichtbild serve  ------ reads ------>  index (SQLite)  <--- writes --- lichtbild scan
-        |                                derived files                    |  low priority,
-        |  reads by item id only         (thumbnails)                     |  bounded workers
-        v                                                                 v
-  source roots (read-only)  <---------------- lists, reads ---------------+
-        ^
-        |  nightly copy (outside lichtbild) writes
+  +------------------- lichtbild serve (one process) -------------------+
+  |  web handlers  -- read -->  index (redb)  <-- write --  scan thread  |
+  |       |                     derived files               (low prio,  |
+  |       |  read by item id                                 bounded    |
+  |       v                                                  workers)   |
+  +-------|----------------------------------------------------|--------+
+          v                                                    v
+  source roots (read-only)  <------------ list, read ----------+
+          ^
+          |  nightly copy (outside lichtbild) writes
 ```
 
 Controllers and their control actions:
 
 | Controller | Control action | Controlled process |
 |---|---|---|
-| lichtbild scan | list, stat, open for reading | source roots |
-| lichtbild scan | insert, update, mark missing | index |
-| lichtbild scan | write then rename | derived files |
-| lichtbild serve | query scoped to the viewer | index |
-| lichtbild serve | open for reading by item id | source roots, derived files |
-| identity provider | issue session | lichtbild serve |
+| scan thread | list, stat, open for reading | source roots |
+| scan thread | insert, update, mark missing | index |
+| scan thread | write then rename | derived files |
+| web handlers | query scoped to the viewer | index |
+| web handlers | open for reading by item id | source roots, derived files |
+| identity provider | issue session | web handlers |
 | operator (deployment) | set roots, data directory, limits; read-only mount | lichtbild |
+
+`lichtbild scan` runs the same scan as a one-off command when no server
+holds the index (redb allows one process, DD-004).
 
 Feedback: the scan report (found, indexed, skipped by reason) is the
 operator's feedback on the scan; the timeline's weak-date marks are the

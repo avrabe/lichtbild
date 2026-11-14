@@ -2,7 +2,7 @@ artifacts:
   - id: DD-001
     type: design-decision
     title: Pin the toolchain to varve's covalent realm
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       rivet comes from the varve covalent layer, locally and in CI, as in haus.
@@ -25,7 +25,7 @@ artifacts:
   - id: DD-002
     type: design-decision
     title: STPA and STPA-Sec as the analysis, no safety standard
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       lichtbild is a household application with no functional-safety
@@ -52,7 +52,7 @@ artifacts:
   - id: DD-003
     type: design-decision
     title: One binary with axum, server-rendered pages and htmx, assets embedded
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       The haus and warte stack: axum, server-rendered HTML, htmx for
@@ -81,21 +81,28 @@ artifacts:
 
   - id: DD-004
     type: design-decision
-    title: SQLite through rusqlite with the bundled library
-    status: draft
+    title: The index is redb, owned by the serving process
+    status: implemented
     release: v0.1.0
     description: >
-      The index is SQLite, compiled into the binary.
+      Owner decision 2026-11-14: redb, as in the other house apps, no SQLite.
     fields:
       decision: >
-        rusqlite with the `bundled` feature, WAL mode, schema version in
-        `PRAGMA user_version`, forward migrations at startup.
+        redb 4 with tables for items (JSON records), paths, a per-person
+        timeline key (label, taken, id) and a merged one (taken, id), and a
+        schema version in a meta table. redb locks its file to one process,
+        so `lichtbild serve` owns the index and runs the scan in a
+        background thread at start and every LICHTBILD_SCAN_INTERVAL_HOURS;
+        `lichtbild scan` opens the index only when no server holds it and
+        says so otherwise.
       rationale: >
-        One file in the data directory, no server, and the bundled build keeps
-        the musl release binaries static.
+        Pure Rust (no C in the static musl build), one file in the data
+        directory, MVCC reads while the scan writes, and the same store the
+        other house apps use. One process also matches the brief's one
+        systemd unit.
       alternatives: >
-        sled or redb (no SQL for timeline grouping); PostgreSQL (a second
-        service on the Pi).
+        SQLite through rusqlite (C library; separate scan and serve processes
+        could share it); redb's experimental multi-process mode.
     links:
       - type: satisfies
         target: REQ-IDX-001
@@ -103,7 +110,7 @@ artifacts:
   - id: DD-005
     type: design-decision
     title: Pure-Rust image decoding first; HEIC and video reported as skipped until decided
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       The skeleton decodes JPEG, PNG, WebP and GIF with the `image` crate and
@@ -129,7 +136,7 @@ artifacts:
   - id: DD-006
     type: design-decision
     title: Source access is confined to one module, enforced by clippy
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       Only `src/source.rs` touches source roots, and it has no write call.
@@ -154,7 +161,7 @@ artifacts:
   - id: DD-007
     type: design-decision
     title: CI on GitHub-hosted runners until a self-hosted runner serves this repository
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       No self-hosted runner is registered for this repository (checked
@@ -178,7 +185,7 @@ artifacts:
   - id: DD-008
     type: design-decision
     title: The release pipeline is haus's, renamed
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       release.yml follows haus's: version guard, musl builds with
@@ -201,7 +208,7 @@ artifacts:
   - id: DD-009
     type: design-decision
     title: Configuration through LICHTBILD_* variables and an optional TOML file
-    status: draft
+    status: implemented
     release: v0.1.0
     description: >
       The deployment supplies roots, data directory, base path and limits;

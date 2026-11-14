@@ -5,8 +5,8 @@
 # Local configuration and data: never commit (SSC-006)
 /config.toml
 /data/
-*.sqlite
-*.sqlite-*
+*.redb
 scan-report*.json
 # Browser screenshots may show real photos
 .playwright-mcp/
+sbom.json

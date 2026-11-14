@@ -1,0 +1,24 @@
+# lichtbild configuration example. Placeholder values only (SSC-006):
+# the real file comes from the deployment, never from this repository.
+# Every LICHTBILD_* variable overrides the matching setting here.
+
+data_dir = "/var/lib/lichtbild"     # index, thumbnails, scan report; never inside a root
+base_path = "/lichtbild"            # served under this path behind the reverse proxy
+listen = "127.0.0.1:8080"           # loopback until login exists (REQ-AUTH-001)
+workers = 2                         # scan workers
+scan_interval_hours = 24            # serve rescans this often; 0 = only at start
+allowed_hosts = ["photos.example"]  # Host names answered besides localhost (REQ-WEB-005)
+
+[[roots]]                           # one per person; read-only
+label = "person1"
+path = "/srv/photos/person1"
+
+[[roots]]
+label = "person2"
+path = "/srv/photos/person2"
+
+[limits]
+max_pixels = 100000000              # larger images are skipped with a reason
+max_file_mib = 200                  # larger files are skipped with a reason
+thumb_cache_mib = 20480             # new thumbnails stop at this cache size
+thumb_size = 360                    # longest thumbnail side, pixels

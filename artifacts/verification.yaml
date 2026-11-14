@@ -1,0 +1,224 @@
+artifacts:
+  # Verification activities: each test names the requirements it checks.
+  # docs/planted-faults.md lists the fault that shows each one can fail.
+
+  - id: VER-001
+    type: verification
+    title: rivet validate in CI from the pinned layer
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "rivet validate"
+      test-location: .github/workflows/ci.yml
+    links:
+      - type: verifies
+        target: REQ-TRACE-001
+
+  - id: VER-002
+    type: verification
+    title: Planted-fault harness
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "scripts/planted_faults.py"
+      test-location: scripts/planted_faults.py
+    links:
+      - type: verifies
+        target: REQ-FAULT-001
+
+  - id: VER-003
+    type: verification
+    title: hostname-scan on every pull request, merge group and push
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "hostname-scan"
+      test-location: .github/workflows/hostname-scan.yml
+    links:
+      - type: verifies
+        target: REQ-PRIV-001
+
+  - id: VER-004
+    type: verification
+    title: Release workflow checks the binary version, linkage and signature
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "release.yml"
+      test-location: .github/workflows/release.yml
+    links:
+      - type: verifies
+        target: REQ-REL-001
+
+  - id: VER-005
+    type: verification
+    title: A scan leaves source trees byte-identical, also when read-only
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "scan_never_changes_the_source"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-SCAN-001
+
+  - id: VER-006
+    type: verification
+    title: The report reconciles and names every skip reason
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "report_reconciles_and_names_every_skip"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-SCAN-002
+      - type: verifies
+        target: REQ-SCAN-005
+
+  - id: VER-007
+    type: verification
+    title: A rescan changes nothing; changes and removals are tracked
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "rescan_is_idempotent_and_tracks_changes"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-SCAN-003
+      - type: verifies
+        target: REQ-IDX-001
+
+  - id: VER-008
+    type: verification
+    title: An interrupted scan resumes to the same index and thumbnails
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "interrupted_scan_resumes_to_the_same_index"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-SCAN-003
+      - type: verifies
+        target: REQ-THUMB-001
+
+  - id: VER-009
+    type: verification
+    title: A data directory overlapping a root is refused before anything is created
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "data_dir_overlapping_a_root_is_refused"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-CFG-002
+
+  - id: VER-010
+    type: verification
+    title: Dates and positions carry their source
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "dates_and_positions_carry_their_source"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-META-001
+
+  - id: VER-011
+    type: verification
+    title: The scan runs at nice 19 with the configured workers
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "scan_lowers_its_priority"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-SCAN-004
+
+  - id: VER-012
+    type: verification
+    title: Every response carries a same-origin CSP and no outside URL
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "every_response_is_same_origin_only"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-003
+
+  - id: VER-013
+    type: verification
+    title: Files are served by id with path containment
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "files_are_served_by_id_with_containment"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-004
+
+  - id: VER-014
+    type: verification
+    title: The base path prefixes every page, asset and route
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "base_path_prefixes_everything"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-002
+
+  - id: VER-015
+    type: verification
+    title: The timeline groups by day and pages with htmx
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "timeline_groups_by_day_and_pages_with_htmx"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-001
+
+  - id: VER-016
+    type: verification
+    title: Configuration parsing of roots, labels and base path
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "config::tests"
+      test-location: src/config.rs
+    links:
+      - type: verifies
+        target: REQ-CFG-001
+  - id: VER-017
+    type: verification
+    title: A second process cannot open the index while one holds it
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "one_process_owns_the_index"
+      test-location: tests/scan.rs
+    links:
+      - type: verifies
+        target: REQ-IDX-001
+
+  - id: VER-018
+    type: verification
+    title: Requests for other hosts get 421 and no content
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "requests_for_other_hosts_are_refused"
+      test-location: tests/web.rs
+    links:
+      - type: verifies
+        target: REQ-WEB-005
