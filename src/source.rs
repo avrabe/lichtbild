@@ -31,8 +31,8 @@ pub enum Skip {
     Unsupported(String),
     /// Bigger than the configured file or pixel limit.
     OverLimit,
-    /// Header or metadata could not be decoded.
-    DecodeError,
+    /// Header or pixels could not be decoded; names the format.
+    DecodeError(String),
 }
 
 impl std::fmt::Display for Skip {
@@ -48,7 +48,7 @@ impl std::fmt::Display for Skip {
             Skip::NotYetSupported(k) => write!(f, "not yet supported ({k})"),
             Skip::Unsupported(ext) => write!(f, "unsupported type (.{ext})"),
             Skip::OverLimit => write!(f, "over size limit"),
-            Skip::DecodeError => write!(f, "decode error"),
+            Skip::DecodeError(k) => write!(f, "decode error ({k})"),
         }
     }
 }

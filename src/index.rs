@@ -61,6 +61,9 @@ pub struct Record {
     pub lon: Option<f64>,
     pub thumb: String,
     pub missing: bool,
+    /// A JPEG preview exists for an original the browser cannot show (HEIC).
+    #[serde(default)]
+    pub preview: bool,
 }
 
 /// What the index knows about one file, for change detection.
@@ -416,6 +419,7 @@ impl Batch {
         mtime_ns: i64,
         info: &ImageInfo,
         thumb: &str,
+        preview: bool,
     ) -> Result<()> {
         let key = (label, rel_bytes(rel));
         let existing = self.w.open_table(PATHS)?.get(key)?.map(|g| g.value());
@@ -451,6 +455,7 @@ impl Batch {
             lon: info.position.map(|p| p.1),
             thumb: thumb.to_string(),
             missing: false,
+            preview,
         };
         self.store(id, &rec)?;
         self.link(id, &rec)

@@ -16,6 +16,14 @@ use crate::index::{self, Index};
 use crate::media::{self, Class, ImageInfo};
 use crate::source::{self, Entry, Skip};
 
+/// Where the browser-viewable preview for a content hash lives (HEIC).
+pub fn preview_path(data_dir: &Path, hash: &str) -> PathBuf {
+    data_dir
+        .join("previews")
+        .join(&hash[..2.min(hash.len())])
+        .join(format!("{hash}.jpg"))
+}
+
 /// Where the thumbnail for a content hash lives.
 pub fn thumb_path(data_dir: &Path, hash: &str) -> PathBuf {
     data_dir
@@ -151,6 +159,7 @@ pub fn lower_priority() -> String {
 
 struct Job {
     known_id: Option<u64>,
+    format: media::Format,
     rel: PathBuf,
     size: u64,
     mtime_ns: i64,
@@ -161,6 +170,7 @@ enum Outcome {
         info: ImageInfo,
         thumb: String,
         generated: bool,
+        preview: bool,
     },
     Skipped(Skip),
 }
@@ -180,51 +190,60 @@ fn process(sh: &Shared, job: &Job) -> Outcome {
         }
         Err(_) => return Outcome::Skipped(Skip::Unreadable),
     };
-    let info = match media::inspect(&bytes, &job.rel, job.mtime_ns, sh.limits.max_pixels) {
+    let info = match media::inspect(
+        &bytes,
+        job.format,
+        &job.rel,
+        job.mtime_ns,
+        sh.limits.max_pixels,
+    ) {
         Ok(i) => i,
         Err(s) => return Outcome::Skipped(s),
     };
-    let dest = thumb_path(&sh.data_dir, &info.hash);
-    if dest.is_file() {
-        return Outcome::Indexed {
-            info,
-            thumb: "ok".into(),
-            generated: false,
-        };
+    let thumb_dest = thumb_path(&sh.data_dir, &info.hash);
+    let wants_preview = job.format.needs_preview();
+    let preview_dest = preview_path(&sh.data_dir, &info.hash);
+    let has_thumb = thumb_dest.is_file();
+    let has_preview = !wants_preview || preview_dest.is_file();
+    let indexed = |thumb: &str, generated: bool, preview: bool| Outcome::Indexed {
+        info: info.clone(),
+        thumb: thumb.into(),
+        generated,
+        preview,
+    };
+    if has_thumb && has_preview {
+        return indexed("ok", false, wants_preview);
     }
     if sh.cache_bytes.load(Ordering::Relaxed) >= sh.limits.thumb_cache_bytes {
-        return Outcome::Indexed {
-            info,
-            thumb: "cache-full".into(),
-            generated: false,
-        };
+        return indexed("cache-full", false, false);
     }
-    let thumb = match media::thumbnail(&bytes, sh.limits.thumb_size, sh.limits.max_pixels) {
-        Ok(t) => t,
-        Err(_) => {
-            return Outcome::Indexed {
-                info,
-                thumb: "decode-error".into(),
-                generated: false,
-            }
-        }
+    // One decode serves the thumbnail and, for HEIC, the preview.
+    let img = match media::decode(&bytes, job.format, sh.limits.max_pixels) {
+        Ok(i) => i,
+        Err(_) => return indexed("decode-error", false, false),
     };
-    match datadir::write_atomic(&dest, &thumb) {
-        Ok(()) => {
-            sh.cache_bytes
-                .fetch_add(thumb.len() as u64, Ordering::Relaxed);
-            Outcome::Indexed {
-                info,
-                thumb: "ok".into(),
-                generated: true,
-            }
+    drop(bytes);
+    let mut written = 0u64;
+    if !has_thumb {
+        let Ok(t) = media::jpeg_fit(&img, sh.limits.thumb_size, 80) else {
+            return indexed("decode-error", false, false);
+        };
+        if datadir::write_atomic(&thumb_dest, &t).is_err() {
+            return indexed("write-error", false, false);
         }
-        Err(_) => Outcome::Indexed {
-            info,
-            thumb: "write-error".into(),
-            generated: false,
-        },
+        written += t.len() as u64;
     }
+    if !has_preview {
+        let Ok(p) = media::jpeg_fit(&img, media::PREVIEW_SIZE, 85) else {
+            return indexed("decode-error", false, false);
+        };
+        if datadir::write_atomic(&preview_dest, &p).is_err() {
+            return indexed("write-error", false, false);
+        }
+        written += p.len() as u64;
+    }
+    sh.cache_bytes.fetch_add(written, Ordering::Relaxed);
+    indexed("ok", !has_thumb, wants_preview)
 }
 
 /// Scan every root into `idx`. The caller owns the index: the server passes
@@ -274,7 +293,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     mtime_ns,
                 } => match media::classify(&rel) {
                     Class::Skip(s) => skip(&mut rr, s),
-                    Class::Image => {
+                    Class::Image(format) => {
                         let k = known.get(index::rel_bytes(&rel));
                         // Unchanged: same size and time, and the thumbnail is
                         // either present or failed for good (decode error).
@@ -283,7 +302,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                             k.size == size
                                 && k.mtime_ns == mtime_ns
                                 && match k.thumb.as_str() {
-                                    "ok" => thumb_path(&cfg.data_dir, &k.hash).is_file(),
+                                    "ok" => {
+                                        thumb_path(&cfg.data_dir, &k.hash).is_file()
+                                            && (!format.needs_preview()
+                                                || preview_path(&cfg.data_dir, &k.hash).is_file())
+                                    }
                                     "decode-error" => true,
                                     _ => false,
                                 }
@@ -305,6 +328,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                         } else {
                             jobs.push(Job {
                                 known_id: k.map(|k| k.id),
+                                format,
                                 rel,
                                 size,
                                 mtime_ns,
@@ -341,7 +365,9 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                 // A panic in a decoder must not lose the file or the worker.
                 let out =
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| process(&sh, &job)))
-                        .unwrap_or(Outcome::Skipped(Skip::DecodeError));
+                        .unwrap_or_else(|_| {
+                            Outcome::Skipped(Skip::DecodeError(job.format.name().into()))
+                        });
                 if tx.send((job, out)).is_err() {
                     break;
                 }
@@ -357,8 +383,17 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     info,
                     thumb,
                     generated,
+                    preview,
                 } => {
-                    tx_open.upsert(&root.label, &job.rel, job.size, job.mtime_ns, &info, &thumb)?;
+                    tx_open.upsert(
+                        &root.label,
+                        &job.rel,
+                        job.size,
+                        job.mtime_ns,
+                        &info,
+                        &thumb,
+                        preview,
+                    )?;
                     rr.indexed += 1;
                     if job.known_id.is_some() {
                         rr.updated += 1;

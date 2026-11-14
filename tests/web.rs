@@ -310,7 +310,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
             None => break,
         }
     }
-    assert_eq!(total, 301 + 4, "merged view lost or duplicated items");
+    assert_eq!(total, 301 + 5, "merged view lost or duplicated items");
     assert!(from_p1 > 0, "merged view has no item from p1");
     assert_eq!(get(&app, "/t/nobody", false).await.0, StatusCode::NOT_FOUND);
 }
@@ -465,7 +465,7 @@ async fn home_shows_counts_including_merged() {
     let (_, _, body) = get(&app, "/", false).await;
     let html = String::from_utf8(body).unwrap();
     assert!(
-        html.contains(r#"<a href="t/p1">p1</a> <span class="n">4</span>"#),
+        html.contains(r#"<a href="t/p1">p1</a> <span class="n">5</span>"#),
         "{html}"
     );
     assert!(
@@ -473,7 +473,7 @@ async fn home_shows_counts_including_merged() {
         "{html}"
     );
     assert!(
-        html.contains(r#"<a href="t/all">merged</a> <span class="n">5</span>"#),
+        html.contains(r#"<a href="t/all">merged</a> <span class="n">6</span>"#),
         "{html}"
     );
 }
@@ -507,13 +507,18 @@ async fn viewer_steps_through_the_timeline() {
     let app = app(&cfg, &idx);
     let (_, _, body) = get(&app, "/t/p1", false).await;
     let ids = item_ids(&String::from_utf8(body).unwrap(), "p1");
-    assert_eq!(ids.len(), 4);
+    assert_eq!(ids.len(), 5);
     for (i, id) in ids.iter().enumerate() {
         let (s, h, body) = get(&app, &format!("/v/p1/{id}"), false).await;
         assert_eq!(s, StatusCode::OK);
         assert!(h.get("content-security-policy").is_some());
         let page = String::from_utf8(body).unwrap();
-        assert!(page.contains(&format!(r#"<img class="photo" src="original/{id}""#)));
+        // The original, or for HEIC its JPEG preview.
+        assert!(
+            page.contains(&format!(r#"<img class="photo" src="original/{id}""#))
+                || page.contains(&format!(r#"<img class="photo" src="preview/{id}?h="#)),
+            "{page}"
+        );
         // Previous = newer = the item before it in the timeline; next = older.
         let want_prev = if i == 0 { None } else { Some(ids[i - 1]) };
         assert_eq!(link_target(&page, "prev"), want_prev, "prev of {id}");
@@ -585,7 +590,7 @@ async fn viewer_respects_the_timeline_it_was_opened_from() {
     // The merged view steps across both people in date order.
     let (_, _, body) = get(&app, "/t/all", false).await;
     let all = item_ids(&String::from_utf8(body).unwrap(), "all");
-    assert_eq!(all.len(), 5);
+    assert_eq!(all.len(), 6);
     for (i, id) in all.iter().enumerate() {
         let (_, _, body) = get(&app, &format!("/v/all/{id}"), false).await;
         let page = String::from_utf8(body).unwrap();
@@ -661,5 +666,45 @@ async fn thumbnail_urls_change_when_the_file_changes() {
     assert_eq!(
         get(&app, &format!("/{second}"), false).await.0,
         StatusCode::OK
+    );
+}
+
+// rivet: verifies REQ-MEDIA-002
+#[tokio::test]
+async fn viewer_shows_the_jpeg_preview_for_heic() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let all = idx.all().unwrap();
+    let (heic_id, heic) = all.iter().find(|(_, r)| r.rel.ends_with(b".HEIC")).unwrap();
+    let (jpg_id, _) = all
+        .iter()
+        .find(|(_, r)| r.rel == b"a/IMG_exif.jpg")
+        .unwrap();
+    let (_, _, body) = get(&app, &format!("/v/p1/{heic_id}"), false).await;
+    let page = String::from_utf8(body).unwrap();
+    let want = format!(
+        r#"<img class="photo" src="preview/{heic_id}?h={}""#,
+        &heic.hash[..12]
+    );
+    assert!(page.contains(&want), "{page}");
+    let (s, h, body) = get(&app, &format!("/preview/{heic_id}"), false).await;
+    assert_eq!(
+        (s, h.get("content-type").unwrap().to_str().unwrap()),
+        (StatusCode::OK, "image/jpeg")
+    );
+    assert!(image::load_from_memory(&body).is_ok());
+    let (s, h, _) = get(&app, &format!("/original/{heic_id}"), false).await;
+    assert_eq!(
+        (s, h.get("content-type").unwrap().to_str().unwrap()),
+        (StatusCode::OK, "image/heic")
+    );
+    // A JPEG is shown as itself and has no preview.
+    let (_, _, body) = get(&app, &format!("/v/p1/{jpg_id}"), false).await;
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains(&format!(r#"src="original/{jpg_id}""#)));
+    assert_eq!(
+        get(&app, &format!("/preview/{jpg_id}"), false).await.0,
+        StatusCode::NOT_FOUND
     );
 }

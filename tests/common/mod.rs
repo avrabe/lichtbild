@@ -96,8 +96,10 @@ pub struct Fixture {
     pub data: PathBuf,
 }
 
-/// Root p1 holds 13 entries: 4 that index and 9 that are skipped, one per
-/// reason. Root p2 holds one JPEG.
+pub const HEIC_640X480: &[u8] = include_bytes!("../fixtures/synthetic-640x480.heic");
+
+/// Root p1 holds 14 entries: 5 that index (one HEIC) and 9 that are skipped,
+/// one per reason. Root p2 holds one JPEG.
 pub fn fixture() -> Fixture {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().canonicalize().unwrap();
@@ -121,11 +123,17 @@ pub fn fixture() -> Fixture {
     w(&root1.join("a/IMG_20200102_030405.jpg"), &jpeg(40, 30, 2));
     w(&root1.join("a/plain.png"), &png(32, 24, 3));
     w(&root1.join("b/clip.mp4"), b"\0\0\0\x18ftypmp42synthetic");
-    w(&root1.join("b/photo.HEIC"), b"\0\0\0\x18ftypheicsynthetic");
+    // Synthetic HEIC made with macOS sips from a generated gradient
+    // (tests/fixtures/README.md); 640x480, stored as a 2x1 tile grid.
+    w(&root1.join("b/IMG_20190704_102030.HEIC"), HEIC_640X480);
+    w(
+        &root1.join("b/broken.heic"),
+        b"\0\0\0\x18ftypheicnot really heic",
+    );
     w(&root1.join("b/notes.txt"), b"synthetic");
     w(&root1.join(".DS_Store"), b"synthetic");
     w(&root1.join("b/broken.jpg"), b"\xFF\xD8not really a jpeg");
-    w(&root1.join("b/huge.png"), &png(200, 200, 4)); // over the test pixel limit
+    w(&root1.join("b/huge.png"), &png(700, 700, 4)); // over the test pixel limit
     w(&outside.join("secret.jpg"), &jpeg(8, 8, 5));
     std::os::unix::fs::symlink(outside.join("secret.jpg"), root1.join("link_out.jpg")).unwrap();
     std::os::unix::fs::symlink(root1.join("a/plain.png"), root1.join("link_in.png")).unwrap();
@@ -152,7 +160,7 @@ pub fn config(fx: &Fixture, data: &Path) -> Config {
         data_dir: Some(data.to_path_buf()),
         workers: Some(2),
         limits: Limits {
-            max_pixels: 10_000,
+            max_pixels: 400_000,
             ..Limits::default()
         },
         ..Settings::default()
