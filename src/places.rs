@@ -209,6 +209,23 @@ broken line\n";
         assert_eq!(p.nearest(10.999, 20.0).unwrap().label, "Near, ZZ");
     }
 
+    // GeoNames ships countryInfo.txt with CRLF line endings (smithy,
+    // 2026-11-14 snapshot); no '\r' may reach a name or skip a line.
+    #[test]
+    fn crlf_line_endings() {
+        // Lines that end right after the column lichtbild reads, so a
+        // leftover '\r' would land in the admin1 code or a name.
+        let cities = "1\tOstdorf\tOstdorf\t\t10.52\t20.27\tP\tPPL\tZZ\t\t01\r\n\
+2\tWestdorf\tWestdorf\t\t10.40\t19.90\tP\tPPL\tZZ\t\t01\r\n";
+        let admin1 = "ZZ.01\tNordprovinz\r\n";
+        let countries = "#ISO\tISO3\tISO-Numeric\tfips\tCountry\r\nZZ\tZZZ\t999\tZZ\tTestland\r\n";
+        let p = Places::parse(cities, Some(admin1), Some(countries));
+        assert_eq!((p.len(), p.skipped_lines), (2, 0));
+        let n = p.nearest(10.5, 20.25).unwrap();
+        assert_eq!(n.label, "Ostdorf, Nordprovinz, Testland");
+        assert!(!n.label.contains('\r'));
+    }
+
     #[test]
     fn distance() {
         let d = haversine_km(0.0, 0.0, 0.0, 1.0);

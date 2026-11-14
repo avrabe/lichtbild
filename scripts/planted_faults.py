@@ -127,6 +127,10 @@ FAULTS = [
      "    let mut out = Vec::new();\n    let camera",
      "    let mut out = Vec::new();\n    if !out.is_empty() || true { return out; }\n    let camera",
      ["test", "--test", "web", "viewer_info_panel_shows_date_place_and_camera"]),
+    ("F27", "REQ-PLACE-001", "src/places.rs",
+     "for line in admin1.unwrap_or(\"\").lines() {",
+     "for line in admin1.unwrap_or(\"\").split('\\n') {",
+     ["test", "--lib", "crlf_line_endings"]),
 ]
 
 
