@@ -1,0 +1,191 @@
+artifacts:
+  # ============================================================
+  # STPA seed for lichtbild: losses, hazards, system constraints.
+  # Authored 2026-11-14, before the code it constrains (docs/BRIEF.md).
+  # The security half (STPA-Sec) is in security.yaml; both share the
+  # control structure in docs/control-structure.md.
+  # ============================================================
+
+  # --- Losses ---
+  - id: L-001
+    type: loss
+    title: Original photos or videos are altered, moved or lost
+    status: draft
+    description: >
+      A file in a person's library (a photo or video the household took) is
+      changed, renamed, moved, truncated or deleted, or gets a sidecar or
+      metadata it did not have. Many originals exist only there and cannot
+      be taken again.
+    fields:
+      stakeholders: [household]
+
+  - id: L-002
+    type: loss
+    title: The household gets a wrong or incomplete picture of its library
+    status: draft
+    description: >
+      Items are missing from the timeline or map without anyone being told,
+      appear twice, or appear at the wrong date or place, and the household
+      trusts the view anyway (for example believes a holiday was never
+      photographed, or never notices that videos were not indexed).
+    fields:
+      stakeholders: [household]
+
+  - id: L-003
+    type: loss
+    title: Other services on the shared host are degraded
+    status: draft
+    description: >
+      lichtbild exhausts CPU, memory, disk or disk bandwidth on the shared
+      home server and degrades or stops the other services running there,
+      including the nightly copy that feeds the library.
+    fields:
+      stakeholders: [household, owner]
+
+  # --- Hazards ---
+  - id: H-001
+    type: hazard
+    title: lichtbild performs a write operation inside a source root
+    status: draft
+    description: >
+      Any code path of lichtbild, or a tool it starts, creates, writes,
+      renames, deletes, changes permissions or times of, or appends to a
+      path inside a configured source root. This includes a data directory
+      configured inside a root, a database or WAL file opened next to a
+      source file, a thumbnailer or video tool writing a sidecar, and a
+      symlink inside a root that points back into the data directory.
+    fields:
+      severity: catastrophic
+    links:
+      - type: leads-to-loss
+        target: L-001
+
+  - id: H-002
+    type: hazard
+    title: A scan reports success while files were not indexed
+    status: draft
+    description: >
+      A scan finishes without error while files present under a root are
+      neither in the index nor listed as skipped with a reason: an
+      unsupported format dropped silently, an unreadable directory not
+      descended, a parse error swallowed, a symlink or hidden file ignored
+      without a count.
+    fields:
+      severity: critical
+    links:
+      - type: leads-to-loss
+        target: L-002
+
+  - id: H-003
+    type: hazard
+    title: The index diverges from the source after the source changes
+    status: draft
+    description: >
+      After the nightly copy adds, replaces or renames files, or after an
+      interrupted index run, the index holds entries for files that are
+      gone, holds a file twice, misses a replaced file's new content, or
+      serves a half-written thumbnail as complete.
+    fields:
+      severity: critical
+    links:
+      - type: leads-to-loss
+        target: L-002
+
+  - id: H-004
+    type: hazard
+    title: An item is shown at a date or place that is not its own, as if certain
+    status: draft
+    description: >
+      The capture date or position is derived from a weak source (file
+      modification time set by the copy, a camera clock without time zone,
+      a missing GPS fix read as 0,0) and shown with the same confidence as
+      an EXIF capture time or a real fix.
+    fields:
+      severity: marginal
+    links:
+      - type: leads-to-loss
+        target: L-002
+
+  - id: H-005
+    type: hazard
+    title: Indexing or serving uses unbounded host resources
+    status: draft
+    description: >
+      Indexing runs at normal priority or with unbounded parallelism; a
+      single file (a very large panorama, a decompression bomb, a long
+      video) makes a decoder allocate without limit; the thumbnail and
+      preview cache grows without bound on the shared disk.
+    fields:
+      severity: critical
+    links:
+      - type: leads-to-loss
+        target: L-003
+
+  # --- System constraints ---
+  - id: SC-001
+    type: system-constraint
+    title: lichtbild never writes inside a source root
+    status: draft
+    description: >
+      lichtbild SHALL open source files read-only and SHALL refuse to start
+      when the data directory and any source root overlap (either inside the
+      other, after resolving symlinks). Every tool lichtbild starts SHALL
+      read its input from a source root and write only into the data
+      directory. A test SHALL scan a fixture tree and show that its listing,
+      sizes, modes, times and content hashes are byte-identical afterwards.
+    links:
+      - type: prevents
+        target: H-001
+
+  - id: SC-002
+    type: system-constraint
+    title: Every file found is either indexed or reported as skipped with a reason
+    status: draft
+    description: >
+      Each scan SHALL report, per root, the number of files found, indexed
+      and skipped, with the skipped ones grouped by reason, and SHALL hold
+      found = indexed + skipped. A scan whose numbers do not reconcile SHALL
+      end with a non-zero exit and SHALL NOT be reported as complete.
+    links:
+      - type: prevents
+        target: H-002
+
+  - id: SC-003
+    type: system-constraint
+    title: Indexing is idempotent and resumable
+    status: draft
+    description: >
+      Re-running a scan over an unchanged source SHALL change nothing in the
+      index. A scan interrupted at any point and run again SHALL end in the
+      same index as one uninterrupted run. Derived files (thumbnails,
+      previews) SHALL appear only complete, through write-then-rename.
+      Files gone from the source SHALL be marked missing, not kept as live.
+    links:
+      - type: prevents
+        target: H-003
+
+  - id: SC-004
+    type: system-constraint
+    title: Every date and position carries its source
+    status: draft
+    description: >
+      The index SHALL store, with each capture date and position, where it
+      came from (EXIF, video metadata, file name, file time; GPS fix or
+      none), and pages SHALL mark items whose date comes from a weak source.
+      A missing position SHALL be stored as missing, never as 0,0.
+    links:
+      - type: prevents
+        target: H-004
+
+  - id: SC-005
+    type: system-constraint
+    title: Indexing work is bounded and low priority
+    status: draft
+    description: >
+      Indexing SHALL run with a configured, small worker count and at low
+      CPU and I/O priority; every decoder SHALL run under a pixel and size
+      limit, and files over the limit SHALL be skipped with a reason; the
+      derived-file cache SHALL have a configured size cap.
+    links:
+      - type: prevents
+        target: H-005

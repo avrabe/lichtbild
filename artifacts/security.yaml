@@ -1,0 +1,276 @@
+artifacts:
+  # ============================================================
+  # STPA-Sec seed for lichtbild. Adversaries considered: anyone on
+  # the network in front of the reverse proxy, a logged-in household
+  # member reaching items not theirs, third-party hosts the browser or
+  # server might contact, a malformed media file, and our own public
+  # repository and CI as a leak path.
+  # ============================================================
+
+  # --- Security losses ---
+  - id: SL-001
+    type: sec-loss
+    title: Household photos, videos or their metadata are disclosed outside the house
+    status: draft
+    description: >
+      Someone outside the household sees an item, a thumbnail, a file name,
+      a date or any other metadata from the library.
+    fields:
+      cia-impact: [confidentiality]
+      stakeholders: [household]
+
+  - id: SL-002
+    type: sec-loss
+    title: A person's private items are seen by another household member
+    status: draft
+    description: >
+      A household member sees items from another person's library that were
+      not explicitly shared with them.
+    fields:
+      cia-impact: [confidentiality]
+      stakeholders: [household]
+
+  - id: SL-003
+    type: sec-loss
+    title: Where the household lives and goes is disclosed outside the house
+    status: draft
+    description: >
+      Positions from photo metadata (home, routines, travel) reach an
+      outside party, directly or through which map area was requested.
+    fields:
+      cia-impact: [confidentiality]
+      stakeholders: [household]
+
+  - id: SL-004
+    type: sec-loss
+    title: The home server is controlled through lichtbild
+    status: draft
+    description: >
+      An attacker runs code or reads arbitrary files on the home server by
+      way of lichtbild, and from there reaches the other services and the
+      library.
+    fields:
+      cia-impact: [confidentiality, integrity, availability]
+      stakeholders: [household, owner]
+
+  - id: SL-005
+    type: sec-loss
+    title: Face data of household members or visitors leaves the house
+    status: draft
+    description: >
+      Face crops, embeddings or person groupings (planned later) are sent
+      to or computed by an outside service, or are disclosed with the
+      library.
+    fields:
+      cia-impact: [confidentiality]
+      stakeholders: [household]
+
+  # --- Security hazards ---
+  - id: SH-001
+    type: sec-hazard
+    title: Content is served without an authenticated session
+    status: draft
+    description: >
+      A page, thumbnail, preview, original, video stream, map tile or API
+      response returns library data to a request that carries no valid
+      session from the house identity provider.
+    fields:
+      cia-impact: [confidentiality]
+      severity: critical
+    links:
+      - type: leads-to-sec-loss
+        target: SL-001
+      - type: leads-to-sec-loss
+        target: SL-003
+
+  - id: SH-002
+    type: sec-hazard
+    title: An item is served to a person who neither owns it nor was given it
+    status: draft
+    description: >
+      A logged-in person receives an item of another person's library: by
+      guessing or reusing an item or thumbnail id, through a merged view
+      that is on by default, through map clusters or counts, or through a
+      cache keyed without the viewer.
+    fields:
+      cia-impact: [confidentiality]
+      severity: high
+    links:
+      - type: leads-to-sec-loss
+        target: SL-002
+
+  - id: SH-003
+    type: sec-hazard
+    title: Browser or server contacts an outside host while showing the library
+    status: draft
+    description: >
+      A page loads a tile, style, font, glyph, script or image from an
+      outside host, or the server calls a geocoder, model hub or telemetry
+      endpoint, so that the request reveals positions, map areas or the
+      existence of the library.
+    fields:
+      cia-impact: [confidentiality]
+      severity: high
+    links:
+      - type: leads-to-sec-loss
+        target: SL-003
+      - type: leads-to-sec-loss
+        target: SL-001
+
+  - id: SH-004
+    type: sec-hazard
+    title: A request or a link in a root makes lichtbild read outside its roots
+    status: draft
+    description: >
+      A crafted path, an item id resolved to a path without containment, or
+      a symlink inside a root lets lichtbild read and serve files outside
+      the configured roots and data directory (configuration, secrets,
+      system files).
+    fields:
+      cia-impact: [confidentiality]
+      severity: critical
+    links:
+      - type: leads-to-sec-loss
+        target: SL-001
+      - type: leads-to-sec-loss
+        target: SL-004
+
+  - id: SH-005
+    type: sec-hazard
+    title: A malformed media file corrupts or takes over the process
+    status: draft
+    description: >
+      Decoding a crafted or broken image or video (in particular in a
+      native decoder library or an external tool) causes memory corruption,
+      code execution or a crash loop.
+    fields:
+      cia-impact: [integrity, availability]
+      severity: high
+    links:
+      - type: leads-to-sec-loss
+        target: SL-004
+
+  - id: SH-006
+    type: sec-hazard
+    title: Private deployment or library data enters the public repository
+    status: draft
+    description: >
+      A fixture, snapshot, screenshot, log, panic message, issue, PR text or
+      release asset carries a photo, a place, a position, a person's name,
+      a hostname, an address, a path or account detail from the house.
+    fields:
+      cia-impact: [confidentiality]
+      severity: high
+    links:
+      - type: leads-to-sec-loss
+        target: SL-001
+      - type: leads-to-sec-loss
+        target: SL-003
+
+  - id: SH-007
+    type: sec-hazard
+    title: A model is fetched or run outside the house, or is not the pinned one
+    status: draft
+    description: >
+      Face or similarity features (planned later) call a cloud API, download
+      a model at run time, or load model bytes whose hash is not pinned.
+    fields:
+      cia-impact: [confidentiality, integrity]
+      severity: high
+    links:
+      - type: leads-to-sec-loss
+        target: SL-005
+
+  # --- Security constraints ---
+  - id: SSC-001
+    type: sec-constraint
+    title: Every route except health requires a valid session
+    status: draft
+    description: >
+      lichtbild SHALL answer every route that returns library data only for
+      a request with a valid session from the configured OIDC issuer, and
+      SHALL deny by default (a new route is protected unless listed as
+      public). A test SHALL request every registered route without a
+      session and expect no library data.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-001
+
+  - id: SSC-002
+    type: sec-constraint
+    title: Every item access is checked against the viewer
+    status: draft
+    description: >
+      Every query and every file response SHALL be scoped by the viewer:
+      own items plus items explicitly shared. The merged view SHALL be off
+      until a person turns it on. Caches SHALL be keyed or checked per
+      viewer.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-002
+
+  - id: SSC-003
+    type: sec-constraint
+    title: No request leaves the house
+    status: draft
+    description: >
+      Pages SHALL be served with a Content-Security-Policy that allows only
+      the page's own origin. All assets, map tiles, styles, fonts and
+      glyphs SHALL come from lichtbild. The server SHALL make outbound
+      requests only to the configured OIDC issuer. A test SHALL fail on any
+      absolute outside URL in a rendered page or embedded asset.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-003
+
+  - id: SSC-004
+    type: sec-constraint
+    title: Files are served by index id only, with path containment
+    status: draft
+    description: >
+      lichtbild SHALL never take a file path from a request. It SHALL map an
+      item id to a stored root-relative path, resolve it, and refuse it
+      unless the resolved path lies inside that root. Symlinks that resolve
+      outside their root SHALL be skipped by the scan and reported.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-004
+
+  - id: SSC-005
+    type: sec-constraint
+    title: Untrusted media is decoded under limits and preferably in memory-safe code
+    status: draft
+    description: >
+      Decoding SHALL prefer memory-safe Rust decoders. Native decoders or
+      external tools, where needed (HEIC, video), SHALL run under size,
+      time and memory limits, and their failure SHALL skip the file with a
+      reason instead of stopping the scan.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-005
+
+  - id: SSC-006
+    type: sec-constraint
+    title: The repository holds only synthetic data and generic configuration
+    status: draft
+    description: >
+      Test fixtures SHALL be generated synthetically or be public domain.
+      Configuration examples SHALL use placeholder values. The
+      hostname-scan check SHALL run on every pull request and push as a
+      required check. Errors and logs SHALL NOT be pasted into issues or PRs
+      without removing paths and names.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-006
+
+  - id: SSC-007
+    type: sec-constraint
+    title: Models run locally and are pinned by sha256
+    status: draft
+    description: >
+      Model files SHALL be supplied by the deployment, checked against a
+      sha256 pinned in lichtbild before loading, and run in-process. No
+      model is downloaded at run time.
+    links:
+      - type: prevents-sec-hazard
+        target: SH-007

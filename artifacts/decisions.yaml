@@ -1,0 +1,220 @@
+artifacts:
+  - id: DD-001
+    type: design-decision
+    title: Pin the toolchain to varve's covalent realm
+    status: draft
+    release: v0.1.0
+    description: >
+      rivet comes from the varve covalent layer, locally and in CI, as in haus.
+    fields:
+      decision: >
+        varve.toml pins realm `covalent`, channel rolling, layer 2026.11.10;
+        varve-realms.toml carries the pulseengine, pulseengine-wasm and
+        covalent roots. CI installs varve from its cosign-verified release and
+        runs `varve run -- rivet validate`.
+      rationale: >
+        The same pin as the other house repos, so a developer and CI run the
+        same signed rivet. 2026.11.10 is the newest layer installed here; the
+        older 2026.11.7 is refused locally by varve's anti-rollback mark.
+      alternatives: >
+        `cargo install rivet` (unsigned, unpinned).
+    links:
+      - type: satisfies
+        target: REQ-TRACE-001
+
+  - id: DD-002
+    type: design-decision
+    title: STPA and STPA-Sec as the analysis, no safety standard
+    status: draft
+    release: v0.1.0
+    description: >
+      lichtbild is a household application with no functional-safety
+      standard or integrity level; the losses are of data and privacy.
+    fields:
+      decision: >
+        rivet schemas common, dev, stpa and stpa-sec. Losses and hazards in
+        artifacts/safety.yaml, the security half in artifacts/security.yaml,
+        requirements link to the constraints with constraint-satisfies
+        (system) or satisfies (security).
+      rationale: >
+        The brief's examples (writing into a source folder, a person seeing
+        another's items, a location leaking, silent skips) are integrity and
+        confidentiality losses, which STPA and STPA-Sec cover with one shared
+        control structure. No DAL, ASIL or SIL applies.
+      alternatives: >
+        The cybersecurity (ISO 21434) preset, which targets vehicles; the
+        EU AI Act schema, to be reconsidered before face recognition lands
+        (household personal use is the expected scope).
+    links:
+      - type: satisfies
+        target: REQ-TRACE-001
+
+  - id: DD-003
+    type: design-decision
+    title: One binary with axum, server-rendered pages and htmx, assets embedded
+    status: draft
+    release: v0.1.0
+    description: >
+      The haus and warte stack: axum, server-rendered HTML, htmx for
+      incremental loading, static assets compiled into the binary.
+    fields:
+      decision: >
+        One crate `lichtbild` with subcommands `scan` and `serve`; axum 0.8
+        and tokio; HTML from Rust code; htmx vendored and embedded, served
+        from the app's own origin.
+      rationale: >
+        Same deployment shape as haus (one static binary, one unit, base path
+        from the environment, the nav v1 switcher rendered server-side), no
+        JavaScript build, and embedded assets make the no-outside-request
+        rule checkable on the binary itself.
+      alternatives: >
+        A single-page app with a JSON API (needs a JS toolchain, more surface).
+    links:
+      - type: satisfies
+        target: REQ-WEB-001
+      - type: satisfies
+        target: REQ-WEB-003
+      - type: satisfies
+        target: REQ-WEB-002
+      - type: satisfies
+        target: REQ-NAV-001
+
+  - id: DD-004
+    type: design-decision
+    title: SQLite through rusqlite with the bundled library
+    status: draft
+    release: v0.1.0
+    description: >
+      The index is SQLite, compiled into the binary.
+    fields:
+      decision: >
+        rusqlite with the `bundled` feature, WAL mode, schema version in
+        `PRAGMA user_version`, forward migrations at startup.
+      rationale: >
+        One file in the data directory, no server, and the bundled build keeps
+        the musl release binaries static.
+      alternatives: >
+        sled or redb (no SQL for timeline grouping); PostgreSQL (a second
+        service on the Pi).
+    links:
+      - type: satisfies
+        target: REQ-IDX-001
+
+  - id: DD-005
+    type: design-decision
+    title: Pure-Rust image decoding first; HEIC and video reported as skipped until decided
+    status: draft
+    release: v0.1.0
+    description: >
+      The skeleton decodes JPEG, PNG, WebP and GIF with the `image` crate and
+      reads EXIF with `kamadak-exif`. HEIC and video files are found, counted
+      and reported as skipped with reason "unsupported (not yet)".
+    fields:
+      decision: >
+        No native decoder in v0.1.0. The scan report measures how many HEIC
+        and video files the library has before choosing between linking
+        libheif and ffmpeg, or running them as limited child processes
+        (REQ-MEDIA-001).
+      rationale: >
+        Memory-safe decoding for the first release, static musl builds stay
+        simple, and the gap is visible in the scan report instead of silent.
+      alternatives: >
+        libheif-rs with a bundled build now; ffmpeg child processes now.
+    links:
+      - type: satisfies
+        target: REQ-SCAN-002
+      - type: satisfies
+        target: REQ-MEDIA-001
+
+  - id: DD-006
+    type: design-decision
+    title: Source access is confined to one module, enforced by clippy
+    status: draft
+    release: v0.1.0
+    description: >
+      Only `src/source.rs` touches source roots, and it has no write call.
+    fields:
+      decision: >
+        clippy.toml lists std::fs write, create, rename, remove and
+        permission functions and OpenOptions as disallowed methods; the data
+        directory module allows them locally with a reason. The read-only
+        fixture test (REQ-SCAN-001) is the behavioural check. The deployment
+        additionally mounts the roots read-only for the service.
+      rationale: >
+        Three independent layers against a write into a source root: a lint that fails CI on a new
+        write call, a test that fails if a scan changes the tree, and an
+        operating-system guard outside this repository.
+      alternatives: >
+        Rely on the deployment's read-only mount alone (one layer, and not
+        exercised by CI).
+    links:
+      - type: satisfies
+        target: REQ-SCAN-001
+
+  - id: DD-007
+    type: design-decision
+    title: CI on GitHub-hosted runners until a self-hosted runner serves this repository
+    status: draft
+    release: v0.1.0
+    description: >
+      No self-hosted runner is registered for this repository (checked
+      2026-11-14), so CI jobs run on GitHub-hosted runners.
+    fields:
+      decision: >
+        Light jobs use `ubuntu-24.04`. When a runner with the `light` label
+        serves this repository, they switch to the fail-closed fork guard
+        `(github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.full_name == github.repository)
+        && <self-hosted labels> || 'ubuntu-latest'`. No self-hosted job ever
+        sits in a pull_request_target workflow. Release jobs stay hosted.
+      rationale: >
+        A self-hosted label no runner serves leaves checks queued forever.
+      alternatives: >
+        Use the guard now and wait for a runner.
+    links:
+      - type: satisfies
+        target: REQ-TRACE-001
+
+  - id: DD-008
+    type: design-decision
+    title: The release pipeline is haus's, renamed
+    status: draft
+    release: v0.1.0
+    description: >
+      release.yml follows haus's: version guard, musl builds with
+      cargo-zigbuild, binary --version check, SBOM, SHA256SUMS.txt, keyless
+      cosign signature verified before publishing, provenance attestation.
+    fields:
+      decision: >
+        Asset names lichtbild-<ver>-linux-arm64, -linux-amd64, -macos-arm64,
+        sbom.json, SHA256SUMS.txt and SHA256SUMS.txt.cosign.bundle.
+        GitHub-hosted runners, no caches in release jobs.
+      rationale: >
+        The deployment already pins and verifies haus releases this way, so
+        lichtbild needs no new deployment mechanism.
+      alternatives: >
+        Container images (a second artifact type to verify and run).
+    links:
+      - type: satisfies
+        target: REQ-REL-001
+
+  - id: DD-009
+    type: design-decision
+    title: Configuration through LICHTBILD_* variables and an optional TOML file
+    status: draft
+    release: v0.1.0
+    description: >
+      The deployment supplies roots, data directory, base path and limits;
+      the repository carries config.example.toml with placeholders only.
+    fields:
+      decision: >
+        Environment variables override the file named by LICHTBILD_CONFIG.
+        Roots are given as label=path pairs. No default root or data path.
+      rationale: >
+        The folder layout and person labels are private; having no default
+        means a missing setting fails loudly instead of pointing somewhere.
+      alternatives: >
+        Command-line flags only (secrets and paths end up in process lists).
+    links:
+      - type: satisfies
+        target: REQ-CFG-001
