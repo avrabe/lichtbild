@@ -10,10 +10,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use anyhow::{Context, Result};
 
-pub fn ensure_dir(p: &Path) -> Result<()> {
-    std::fs::create_dir_all(p).with_context(|| "cannot create a data directory".to_string())
-}
-
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Write `bytes` to `dest` through a temporary file in the same directory

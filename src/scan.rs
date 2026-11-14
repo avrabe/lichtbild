@@ -61,6 +61,10 @@ pub struct Report {
     pub reconciled: bool,
     pub priority: String,
     pub workers: usize,
+    /// Sums over all roots.
+    pub total_found: u64,
+    pub total_indexed: u64,
+    pub total_skipped: u64,
     pub roots: Vec<RootReport>,
     pub problems: Vec<String>,
 }
@@ -87,6 +91,10 @@ impl Report {
             }
             s += "\n";
         }
+        s += &format!(
+            "total: found {}, indexed {}, skipped {}\n",
+            self.total_found, self.total_indexed, self.total_skipped
+        );
         for p in &self.problems {
             s += &format!("problem: {p}\n");
         }
@@ -268,10 +276,17 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     Class::Skip(s) => skip(&mut rr, s),
                     Class::Image => {
                         let k = known.get(index::rel_bytes(&rel));
+                        // Unchanged: same size and time, and the thumbnail is
+                        // either present or failed for good (decode error).
+                        // A cache-full or write-error thumbnail is retried.
                         let unchanged = k.is_some_and(|k| {
                             k.size == size
                                 && k.mtime_ns == mtime_ns
-                                && (k.thumb != "ok" || thumb_path(&cfg.data_dir, &k.hash).is_file())
+                                && match k.thumb.as_str() {
+                                    "ok" => thumb_path(&cfg.data_dir, &k.hash).is_file(),
+                                    "decode-error" => true,
+                                    _ => false,
+                                }
                         });
                         if let (true, Some(k)) = (unchanged, k) {
                             if k.missing {
@@ -281,6 +296,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                             }
                             rr.indexed += 1;
                             rr.unchanged += 1;
+                            if k.thumb == "ok" {
+                                rr.thumbnails.reused += 1;
+                            } else {
+                                *rr.thumbnails.failed.entry(k.thumb.clone()).or_default() += 1;
+                            }
                             indexed_rels.insert(index::rel_bytes(&rel).to_vec());
                         } else {
                             jobs.push(Job {
@@ -420,6 +440,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
         }
         report.reconciled &= rr.reconciled;
         report.roots.push(rr);
+    }
+    for r in &report.roots {
+        report.total_found += r.found;
+        report.total_indexed += r.indexed;
+        report.total_skipped += r.skipped;
     }
     if !report.complete {
         report.reconciled = false;

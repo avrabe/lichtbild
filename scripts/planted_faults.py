@@ -52,7 +52,7 @@ FAULTS = [
      "",
      ["test", "--test", "scan", "interrupted_scan_resumes_to_the_same_index"]),
     ("F08", "REQ-CFG-002", "src/config.rs",
-     "        check_overlap(&roots, &lexical)?;\n",
+     "        check_overlap(&roots, &normalize(&data_dir))?;\n",
      "",
      ["test", "--test", "scan", "data_dir_overlapping_a_root_is_refused"]),
     ("F09", "REQ-CFG-002", "src/config.rs",
@@ -95,6 +95,14 @@ FAULTS = [
      "    let ok = authority.is_some_and(",
      "    let ok = true || authority.is_some_and(",
      ["test", "--test", "web", "requests_for_other_hosts_are_refused"]),
+    ("F19", "REQ-CFG-002", "src/config.rs",
+     "        if data_dir.starts_with(&r.path) || r.path.starts_with(data_dir) {\n",
+     "        if data_dir.starts_with(&r.path) || false {\n",
+     ["test", "--test", "scan", "data_dir_overlapping_a_root_is_refused"]),
+    ("F20", "REQ-THUMB-001", "src/scan.rs",
+     "                                    \"decode-error\" => true,\n                                    _ => false,\n",
+     "                                    _ => true,\n",
+     ["test", "--test", "scan", "failed_thumbnails_are_retried_and_counted"]),
 ]
 
 
@@ -125,11 +133,21 @@ def main():
             continue
         try:
             path.write_text(text.replace(orig, planted))
-            r = subprocess.run(cargo(fid) + args + (["--quiet"] if args[0] == "test" else []),
+            r = subprocess.run(cargo(fid) + args,
                                cwd=ROOT, env=env, capture_output=True, text=True)
         finally:
             path.write_text(text)
-        caught = r.returncode != 0
+        out = r.stdout + r.stderr
+        compiled = "could not compile" not in out and "error[E" not in out
+        if args[0] == "test":
+            # Caught means a test ran and failed, not that the plant broke the build.
+            caught = r.returncode != 0 and compiled and "test result: FAILED" in out
+        else:
+            caught = r.returncode != 0
+        if args[0] == "test" and not compiled:
+            failures.append(f"{fid} {req}: the planted code does not compile, so it proves nothing")
+            print(f"{fid} {req:<14} DOES NOT COMPILE", flush=True)
+            continue
         print(f"{fid} {req:<14} {'caught' if caught else 'NOT CAUGHT'}  ({' '.join(args)}; exit {r.returncode})",
               flush=True)
         if not caught:

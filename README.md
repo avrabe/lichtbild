@@ -23,7 +23,7 @@ lichtbild scan     # one scan and its report, only while no server runs; exit 2 
 
 The index is a redb file in the data directory, owned by one process: `serve` scans in a low-priority background thread and logs the report; `scan` refuses while a server holds the index.
 
-All settings are in `lichtbild --help` and [config.example.toml](config.example.toml). lichtbild refuses to start when the data directory and a root overlap. Behind a reverse proxy, set `LICHTBILD_ALLOWED_HOSTS` to the public host name: requests for any other host get 421.
+All settings are in `lichtbild --help` and [config.example.toml](config.example.toml). The data directory must exist (lichtbild creates nothing at startup), and lichtbild refuses to start when it and a root overlap. Behind a reverse proxy, set `LICHTBILD_ALLOWED_HOSTS` to the public host name: requests for any other host get 421.
 
 ## Verification
 

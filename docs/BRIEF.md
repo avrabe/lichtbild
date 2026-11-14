@@ -61,4 +61,7 @@ provider, and verification and traceability with rivet from commit one.
 2. A skeleton binary: config, read-only scan with a report of files found
    and skipped, a redb index (owner decision 2026-11-14: redb, no SQLite),
    a thumbnail cache, and a timeline page.
-3. The map with PMTiles, then video, then OIDC and nav, then faces.
+3. OIDC login, per-person views and nav, then the map with PMTiles, then
+   video, then faces. (Owner decision 2026-11-14: login moves ahead of the
+   map, because nothing is exposed to the household before it exists.
+   v0.1.0 is deployed for the operator only, to measure the real library.)

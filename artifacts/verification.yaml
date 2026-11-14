@@ -58,6 +58,8 @@ artifacts:
       method: automated-test
       test-name: "scan_never_changes_the_source"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan scan_never_changes_the_source"
     links:
       - type: verifies
         target: REQ-SCAN-001
@@ -70,6 +72,8 @@ artifacts:
       method: automated-test
       test-name: "report_reconciles_and_names_every_skip"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan report_reconciles_and_names_every_skip"
     links:
       - type: verifies
         target: REQ-SCAN-002
@@ -84,6 +88,8 @@ artifacts:
       method: automated-test
       test-name: "rescan_is_idempotent_and_tracks_changes"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan rescan_is_idempotent_and_tracks_changes"
     links:
       - type: verifies
         target: REQ-SCAN-003
@@ -98,6 +104,8 @@ artifacts:
       method: automated-test
       test-name: "interrupted_scan_resumes_to_the_same_index"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan interrupted_scan_resumes_to_the_same_index"
     links:
       - type: verifies
         target: REQ-SCAN-003
@@ -112,6 +120,8 @@ artifacts:
       method: automated-test
       test-name: "data_dir_overlapping_a_root_is_refused"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan data_dir_overlapping_a_root_is_refused"
     links:
       - type: verifies
         target: REQ-CFG-002
@@ -124,6 +134,8 @@ artifacts:
       method: automated-test
       test-name: "dates_and_positions_carry_their_source"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan dates_and_positions_carry_their_source"
     links:
       - type: verifies
         target: REQ-META-001
@@ -136,6 +148,8 @@ artifacts:
       method: automated-test
       test-name: "scan_lowers_its_priority"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan scan_lowers_its_priority"
     links:
       - type: verifies
         target: REQ-SCAN-004
@@ -148,6 +162,8 @@ artifacts:
       method: automated-test
       test-name: "every_response_is_same_origin_only"
       test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web every_response_is_same_origin_only"
     links:
       - type: verifies
         target: REQ-WEB-003
@@ -160,6 +176,8 @@ artifacts:
       method: automated-test
       test-name: "files_are_served_by_id_with_containment"
       test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web files_are_served_by_id_with_containment"
     links:
       - type: verifies
         target: REQ-WEB-004
@@ -172,6 +190,8 @@ artifacts:
       method: automated-test
       test-name: "base_path_prefixes_everything"
       test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web base_path_prefixes_everything"
     links:
       - type: verifies
         target: REQ-WEB-002
@@ -184,6 +204,8 @@ artifacts:
       method: automated-test
       test-name: "timeline_groups_by_day_and_pages_with_htmx"
       test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web timeline_groups_by_day_and_pages_with_htmx"
     links:
       - type: verifies
         target: REQ-WEB-001
@@ -194,8 +216,11 @@ artifacts:
     status: draft
     fields:
       method: automated-test
-      test-name: "config::tests"
+      test-name: "roots_from_env_string"
       test-location: src/config.rs
+      steps:
+        - run: "cargo test --lib roots_from_env_string"
+        - run: "cargo test --lib labels"
     links:
       - type: verifies
         target: REQ-CFG-001
@@ -207,6 +232,8 @@ artifacts:
       method: automated-test
       test-name: "one_process_owns_the_index"
       test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan one_process_owns_the_index"
     links:
       - type: verifies
         target: REQ-IDX-001
@@ -219,6 +246,22 @@ artifacts:
       method: automated-test
       test-name: "requests_for_other_hosts_are_refused"
       test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web requests_for_other_hosts_are_refused"
     links:
       - type: verifies
         target: REQ-WEB-005
+
+  - id: VER-019
+    type: verification
+    title: Thumbnails that failed for lack of cache space are retried and counted
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "failed_thumbnails_are_retried_and_counted"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan failed_thumbnails_are_retried_and_counted"
+    links:
+      - type: verifies
+        target: REQ-THUMB-001

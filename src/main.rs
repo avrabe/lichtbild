@@ -24,6 +24,8 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_ALLOWED_HOSTS  photos.example        host names besides localhost (comma-separated)
   LICHTBILD_WORKERS    2
   LICHTBILD_SCAN_INTERVAL_HOURS  24              0 = scan only at start
+  LICHTBILD_MAX_PIXELS / _MAX_FILE_MIB / _THUMB_CACHE_MIB / _THUMB_SIZE   limits
+  LICHTBILD_DATA_DIR must exist; lichtbild creates nothing at startup.
   LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN  1 to listen beyond loopback before login exists
 
 `scan` exits 2 when found != indexed + skipped, or when the index disagrees;
