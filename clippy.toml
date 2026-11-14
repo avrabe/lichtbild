@@ -1,0 +1,21 @@
+# DD-006: only src/datadir.rs may create, write, rename or remove files.
+# Everything else, and in particular src/source.rs, gets a lint error for
+# any of these (SC-001). Tests allow them explicitly to build fixtures.
+disallowed-methods = [
+  { path = "std::fs::write", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::File::create", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::File::create_new", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::File::options", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::OpenOptions::new", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::create_dir", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::create_dir_all", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::remove_file", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::remove_dir", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::remove_dir_all", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::rename", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::copy", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::hard_link", reason = "writes only through datadir (SC-001)" },
+  { path = "std::fs::set_permissions", reason = "writes only through datadir (SC-001)" },
+  { path = "std::os::unix::fs::symlink", reason = "writes only through datadir (SC-001)" },
+  { path = "image::DynamicImage::save", reason = "writes only through datadir (SC-001)" },
+]
