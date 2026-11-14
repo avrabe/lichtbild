@@ -775,3 +775,29 @@ async fn viewer_info_panel_shows_date_place_and_camera() {
     assert!(page.contains("10.50000, 20.25000"));
     assert!(!page.contains("Ostdorf"));
 }
+
+// rivet: verifies REQ-MEDIA-002
+#[tokio::test]
+async fn viewer_explains_an_undecodable_heic() {
+    let fx = fixture();
+    let cut = &HEIC_640X480[..HEIC_640X480.len() - 2000];
+    std::fs::write(fx.root1.join("b/IMG_20190705_000000.HEIC"), cut).unwrap();
+    let cfg = config(&fx, &fx.data);
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    scan::run(&cfg, &idx, &Options::default()).unwrap();
+    let id = idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.rel == b"b/IMG_20190705_000000.HEIC")
+        .unwrap()
+        .0;
+    let (_, _, body) = get(&app(&cfg, &idx), &format!("/v/p1/{id}"), false).await;
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains("could not be decoded"), "{page}");
+    assert!(page.contains(&format!(r#"<a href="original/{id}" download>"#)));
+    assert!(
+        !page.contains(r#"<img class="photo""#),
+        "a broken image instead of the note"
+    );
+}

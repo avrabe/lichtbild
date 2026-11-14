@@ -208,6 +208,8 @@ h4.day {
 .viewer .prev { left: 0; justify-content: flex-start; padding-left: 18px; }
 .viewer .next { right: 0; justify-content: flex-end; padding-right: 18px; }
 .viewer .none { visibility: hidden; }
+.viewer .nophoto { max-width: 420px; text-align: center; color: #b3a995; font-size: 14px; line-height: 1.7; }
+.viewer .nophoto a { color: #e9e1d1; }
 @media (hover: none) { .viewer .prev, .viewer .next { font-size: 0; } }
 
 /* Viewer info panel: a quiet sheet on the right; at the bottom on phones. */

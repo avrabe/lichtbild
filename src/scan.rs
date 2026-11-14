@@ -43,7 +43,27 @@ pub struct Options {
 pub struct ThumbReport {
     pub generated: u64,
     pub reused: u64,
+    /// Indexed items without a thumbnail, by reason and format, e.g.
+    /// "decode-error (heic)". Each is an empty tile in the timeline.
     pub failed: BTreeMap<String, u64>,
+    /// Items with a JPEG preview (HEIC), present after this scan.
+    pub previews: u64,
+}
+
+/// One line of the operator's problem list (scan-problems.tsv). It names
+/// files, so it stays in the data directory and is never in the report.
+fn problem_line(kind: &str, reason: &str, label: &str, rel: &Path) -> String {
+    let clean = |s: &str| {
+        s.replace('\\', "\\\\")
+            .replace('\t', "\\t")
+            .replace('\n', "\\n")
+    };
+    format!(
+        "{kind}\t{}\t{}\t{}",
+        clean(reason),
+        clean(label),
+        clean(&rel.to_string_lossy())
+    )
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq, Eq)]
@@ -91,8 +111,8 @@ impl Report {
                 s += &format!("  skipped {v:>7}  {k}\n");
             }
             s += &format!(
-                "  thumbnails: generated {}, reused {}",
-                r.thumbnails.generated, r.thumbnails.reused
+                "  thumbnails: generated {}, reused {}, previews {}",
+                r.thumbnails.generated, r.thumbnails.reused, r.thumbnails.previews
             );
             for (k, v) in &r.thumbnails.failed {
                 s += &format!(", {k} {v}");
@@ -257,7 +277,9 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
         workers: cfg.workers,
         ..Default::default()
     };
-    let cache_bytes = datadir::sweep_and_measure(&cfg.data_dir.join("thumbs"))?;
+    let cache_bytes = datadir::sweep_and_measure(&cfg.data_dir.join("thumbs"))?
+        + datadir::sweep_and_measure(&cfg.data_dir.join("previews"))?;
+    let mut problems: Vec<String> = Vec::new();
     let cache = Arc::new(AtomicU64::new(cache_bytes));
     let mut budget = opts.stop_after;
 
@@ -267,9 +289,21 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
             label: root.label.clone(),
             ..Default::default()
         };
-        let skip = |rr: &mut RootReport, s: Skip| {
+        let label = root.label.clone();
+        let skip = |rr: &mut RootReport, problems: &mut Vec<String>, s: Skip, rel: &Path| {
+            let reason = s.to_string();
+            problems.push(problem_line("skipped", &reason, &label, rel));
             rr.skipped += 1;
-            *rr.skipped_by_reason.entry(s.to_string()).or_default() += 1;
+            *rr.skipped_by_reason.entry(reason).or_default() += 1;
+        };
+        let thumb_failed = |rr: &mut RootReport,
+                            problems: &mut Vec<String>,
+                            thumb: &str,
+                            format: media::Format,
+                            rel: &Path| {
+            let reason = format!("{thumb} ({})", format.name());
+            problems.push(problem_line("thumbnail", &reason, &label, rel));
+            *rr.thumbnails.failed.entry(reason).or_default() += 1;
         };
 
         // 1. Walk and classify; collect the files that need work.
@@ -282,17 +316,18 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
             rr.found += 1;
             match e {
                 Entry::Skipped { rel, reason } => {
-                    if reason == Skip::UnreadableDir {
+                    let unreadable = reason == Skip::UnreadableDir;
+                    skip(&mut rr, &mut problems, reason, &rel);
+                    if unreadable {
                         unreadable_dirs.push(rel);
                     }
-                    skip(&mut rr, reason);
                 }
                 Entry::File {
                     rel,
                     size,
                     mtime_ns,
                 } => match media::classify(&rel) {
-                    Class::Skip(s) => skip(&mut rr, s),
+                    Class::Skip(s) => skip(&mut rr, &mut problems, s, &rel),
                     Class::Image(format) => {
                         let k = known.get(index::rel_bytes(&rel));
                         // Unchanged: same size and time, and the thumbnail is
@@ -321,8 +356,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                             rr.unchanged += 1;
                             if k.thumb == "ok" {
                                 rr.thumbnails.reused += 1;
+                                if format.needs_preview() {
+                                    rr.thumbnails.previews += 1;
+                                }
                             } else {
-                                *rr.thumbnails.failed.entry(k.thumb.clone()).or_default() += 1;
+                                thumb_failed(&mut rr, &mut problems, &k.thumb, format, &rel);
                             }
                             indexed_rels.insert(index::rel_bytes(&rel).to_vec());
                         } else {
@@ -378,7 +416,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
         let mut tx_open = idx.batch()?;
         for (job, out) in rx {
             match out {
-                Outcome::Skipped(s) => skip(&mut rr, s),
+                Outcome::Skipped(s) => skip(&mut rr, &mut problems, s, &job.rel),
                 Outcome::Indexed {
                     info,
                     thumb,
@@ -405,7 +443,10 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     } else if thumb == "ok" {
                         rr.thumbnails.reused += 1;
                     } else {
-                        *rr.thumbnails.failed.entry(thumb).or_default() += 1;
+                        thumb_failed(&mut rr, &mut problems, &thumb, job.format, &job.rel);
+                    }
+                    if preview {
+                        rr.thumbnails.previews += 1;
                     }
                     indexed_rels.insert(index::rel_bytes(&job.rel).to_vec());
                 }
@@ -488,5 +529,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
             .push("scan interrupted before the end".into());
     }
     datadir::write_report(&cfg.data_dir, &serde_json::to_string_pretty(&report)?)?;
+    let mut tsv = String::from("kind\treason\troot\tpath\n");
+    for line in &problems {
+        tsv += line;
+        tsv.push('\n');
+    }
+    datadir::write_problems(&cfg.data_dir, &tsv)?;
     Ok(report)
 }

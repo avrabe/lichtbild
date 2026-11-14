@@ -61,3 +61,9 @@ pub fn sweep_and_measure(dir: &Path) -> Result<u64> {
 pub fn write_report(data_dir: &Path, json: &str) -> Result<()> {
     write_atomic(&data_dir.join("scan-report.json"), json.as_bytes())
 }
+
+/// The operator's list of skipped files and missing thumbnails, with paths.
+/// Private: it stays in the data directory, unlike the shareable report.
+pub fn write_problems(data_dir: &Path, tsv: &str) -> Result<()> {
+    write_atomic(&data_dir.join("scan-problems.tsv"), tsv.as_bytes())
+}

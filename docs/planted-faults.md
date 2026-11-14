@@ -39,6 +39,8 @@ at nice 0.
 | F24 | REQ-MEDIA-002 | the viewer shows the HEIC original instead of its preview | `viewer_shows_the_jpeg_preview_for_heic` |
 | F25 | REQ-PLACE-001 | the place lookup never finds a town | `viewer_info_panel_shows_date_place_and_camera` |
 | F26 | REQ-WEB-008 | the info panel drops the camera and exposure | `viewer_info_panel_shows_date_place_and_camera` |
+| F28 | REQ-SCAN-002 | missing thumbnails are left out of the operator's problem list | `undecodable_heic_is_counted_by_format_and_listed` |
+| F29 | REQ-MEDIA-002 | the viewer shows a broken image for a HEIC without preview | `viewer_explains_an_undecodable_heic` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

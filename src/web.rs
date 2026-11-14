@@ -595,6 +595,23 @@ pub fn render_info(
     s
 }
 
+/// The viewer's photo, or a note when the original is a format browsers
+/// cannot display and no preview could be made from it.
+pub fn photo_html(id: u64, rec: &index::Record) -> String {
+    let rel = String::from_utf8_lossy(&rec.rel).to_ascii_lowercase();
+    let browser_cannot_show = rel.ends_with(".heic") || rel.ends_with(".heif");
+    if browser_cannot_show && !rec.preview {
+        return format!(
+            "<div class=\"nophoto\"><p>This HEIC photo could not be decoded, so there is no preview.</p>\
+             <p><a href=\"original/{id}\" download>Download the original</a></p></div>"
+        );
+    }
+    format!(
+        "<img class=\"photo\" src=\"{}\" alt=\"\">",
+        esc(&photo_src(id, rec))
+    )
+}
+
 /// What the viewer shows for an item: the JPEG preview when the original is
 /// a format browsers cannot display (HEIC), the original otherwise.
 pub fn photo_src(id: u64, rec: &index::Record) -> String {
@@ -680,11 +697,11 @@ async fn viewer(
     let body = format!(
         "<div class=\"viewer\">\n\
          <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{info}</div>\n\
-         <div class=\"stage\">{prev}<img class=\"photo\" src=\"{src}\" alt=\"\">{next}</div>\n\
+         <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
-        src = esc(&photo_src(id, &rec)),
+        photo = photo_html(id, &rec),
         info = render_info(&rec, &exif, st.places.as_deref()),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),

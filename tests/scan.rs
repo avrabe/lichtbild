@@ -294,29 +294,33 @@ fn one_process_owns_the_index() {
 // rivet: verifies REQ-THUMB-001
 #[test]
 fn failed_thumbnails_are_retried_and_counted() {
+    // Thumbnail failures are counted per format ("cache-full (jpeg)", ...).
+    let cache_full = |r: &lichtbild::scan::Report| -> u64 {
+        r.roots[0]
+            .thumbnails
+            .failed
+            .iter()
+            .filter(|(k, _)| k.starts_with("cache-full ("))
+            .map(|(_, v)| v)
+            .sum()
+    };
     let fx = fixture();
     let mut cfg = config(&fx, &fx.data);
     cfg.limits.thumb_cache_bytes = 0; // cache full from the start
     let rep = scan_once(&cfg, &Options::default());
     assert!(rep.reconciled, "{}", rep.to_text());
-    assert_eq!(rep.roots[0].thumbnails.failed.get("cache-full"), Some(&5));
+    assert_eq!(cache_full(&rep), 5, "{}", rep.to_text());
+    assert_eq!(
+        rep.roots[0].thumbnails.failed.get("cache-full (heic)"),
+        Some(&1)
+    );
     // The next scan still reports them.
     let rep = scan_once(&cfg, &Options::default());
-    assert_eq!(
-        rep.roots[0].thumbnails.failed.get("cache-full"),
-        Some(&5),
-        "{}",
-        rep.to_text()
-    );
+    assert_eq!(cache_full(&rep), 5, "{}", rep.to_text());
     // With room in the cache they are generated.
     cfg.limits.thumb_cache_bytes = 1 << 30;
     let rep = scan_once(&cfg, &Options::default());
-    assert_eq!(
-        rep.roots[0].thumbnails.failed.get("cache-full"),
-        None,
-        "{}",
-        rep.to_text()
-    );
+    assert_eq!(cache_full(&rep), 0, "{}", rep.to_text());
     assert_eq!(
         rep.roots[0].thumbnails.generated + rep.roots[0].thumbnails.reused,
         5
@@ -380,4 +384,64 @@ fn heic_pixels_match_the_source_gradient() {
     }
     // The pixel limit is enforced before decoding.
     assert!(decode(HEIC_640X480, Format::Heic, 100_000).is_err());
+}
+
+// A HEIC whose container reads but whose pixels do not decode is indexed
+// without a thumbnail. The report names the format, counts the previews,
+// and the operator's private list names the file.
+// rivet: verifies REQ-SCAN-002
+// rivet: verifies REQ-MEDIA-002
+#[test]
+fn undecodable_heic_is_counted_by_format_and_listed() {
+    let fx = fixture();
+    // Truncated: the meta box (size, EXIF) is intact, the pixel data is not.
+    let cut = &HEIC_640X480[..HEIC_640X480.len() - 2000];
+    std::fs::write(fx.root1.join("b/IMG_20190705_000000.HEIC"), cut).unwrap();
+    let cfg = config(&fx, &fx.data);
+    let rep = scan_once(&cfg, &Options::default());
+    assert!(rep.reconciled, "{}", rep.to_text());
+    let t = &rep.roots[0].thumbnails;
+    assert_eq!(
+        t.failed.get("decode-error (heic)"),
+        Some(&1),
+        "{}",
+        rep.to_text()
+    );
+    assert_eq!(t.previews, 1, "the good HEIC has a preview");
+    assert!(
+        rep.to_text().contains("decode-error (heic) 1"),
+        "{}",
+        rep.to_text()
+    );
+    // A rescan still reports it, from the index.
+    let rep = scan_once(&cfg, &Options::default());
+    assert_eq!(
+        rep.roots[0].thumbnails.failed.get("decode-error (heic)"),
+        Some(&1)
+    );
+    assert_eq!(rep.roots[0].thumbnails.previews, 1);
+    // The private list names the files; the shareable report does not.
+    let tsv = std::fs::read_to_string(fx.data.join("scan-problems.tsv")).unwrap();
+    let lines: Vec<&str> = tsv.lines().collect();
+    assert_eq!(lines[0], "kind\treason\troot\tpath");
+    assert!(
+        lines.contains(&"thumbnail\tdecode-error (heic)\tp1\tb/IMG_20190705_000000.HEIC"),
+        "{tsv}"
+    );
+    assert!(
+        lines.contains(&"skipped\tdecode error (heic)\tp1\tb/broken.heic"),
+        "{tsv}"
+    );
+    assert!(
+        lines.contains(&"skipped\tnot yet supported (video)\tp1\tb/clip.mp4"),
+        "{tsv}"
+    );
+    let skipped = lines.iter().filter(|l| l.starts_with("skipped\t")).count() as u64;
+    assert_eq!(
+        skipped,
+        rep.roots.iter().map(|r| r.skipped).sum::<u64>(),
+        "every skip is listed"
+    );
+    let json = std::fs::read_to_string(fx.data.join("scan-report.json")).unwrap();
+    assert!(!json.contains("IMG_20190705"), "report names a file");
 }
