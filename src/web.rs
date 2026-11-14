@@ -488,6 +488,9 @@ async fn timeline(
     page(&st.base_path, &title, &body).into_response()
 }
 
+/// A photo and its (newer, older) neighbours.
+type ViewerItem = (index::Record, Option<u64>, Option<u64>);
+
 /// GET /v/{who}/{id}: one photo, large, with the previous (newer) and next
 /// (older) photo of the same timeline. Arrow keys and swipes in
 /// assets/lichtbild.js follow the same links; without JavaScript they are
@@ -504,19 +507,17 @@ async fn viewer(
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
     let idx = st.index.clone();
-    let res = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<Option<(index::Record, Option<u64>, Option<u64>)>> {
-            let Some(rec) = idx.locate(id)? else {
-                return Ok(None);
-            };
-            // The item must belong to this timeline (prepares per-person scoping).
-            if !labels.contains(&rec.label) {
-                return Ok(None);
-            }
-            let (newer, older) = idx.neighbours(&labels, &rec.taken_local, id)?;
-            Ok(Some((rec, newer, older)))
-        },
-    )
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ViewerItem>> {
+        let Some(rec) = idx.locate(id)? else {
+            return Ok(None);
+        };
+        // The item must belong to this timeline (prepares per-person scoping).
+        if !labels.contains(&rec.label) {
+            return Ok(None);
+        }
+        let (newer, older) = idx.neighbours(&labels, &rec.taken_local, id)?;
+        Ok(Some((rec, newer, older)))
+    })
     .await;
     let (rec, newer, older) = match res {
         Ok(Ok(Some(x))) => x,
