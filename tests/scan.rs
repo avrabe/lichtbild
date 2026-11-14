@@ -46,6 +46,10 @@ fn report_reconciles_and_names_every_skip() {
         "{}",
         rep.to_text()
     );
+    assert_eq!(
+        (rep.total_found, rep.total_indexed, rep.total_skipped),
+        (14, 5, 9)
+    );
     let want: BTreeMap<String, u64> = [
         ("broken symlink", 1),
         ("decode error", 1),
@@ -185,6 +189,25 @@ fn data_dir_overlapping_a_root_is_refused() {
     };
     let p1 = || vec![("p1".to_string(), fx.root1.clone())];
 
+    // A data directory that does not exist is refused, not created.
+    let missing = fx.data.with_file_name("not-there");
+    let e = try_cfg(missing.clone(), p1()).unwrap_err().to_string();
+    assert!(e.contains("does not exist"), "{e}");
+    assert!(!missing.exists(), "created a missing data directory");
+
+    // Review finding D1: a not-yet-existing directory under a symlink into
+    // a root must be refused without creating anything inside the root.
+    let via = fx.data.with_file_name("via-link");
+    std::os::unix::fs::symlink(&fx.root1, &via).unwrap();
+    assert!(
+        try_cfg(via.join("cache"), p1()).is_err(),
+        "accepted a path through a symlink into a root"
+    );
+    assert!(
+        !fx.root1.join("cache").exists(),
+        "created a directory inside a root"
+    );
+
     let inside = fx.root1.join("cache");
     let e = try_cfg(inside.clone(), p1()).unwrap_err().to_string();
     assert!(e.contains("overlap"), "{e}");
@@ -219,6 +242,7 @@ fn data_dir_overlapping_a_root_is_refused() {
         "nested roots accepted"
     );
 
+    std::fs::create_dir_all(&fx.data).unwrap();
     assert!(try_cfg(fx.data.clone(), p1()).is_ok());
 }
 
@@ -265,4 +289,37 @@ fn one_process_owns_the_index() {
     assert!(err.to_string().contains("in use"), "{err}");
     drop(held);
     assert!(lichtbild::index::Index::open(&cfg.data_dir).is_ok());
+}
+
+// rivet: verifies REQ-THUMB-001
+#[test]
+fn failed_thumbnails_are_retried_and_counted() {
+    let fx = fixture();
+    let mut cfg = config(&fx, &fx.data);
+    cfg.limits.thumb_cache_bytes = 0; // cache full from the start
+    let rep = scan_once(&cfg, &Options::default());
+    assert!(rep.reconciled, "{}", rep.to_text());
+    assert_eq!(rep.roots[0].thumbnails.failed.get("cache-full"), Some(&4));
+    // The next scan still reports them.
+    let rep = scan_once(&cfg, &Options::default());
+    assert_eq!(
+        rep.roots[0].thumbnails.failed.get("cache-full"),
+        Some(&4),
+        "{}",
+        rep.to_text()
+    );
+    // With room in the cache they are generated.
+    cfg.limits.thumb_cache_bytes = 1 << 30;
+    let rep = scan_once(&cfg, &Options::default());
+    assert_eq!(
+        rep.roots[0].thumbnails.failed.get("cache-full"),
+        None,
+        "{}",
+        rep.to_text()
+    );
+    assert_eq!(
+        rep.roots[0].thumbnails.generated + rep.roots[0].thumbnails.reused,
+        4
+    );
+    assert_eq!(rep.roots[0].unchanged, 0, "retried items count as updated");
 }

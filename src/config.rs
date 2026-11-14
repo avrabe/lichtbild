@@ -131,6 +131,23 @@ impl Settings {
         if let Some(v) = get("LICHTBILD_SCAN_INTERVAL_HOURS") {
             s.scan_interval_hours = Some(v.parse().context("LICHTBILD_SCAN_INTERVAL_HOURS")?);
         }
+        let num = |k: &str| -> Result<Option<u64>> {
+            get(k)
+                .map(|v| v.parse::<u64>().with_context(|| k.to_string()))
+                .transpose()
+        };
+        if let Some(v) = num("LICHTBILD_MAX_PIXELS")? {
+            s.limits.max_pixels = v;
+        }
+        if let Some(v) = num("LICHTBILD_MAX_FILE_MIB")? {
+            s.limits.max_file_bytes = v * 1024 * 1024;
+        }
+        if let Some(v) = num("LICHTBILD_THUMB_CACHE_MIB")? {
+            s.limits.thumb_cache_bytes = v * 1024 * 1024;
+        }
+        if let Some(v) = num("LICHTBILD_THUMB_SIZE")? {
+            s.limits.thumb_size = u32::try_from(v).context("LICHTBILD_THUMB_SIZE")?;
+        }
         if let Some(v) = get("LICHTBILD_ALLOWED_HOSTS") {
             s.allowed_hosts = v
                 .split(',')
@@ -173,7 +190,9 @@ impl Settings {
         Ok(())
     }
 
-    /// Validate, create the data directory if needed, and check overlaps.
+    /// Validate and check overlaps. Nothing is created: the data directory
+    /// must already exist (the deployment makes it), so a typo or a path
+    /// through a symlink into a root fails before any write (SC-001).
     pub fn resolve(self) -> Result<Config> {
         if self.roots.is_empty() {
             bail!("no source roots: set LICHTBILD_ROOTS (label=/path;label=/path) or [[roots]] in LICHTBILD_CONFIG");
@@ -201,14 +220,14 @@ impl Settings {
             }
             roots.push(Root { label, path: canon });
         }
-        // Check the lexical path first, so the data directory is never
-        // created inside a root, then create it and check the real path.
-        let lexical = normalize(&data_dir);
-        check_overlap(&roots, &lexical)?;
-        crate::datadir::ensure_dir(&data_dir)?;
+        // Check the lexical path and the resolved path; create nothing.
+        check_overlap(&roots, &normalize(&data_dir))?;
         let data_dir = data_dir
             .canonicalize()
-            .context("data directory: cannot resolve")?;
+            .context("data directory does not exist or cannot be opened; create it first")?;
+        if !data_dir.is_dir() {
+            bail!("data directory is not a directory");
+        }
         check_overlap(&roots, &data_dir)?;
 
         let base_path = parse_base_path(self.base_path.as_deref())?;
@@ -228,10 +247,11 @@ impl Settings {
             scan_interval_hours: self.scan_interval_hours.unwrap_or(24),
             limits: self.limits,
             allow_remote_without_login: self.allow_remote_without_login,
+            // Same normalisation as the request side: no port, no trailing dot.
             allowed_hosts: self
                 .allowed_hosts
                 .iter()
-                .map(|h| h.to_ascii_lowercase())
+                .map(|h| crate::web::host_name(h))
                 .collect(),
         })
     }

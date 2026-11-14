@@ -77,7 +77,8 @@ artifacts:
       path, the listen address and limits are read from LICHTBILD_* variables
       and an optional TOML file named by LICHTBILD_CONFIG. The repository
       carries only an example with placeholder values. A missing root or
-      data directory stops startup with a clear error.
+      data directory stops startup with a clear error; lichtbild creates no
+      directory at startup.
     fields:
       priority: must
       category: interface

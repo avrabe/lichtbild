@@ -268,9 +268,33 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
 
     // Weak dates are marked; the merged view holds both people.
     assert!(html.contains("item weak"));
-    let (_, _, body) = get(&app, "/t/all", false).await;
-    let all = String::from_utf8(body).unwrap();
-    assert!(all.contains("2021-06-15") || all.contains("hx-get"));
+    // Newest first: day headings strictly descending, on both pages.
+    let days = |h: &str| -> Vec<String> {
+        h.split("<h4 class=\"day\">")
+            .skip(1)
+            .map(|x| x[..10].to_string())
+            .collect()
+    };
+    let mut seen = days(&html);
+    seen.extend(days(&frag));
+    assert!(seen.windows(2).all(|w| w[0] > w[1]), "{seen:?}");
+    // The merged view holds both people: page through it to the end.
+    let mut uri = "/t/all".to_string();
+    let (mut total, mut from_p1) = (0, 0);
+    loop {
+        let (_, _, body) = get(&app, &uri, uri != "/t/all").await;
+        let page = String::from_utf8(body).unwrap();
+        total += page.matches("class=\"item").count();
+        from_p1 += page.matches("2021-06-15").count();
+        match page.split("hx-get=\"").nth(1) {
+            Some(rest) => {
+                uri = format!("/{}", rest.split('"').next().unwrap().replace("&amp;", "&"))
+            }
+            None => break,
+        }
+    }
+    assert_eq!(total, 301 + 4, "merged view lost or duplicated items");
+    assert!(from_p1 > 0, "merged view has no item from p1");
     assert_eq!(get(&app, "/t/nobody", false).await.0, StatusCode::NOT_FOUND);
 }
 

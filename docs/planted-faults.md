@@ -4,8 +4,9 @@ REQ-FAULT-001: every check that verifies a safety or security requirement is
 shown to fail when the property it checks is broken. `scripts/planted_faults.py`
 plants each fault below (one exact snippet replaced in one file), runs the
 check, expects a non-zero exit and restores the file. It fails when a check
-passes with its fault in place, or when a snippet no longer matches (the list
-went stale). CI runs it on every pull request (`planted faults` job).
+passes with its fault in place, when a snippet no longer matches (the list
+went stale), or when the planted code does not compile: a test check counts as
+caught only when a test ran and reported `test result: FAILED`. CI runs it on every pull request (`planted faults` job).
 F11 runs without `nice`, because a test process that inherits nice 19 cannot
 tell whether the scan lowered its own priority; run the script from a shell
 at nice 0.
@@ -19,7 +20,7 @@ at nice 0.
 | F05 | REQ-SCAN-003 | unchanged files are reprocessed on every scan | `rescan_is_idempotent_and_tracks_changes` |
 | F06 | REQ-SCAN-003 | removed files are not marked missing | `rescan_is_idempotent_and_tracks_changes` |
 | F07 | REQ-THUMB-001 | temporary files of a killed run are kept | `interrupted_scan_resumes_to_the_same_index` |
-| F08 | REQ-CFG-002 | no overlap check before the data directory is created | `data_dir_overlapping_a_root_is_refused` |
+| F08 | REQ-CFG-002 | no overlap check on the lexical data directory path | `data_dir_overlapping_a_root_is_refused` |
 | F09 | REQ-CFG-002 | no overlap check on the resolved data directory | `data_dir_overlapping_a_root_is_refused` |
 | F10 | REQ-META-001 | dates in file names are ignored | `dates_and_positions_carry_their_source` |
 | F11 | REQ-SCAN-004 | the scan keeps nice 0 | `scan_lowers_its_priority` |
@@ -30,6 +31,8 @@ at nice 0.
 | F16 | REQ-WEB-002 | `<base href>` ignores the base path | `base_path_prefixes_everything` |
 | F17 | REQ-WEB-001 | a continuation page repeats the year and month headings | `timeline_groups_by_day_and_pages_with_htmx` |
 | F18 | REQ-WEB-005 | requests for any host are answered | `requests_for_other_hosts_are_refused` |
+| F19 | REQ-CFG-002 | a root inside the data directory is not checked (half the condition) | `data_dir_overlapping_a_root_is_refused` |
+| F20 | REQ-THUMB-001 | thumbnails that failed for lack of cache space are never retried | `failed_thumbnails_are_retried_and_counted` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the

@@ -141,7 +141,9 @@ pub fn fixture() -> Fixture {
     }
 }
 
+/// The deployment creates the data directory; tests do the same.
 pub fn config(fx: &Fixture, data: &Path) -> Config {
+    std::fs::create_dir_all(data).unwrap();
     Settings {
         roots: vec![
             ("p1".into(), fx.root1.clone()),
