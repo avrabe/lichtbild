@@ -312,3 +312,35 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-WEB-008
+
+  - id: DD-013
+    type: design-decision
+    title: OIDC code flow with PKCE via openidconnect, sessions in memory
+    status: implemented
+    release: v0.2.0
+    description: >
+      Login against the house identity provider with the openidconnect crate;
+      the deployment (smithy) creates the client and supplies its secret.
+    fields:
+      decision: >
+        openidconnect 4 (reqwest with rustls, no redirects followed, optional
+        extra CA bundle for a provider behind a private CA). Discovery on
+        first use; keys fetched once more if a token fails verification, in
+        case the provider rotated them. Pending logins (state, nonce, PKCE
+        verifier) and sessions are kept in memory: pending ones for 10
+        minutes, sessions for 30 days. The client secret comes from a file,
+        never an environment value. People and grants are in the deployment's
+        TOML file.
+      rationale: >
+        One process with no session store to run; a restart costs one silent
+        round trip to the provider. PKCE plus a confidential client and nonce
+        checks cover code interception and token replay.
+      alternatives: >
+        Authentication in the reverse proxy (forward auth), which would leave
+        lichtbild unaware of who is looking and unable to scope per person;
+        signed stateless session cookies (more key handling for no gain here).
+    links:
+      - type: satisfies
+        target: REQ-AUTH-001
+      - type: satisfies
+        target: REQ-AUTH-002

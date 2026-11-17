@@ -86,6 +86,12 @@ h1::after { content: ""; display: block; width: 36px; height: 2px; background: v
 .people a:hover { color: var(--shu); }
 .people .n { color: var(--ink-faint); font-variant-numeric: tabular-nums; font-size: 13px; }
 
+.signout button {
+  font: 500 13px/1 var(--sans); letter-spacing: .1em; color: var(--ink-soft);
+  background: none; border: 1px solid var(--line); border-radius: 999px; padding: 8px 16px; cursor: pointer;
+}
+.signout button:hover { color: var(--shu); border-color: var(--shu); }
+
 /* Timeline: year in large thin serif, month and day small and spaced. */
 h2.year {
   font: 300 46px/1 var(--serif); letter-spacing: .06em;

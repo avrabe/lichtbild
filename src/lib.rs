@@ -2,6 +2,7 @@
 //! server-rendered timeline. See docs/BRIEF.md and artifacts/ for the
 //! requirements and the hazards each module guards against.
 
+pub mod auth;
 pub mod config;
 pub mod datadir;
 pub mod index;

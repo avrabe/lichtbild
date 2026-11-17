@@ -56,6 +56,20 @@ pub struct Config {
     pub allowed_hosts: Vec<String>,
     /// GeoNames files for offline place names (REQ-PLACE-001).
     pub places: PlacesFiles,
+    /// Login through the house OIDC provider (REQ-AUTH-001); None keeps
+    /// operator mode (loopback only, no login).
+    pub oidc: Option<crate::auth::OidcSettings>,
+    pub people: Vec<crate::auth::Person>,
+}
+
+/// The OIDC block of the TOML file.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct OidcFile {
+    pub issuer: Option<String>,
+    pub client_id: Option<String>,
+    pub client_secret_file: Option<PathBuf>,
+    pub ca_file: Option<PathBuf>,
 }
 
 /// Paths of the GeoNames dumps; only `cities` is required to enable names.
@@ -95,6 +109,11 @@ struct FileConfig {
     allowed_hosts: Vec<String>,
     #[serde(default)]
     places: PlacesFiles,
+    public_url: Option<String>,
+    #[serde(default)]
+    oidc: OidcFile,
+    #[serde(default)]
+    people: Vec<crate::auth::Person>,
     #[serde(default)]
     roots: Vec<FileRoot>,
     #[serde(default)]
@@ -114,6 +133,9 @@ pub struct Settings {
     pub allow_remote_without_login: bool,
     pub allowed_hosts: Vec<String>,
     pub places: PlacesFiles,
+    pub public_url: Option<String>,
+    pub oidc: OidcFile,
+    pub people: Vec<crate::auth::Person>,
 }
 
 impl Settings {
@@ -162,6 +184,21 @@ impl Settings {
         if let Some(v) = num("LICHTBILD_THUMB_SIZE")? {
             s.limits.thumb_size = u32::try_from(v).context("LICHTBILD_THUMB_SIZE")?;
         }
+        if let Some(v) = get("LICHTBILD_PUBLIC_URL") {
+            s.public_url = Some(v);
+        }
+        if let Some(v) = get("LICHTBILD_OIDC_ISSUER") {
+            s.oidc.issuer = Some(v);
+        }
+        if let Some(v) = get("LICHTBILD_OIDC_CLIENT_ID") {
+            s.oidc.client_id = Some(v);
+        }
+        if let Some(v) = get("LICHTBILD_OIDC_CLIENT_SECRET_FILE") {
+            s.oidc.client_secret_file = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_OIDC_CA_FILE") {
+            s.oidc.ca_file = Some(PathBuf::from(v));
+        }
         if let Some(v) = get("LICHTBILD_PLACES") {
             s.places.cities = Some(PathBuf::from(v));
         }
@@ -198,6 +235,15 @@ impl Settings {
         }
         if f.places != PlacesFiles::default() {
             self.places = f.places;
+        }
+        self.public_url = f.public_url.or(self.public_url.take());
+        let o = &mut self.oidc;
+        o.issuer = f.oidc.issuer.or(o.issuer.take());
+        o.client_id = f.oidc.client_id.or(o.client_id.take());
+        o.client_secret_file = f.oidc.client_secret_file.or(o.client_secret_file.take());
+        o.ca_file = f.oidc.ca_file.or(o.ca_file.take());
+        if !f.people.is_empty() {
+            self.people = f.people;
         }
         self.scan_interval_hours = f.scan_interval_hours.or(self.scan_interval_hours);
         let l = &mut self.limits;
@@ -257,6 +303,46 @@ impl Settings {
         check_overlap(&roots, &data_dir)?;
 
         let base_path = parse_base_path(self.base_path.as_deref())?;
+        let oidc = match &self.oidc.issuer {
+            None => {
+                if !self.people.is_empty() {
+                    bail!("[[people]] is set but LICHTBILD_OIDC_ISSUER is not");
+                }
+                None
+            }
+            Some(issuer) => {
+                let public_url = self
+                    .public_url
+                    .clone()
+                    .context("LICHTBILD_OIDC_ISSUER needs LICHTBILD_PUBLIC_URL")?;
+                let public_url = public_url.trim_end_matches('/').to_string();
+                let path_ok = public_url
+                    .split_once("://")
+                    .map(|(_, rest)| rest.find('/').map_or("", |i| &rest[i..]))
+                    .is_some_and(|p| p == base_path);
+                if !path_ok {
+                    bail!("LICHTBILD_PUBLIC_URL must end with the base path {base_path:?}");
+                }
+                if self.people.is_empty() {
+                    bail!("login is configured but no [[people]] are");
+                }
+                Some(crate::auth::OidcSettings {
+                    issuer: issuer.clone(),
+                    client_id: self
+                        .oidc
+                        .client_id
+                        .clone()
+                        .context("LICHTBILD_OIDC_CLIENT_ID")?,
+                    client_secret_file: self
+                        .oidc
+                        .client_secret_file
+                        .clone()
+                        .context("LICHTBILD_OIDC_CLIENT_SECRET_FILE")?,
+                    ca_file: self.oidc.ca_file.clone(),
+                    public_url,
+                })
+            }
+        };
         let listen: SocketAddr = self
             .listen
             .as_deref()
@@ -280,6 +366,8 @@ impl Settings {
                 .map(|h| crate::web::host_name(h))
                 .collect(),
             places: self.places,
+            oidc,
+            people: self.people,
         })
     }
 }

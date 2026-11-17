@@ -391,11 +391,18 @@ artifacts:
   - id: REQ-AUTH-001
     type: requirement
     title: Login through the house OIDC provider, deny by default
-    status: draft
+    status: implemented
+    release: v0.2.0
     description: >
-      Every route except a health check requires a session from the
-      configured OIDC issuer. Routes are protected unless listed as public.
-      Until this lands, `serve` binds to localhost only by default.
+      With an OIDC issuer configured, every route except the health check,
+      the embedded static assets and the login routes needs a session from
+      the authorization code flow with PKCE; anything else is redirected to
+      the provider (htmx requests get 401 with HX-Redirect). The ID token's
+      signature, issuer, audience, expiry and nonce are verified; a callback
+      for an unknown or used state is refused; an identity that is not one
+      of the configured people gets 403 and no session. Session cookies are
+      random, HttpOnly, SameSite=Lax, and Secure behind https. Without an
+      issuer configured, serve stays on loopback only.
     fields:
       priority: must
       category: functional
@@ -405,12 +412,16 @@ artifacts:
 
   - id: REQ-AUTH-002
     type: requirement
-    title: Each person sees their own items; merged view and sharing are explicit
-    status: draft
+    title: Each person sees their own library; other libraries and the merged view only by grant
+    status: implemented
+    release: v0.2.0
     description: >
-      Identities from the OIDC provider map to source roots in the
-      configuration. Queries, thumbnails, originals and map clusters are
-      scoped to the viewer's own roots plus what was shared with them.
+      People map to source roots by OIDC subject or verified email. A person
+      sees their own library and those listed in their `sees` grant (owner
+      decision 2026-11-17: own only by default). Timelines, the viewer,
+      thumbnails, previews and originals are all checked against the viewer;
+      the merged view exists only for a person who may see more than one
+      library.
     fields:
       priority: must
       category: functional

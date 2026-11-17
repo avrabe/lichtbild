@@ -97,3 +97,21 @@ artifacts:
         target: REQ-WEB-008
       - type: satisfies
         target: REQ-PLACE-001
+
+  - id: FEAT-005
+    type: feature
+    title: Login and per-person libraries
+    status: implemented
+    release: v0.2.0
+    description: >
+      Step 3 of the brief, moved ahead of the map by the owner: nothing is
+      routed to the household before login exists.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A household member signs in with the house identity provider and sees only their own library unless granted more
+    links:
+      - type: satisfies
+        target: REQ-AUTH-001
+      - type: satisfies
+        target: REQ-AUTH-002
