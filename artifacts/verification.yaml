@@ -567,3 +567,19 @@ artifacts:
     links:
       - type: verifies
         target: REQ-AUTH-001
+
+  - id: VER-041
+    type: verification
+    title: The nav switcher is in every page header, links only
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "nav_switcher_is_in_every_page_header"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web nav_switcher_is_in_every_page_header"
+        - run: "cargo test --lib warte_refusal_cases_are_refused_here_too"
+        - run: "cargo test --lib every_configured_link_renders_and_nothing_else"
+    links:
+      - type: verifies
+        target: REQ-NAV-001

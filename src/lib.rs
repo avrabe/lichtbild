@@ -7,6 +7,7 @@ pub mod config;
 pub mod datadir;
 pub mod index;
 pub mod media;
+pub mod nav;
 pub mod places;
 pub mod scan;
 pub mod source;

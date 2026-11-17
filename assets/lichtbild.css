@@ -72,6 +72,12 @@ header .brand::before {
   transform: rotate(-3deg);
 }
 
+/* nav v1: home link and app switcher (LICHTBILD_NAV), as in haus. */
+nav.apps { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; font: 13px/1.4 var(--sans); letter-spacing: .06em; }
+nav.apps a { color: var(--ink-soft); text-decoration: none; }
+nav.apps a:hover { color: var(--shu); }
+nav.apps a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+
 main { max-width: 1400px; margin: 0 auto; padding: 8px 28px 96px; }
 h1 {
   font: 500 30px/1.2 var(--serif); letter-spacing: .08em;

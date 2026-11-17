@@ -344,3 +344,26 @@ artifacts:
         target: REQ-AUTH-001
       - type: satisfies
         target: REQ-AUTH-002
+
+  - id: DD-014
+    type: design-decision
+    title: The nav module is haus's, unchanged
+    status: implemented
+    release: v0.2.0
+    description: >
+      src/nav.rs is haus-core's nav.rs (avrabe/loriot-websocket-mcp at
+      d9bd323) with its tests, including warte's refusal table.
+    fields:
+      decision: >
+        Copy rather than rewrite, and keep the tests identical, so lichtbild
+        accepts and refuses exactly the files haus and warte do.
+      rationale: >
+        One contract, three apps: a second implementation would drift. The
+        warte binary on the development machine (1.6.20) predates the nav
+        topic, so haus's implementation and tests are the reference here.
+      alternatives: >
+        A shared crate for the house apps (worth it once a third Rust app
+        renders the nav).
+    links:
+      - type: satisfies
+        target: REQ-NAV-001
