@@ -25,6 +25,9 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_WORKERS    2
   LICHTBILD_SCAN_INTERVAL_HOURS  24              0 = scan only at start
   LICHTBILD_MAX_PIXELS / _MAX_FILE_MIB / _THUMB_CACHE_MIB / _THUMB_SIZE   limits
+  LICHTBILD_PUBLIC_URL https://host/prefix       external URL; needed with login
+  LICHTBILD_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET_FILE / _CA_FILE   login (OIDC)
+  people: [[people]] label, oidc_subject or oidc_email, sees = [..]  (TOML only)
   LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
   LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
   LICHTBILD_DATA_DIR must exist; lichtbild creates nothing at startup.
@@ -93,7 +96,9 @@ fn run_scan() -> Result<ExitCode> {
 fn run_serve() -> Result<ExitCode> {
     init_log();
     let cfg = Settings::from_env()?.resolve()?;
-    if !cfg.listen.ip().is_loopback() && !cfg.allow_remote_without_login {
+    // With login configured, lichtbild may listen beyond loopback (behind
+    // the reverse proxy); without it only on loopback unless overridden.
+    if !cfg.listen.ip().is_loopback() && cfg.oidc.is_none() && !cfg.allow_remote_without_login {
         bail!(
             "refusing to listen on {} without login (REQ-AUTH-001); use a loopback address behind the reverse proxy",
             cfg.listen
@@ -115,11 +120,27 @@ fn run_serve() -> Result<ExitCode> {
             Some(p)
         }
     };
+    let auth = match &cfg.oidc {
+        None => None,
+        Some(o) => {
+            let a = lichtbild::auth::Auth::new(
+                o.clone(),
+                cfg.people.clone(),
+                cfg.roots.iter().map(|r| r.label.clone()).collect(),
+            )?;
+            tracing::info!("login through {} for {} people", o.issuer, cfg.people.len());
+            Some(a)
+        }
+    };
     let idx = Arc::new(Index::open(&cfg.data_dir)?);
     spawn_scanner(cfg.clone(), idx.clone());
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let app = web::router(web::AppState::new(&cfg, idx).with_places(places));
+        let app = web::router(
+            web::AppState::new(&cfg, idx)
+                .with_places(places)
+                .with_auth(auth),
+        );
         let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
         tracing::info!("listening on {}{}", cfg.listen, cfg.base_path);
         axum::serve(listener, app)

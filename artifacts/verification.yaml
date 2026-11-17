@@ -411,3 +411,75 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MEDIA-002
+
+  - id: VER-030
+    type: verification
+    title: Every route needs a session except health, static and login
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "every_route_needs_a_session_except_health_static_and_login"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth every_route_needs_a_session_except_health_static_and_login"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-031
+    type: verification
+    title: Login gives a session scoped to the person; logout ends it
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "login_gives_a_session_scoped_to_the_person"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth login_gives_a_session_scoped_to_the_person"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+      - type: verifies
+        target: REQ-AUTH-002
+
+  - id: VER-032
+    type: verification
+    title: A granted person sees both libraries and the merged view
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_granted_person_sees_both_libraries_and_the_merged_view"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_granted_person_sees_both_libraries_and_the_merged_view"
+    links:
+      - type: verifies
+        target: REQ-AUTH-002
+
+  - id: VER-033
+    type: verification
+    title: Unknown identities, forged tokens and replayed callbacks get no session
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "bad_logins_get_no_session"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth bad_logins_get_no_session"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-034
+    type: verification
+    title: The target after login stays inside the app
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "next_after_login_stays_in_the_app"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth next_after_login_stays_in_the_app"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001

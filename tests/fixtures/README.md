@@ -10,3 +10,6 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
   towns ("Ostdorf", "Westdorf", "Bergheim") in a made-up country "ZZ /
   Testland", in the GeoNames dump format, near the made-up coordinates the
   EXIF fixture carries. No real place.
+- `test-oidc-rsa.pem`: an RSA key generated for these tests only. The mock
+  identity provider in `tests/auth.rs` signs ID tokens with it. It protects
+  nothing and is used nowhere else.

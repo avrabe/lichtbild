@@ -41,6 +41,11 @@ at nice 0.
 | F26 | REQ-WEB-008 | the info panel drops the camera and exposure | `viewer_info_panel_shows_date_place_and_camera` |
 | F28 | REQ-SCAN-002 | missing thumbnails are left out of the operator's problem list | `undecodable_heic_is_counted_by_format_and_listed` |
 | F29 | REQ-MEDIA-002 | the viewer shows a broken image for a HEIC without preview | `viewer_explains_an_undecodable_heic` |
+| F30 | REQ-AUTH-001 | every route is public | `every_route_needs_a_session_except_health_static_and_login` |
+| F31 | REQ-AUTH-002 | a person may see every library | `login_gives_a_session_scoped_to_the_person` |
+| F32 | REQ-AUTH-001 | ID token signatures are not checked | `bad_logins_get_no_session` |
+| F33 | REQ-AUTH-001 | the target after login may be another site | `next_after_login_stays_in_the_app` |
+| F34 | REQ-AUTH-002 | an unknown identity gets every library instead of 403 | `bad_logins_get_no_session` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

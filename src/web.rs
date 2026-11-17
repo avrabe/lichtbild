@@ -10,11 +10,13 @@ use axum::body::Body;
 use axum::extract::{Path as UrlPath, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{Html, IntoResponse, Response};
+use axum::response::{Html, IntoResponse, Redirect, Response};
 use axum::routing::get;
+use axum::Extension;
 use axum::Router;
 use serde::Deserialize;
 
+use crate::auth::Viewer;
 use crate::config::Config;
 use crate::index::{self, Index};
 use crate::media::DateSource;
@@ -39,6 +41,9 @@ pub struct AppState {
     /// Offline place names, when the deployment supplies GeoNames files.
     pub places: Option<Arc<crate::places::Places>>,
     pub max_file_bytes: u64,
+    /// Login through the house OIDC provider; None in operator mode
+    /// (loopback only, every library visible).
+    pub auth: Option<Arc<crate::auth::Auth>>,
 }
 
 impl AppState {
@@ -57,7 +62,13 @@ impl AppState {
             allowed_hosts: Arc::new(cfg.allowed_hosts.clone()),
             places: None,
             max_file_bytes: cfg.limits.max_file_bytes,
+            auth: None,
         }
+    }
+
+    pub fn with_auth(mut self, auth: Option<crate::auth::Auth>) -> Self {
+        self.auth = auth.map(Arc::new);
+        self
     }
 
     pub fn with_places(mut self, places: Option<crate::places::Places>) -> Self {
@@ -77,6 +88,9 @@ pub fn router(state: AppState) -> Router {
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
         .route("/static/{file}", get(static_file))
+        .route("/auth/login", get(auth_login))
+        .route("/auth/callback", get(auth_callback))
+        .route("/auth/logout", axum::routing::post(auth_logout))
         .route("/healthz", get(|| async { "ok" }));
     // With a base path, "/base", "/base/" and "/base/..." reach the app;
     // nothing else does.
@@ -88,7 +102,12 @@ pub fn router(state: AppState) -> Router {
             .nest(&base, app)
     };
     let hosts = state.allowed_hosts.clone();
+    let login_state = state.clone();
     app.with_state(state)
+        .layer(middleware::from_fn(move |req: Request, next: Next| {
+            let st = login_state.clone();
+            async move { require_login(&st, req, next).await }
+        }))
         .layer(middleware::from_fn(move |req: Request, next: Next| {
             let hosts = hosts.clone();
             async move { check_host(&hosts, req, next).await }
@@ -129,6 +148,184 @@ async fn check_host(allowed: &[String], req: Request, next: Next) -> Response {
     } else {
         (StatusCode::MISDIRECTED_REQUEST, "unknown host").into_response()
     }
+}
+
+/// REQ-AUTH-001: deny by default. Every route needs a session except the
+/// health check, the embedded static assets and the login routes. The
+/// request then carries the Viewer: the libraries this person may see.
+async fn require_login(st: &AppState, mut req: Request, next: Next) -> Response {
+    let Some(auth) = &st.auth else {
+        // Operator mode: no login configured, loopback only, all visible.
+        req.extensions_mut().insert(Viewer {
+            labels: st.labels.to_vec(),
+            name: None,
+        });
+        return next.run(req).await;
+    };
+    let path = req.uri().path();
+    let rel = path.strip_prefix(st.base_path.as_str()).unwrap_or(path);
+    let public = rel == "/healthz" || rel.starts_with("/static/") || rel.starts_with("/auth/");
+    if public {
+        return next.run(req).await;
+    }
+    if let Some(v) = session_cookie(req.headers()).and_then(|sid| auth.session(&sid)) {
+        req.extensions_mut().insert(v);
+        return next.run(req).await;
+    }
+    // Not signed in: browsers go to the provider, htmx swaps reload there.
+    let target = req
+        .uri()
+        .path_and_query()
+        .map(|pq| {
+            pq.as_str()
+                .strip_prefix(st.base_path.as_str())
+                .unwrap_or(pq.as_str())
+                .to_string()
+        })
+        .unwrap_or_default();
+    let next_q: String =
+        openidconnect::url::form_urlencoded::byte_serialize(target.as_bytes()).collect();
+    let login = format!("{}/auth/login?next={next_q}", st.base_path);
+    if req.headers().contains_key("hx-request") {
+        let mut r = StatusCode::UNAUTHORIZED.into_response();
+        if let Ok(v) = HeaderValue::from_str(&login) {
+            r.headers_mut().insert("hx-redirect", v);
+        }
+        return r;
+    }
+    if req.method() == axum::http::Method::GET {
+        return Redirect::to(&login).into_response();
+    }
+    StatusCode::UNAUTHORIZED.into_response()
+}
+
+fn session_cookie(h: &axum::http::HeaderMap) -> Option<String> {
+    h.get_all(header::COOKIE)
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .flat_map(|v| v.split(';'))
+        .filter_map(|kv| kv.trim().split_once('='))
+        .find(|(k, _)| *k == crate::auth::COOKIE)
+        .map(|(_, v)| v.to_string())
+}
+
+fn cookie_header(st: &AppState, value: &str, max_age: u64) -> String {
+    let path = if st.base_path.is_empty() {
+        "/"
+    } else {
+        st.base_path.as_str()
+    };
+    let secure = st.auth.as_ref().is_some_and(|a| a.secure_cookies());
+    format!(
+        "{}={value}; Path={path}; Max-Age={max_age}; HttpOnly; SameSite=Lax{}",
+        crate::auth::COOKIE,
+        if secure { "; Secure" } else { "" }
+    )
+}
+
+#[derive(Deserialize)]
+struct LoginQuery {
+    next: Option<String>,
+}
+
+async fn auth_login(State(st): State<AppState>, Query(q): Query<LoginQuery>) -> Response {
+    let Some(auth) = &st.auth else {
+        return Redirect::to(&format!("{}/", st.base_path)).into_response();
+    };
+    match auth.login_url(q.next.as_deref().unwrap_or("")).await {
+        Ok(url) => Redirect::to(&url).into_response(),
+        Err(e) => {
+            tracing::error!("login: {e:#}");
+            notice(
+                &st,
+                StatusCode::BAD_GATEWAY,
+                "Login is unavailable",
+                "The house login service could not be reached. Try again in a moment.",
+            )
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+}
+
+async fn auth_callback(State(st): State<AppState>, Query(q): Query<CallbackQuery>) -> Response {
+    use crate::auth::LoginError;
+    let Some(auth) = &st.auth else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let (Some(code), Some(state)) = (q.code, q.state) else {
+        return notice(
+            &st,
+            StatusCode::BAD_REQUEST,
+            "Login was not completed",
+            "<a href=\"auth/login\">Sign in again</a>",
+        );
+    };
+    match auth.callback(&code, &state).await {
+        Ok((sid, next)) => {
+            let mut r = Redirect::to(&format!("{}/{next}", st.base_path)).into_response();
+            if let Ok(v) = HeaderValue::from_str(&cookie_header(&st, &sid, 30 * 24 * 3600)) {
+                r.headers_mut().insert(header::SET_COOKIE, v);
+            }
+            r
+        }
+        Err(LoginError::UnknownState) => notice(
+            &st,
+            StatusCode::BAD_REQUEST,
+            "This login has expired",
+            "<a href=\"auth/login\">Sign in again</a>",
+        ),
+        Err(LoginError::NotAPerson) => notice(
+            &st,
+            StatusCode::FORBIDDEN,
+            "No library for this account",
+            "This account is signed in, but lichtbild has no photo library for it.",
+        ),
+        Err(LoginError::InvalidToken(e)) => {
+            tracing::error!("login: invalid ID token: {e}");
+            notice(
+                &st,
+                StatusCode::BAD_GATEWAY,
+                "Login failed",
+                "<a href=\"auth/login\">Try again</a>",
+            )
+        }
+        Err(LoginError::Provider(e)) => {
+            tracing::error!("login: provider: {e:#}");
+            notice(
+                &st,
+                StatusCode::BAD_GATEWAY,
+                "Login is unavailable",
+                "The house login service could not be reached. Try again in a moment.",
+            )
+        }
+    }
+}
+
+async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    if let (Some(auth), Some(sid)) = (&st.auth, session_cookie(&headers)) {
+        auth.logout(&sid);
+    }
+    let mut r = notice(
+        &st,
+        StatusCode::OK,
+        "Signed out",
+        "<a href=\"./\">Sign in again</a>",
+    );
+    if let Ok(v) = HeaderValue::from_str(&cookie_header(&st, "", 0)) {
+        r.headers_mut().insert(header::SET_COOKIE, v);
+    }
+    r
+}
+
+/// A small page for login outcomes; `html` is trusted markup from this file.
+fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Response {
+    let body = format!("<h1>{}</h1>\n<p>{html}</p>", esc(title));
+    (status, page(&st.base_path, title, &body)).into_response()
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -210,7 +407,18 @@ fn internal<E: std::fmt::Display>(e: E) -> Response {
     (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
 }
 
-async fn home(State(st): State<AppState>) -> Response {
+/// The libraries a timeline shows for this viewer: "all" is every library
+/// they may see (the merged view, only when that is more than one), a
+/// label only when they may see it.
+pub fn scope(viewer: &Viewer, who: &str) -> Option<Vec<String>> {
+    if who == "all" {
+        (viewer.labels.len() > 1).then(|| viewer.labels.clone())
+    } else {
+        viewer.may_see(who).then(|| vec![who.to_string()])
+    }
+}
+
+async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let idx = st.index.clone();
     let counts = match tokio::task::spawn_blocking(move || idx.counts()).await {
         Ok(Ok(c)) => c,
@@ -218,21 +426,27 @@ async fn home(State(st): State<AppState>) -> Response {
         Err(e) => return internal(e),
     };
     let mut body = String::from("<h1>Timelines</h1>\n<ul class=\"people\">\n");
-    for l in st.labels.iter() {
+    for l in viewer.labels.iter() {
         let n = counts.get(l).copied().unwrap_or(0);
         body += &format!(
             "<li><a href=\"t/{l}\">{l}</a> <span class=\"n\">{n}</span></li>\n",
             l = esc(l)
         );
     }
-    // The merged view counts the configured people only.
-    let total: u64 = st
+    // The merged view counts the libraries this person may see.
+    let total: u64 = viewer
         .labels
         .iter()
         .map(|l| counts.get(l).copied().unwrap_or(0))
         .sum();
-    body +=
-        &format!("<li><a href=\"t/all\">merged</a> <span class=\"n\">{total}</span></li>\n</ul>\n");
+    if viewer.labels.len() > 1 {
+        body +=
+            &format!("<li><a href=\"t/all\">merged</a> <span class=\"n\">{total}</span></li>\n");
+    }
+    body += "</ul>\n";
+    if st.auth.is_some() {
+        body += "<form class=\"signout\" method=\"post\" action=\"auth/logout\"><button type=\"submit\">Sign out</button></form>\n";
+    }
     page(&st.base_path, "lichtbild", &body).into_response()
 }
 
@@ -415,15 +629,12 @@ pub fn render_items(
 
 async fn timeline(
     State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
     UrlPath(who): UrlPath<String>,
     Query(cur): Query<Cursor>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    let labels: Vec<String> = if who == "all" {
-        st.labels.to_vec()
-    } else if st.labels.contains(&who) {
-        vec![who.clone()]
-    } else {
+    let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
     let from_bound = match cur.from.as_deref() {
@@ -628,13 +839,10 @@ pub fn photo_src(id: u64, rec: &index::Record) -> String {
 /// plain links.
 async fn viewer(
     State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
     UrlPath((who, id)): UrlPath<(String, u64)>,
 ) -> Response {
-    let labels: Vec<String> = if who == "all" {
-        st.labels.to_vec()
-    } else if st.labels.contains(&who) {
-        vec![who.clone()]
-    } else {
+    let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
     let idx = st.index.clone();
@@ -710,11 +918,15 @@ async fn viewer(
 }
 
 /// GET /preview/{id}: the JPEG preview of a HEIC original.
-async fn preview(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
+async fn preview(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+) -> Response {
     let dd = st.data_dir.clone();
     let idx = st.index.clone();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
-        let Some(rec) = idx.locate(id)? else {
+        let Some(rec) = idx.locate(id)?.filter(|r| viewer.may_see(&r.label)) else {
             return Ok(None);
         };
         if !rec.preview {
@@ -738,11 +950,15 @@ async fn preview(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Respo
     }
 }
 
-async fn thumb(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
+async fn thumb(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+) -> Response {
     let dd = st.data_dir.clone();
     let idx = st.index.clone();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
-        let Some(rec) = idx.locate(id)? else {
+        let Some(rec) = idx.locate(id)?.filter(|r| viewer.may_see(&r.label)) else {
             return Ok(None);
         };
         if rec.thumb != "ok" {
@@ -781,12 +997,16 @@ fn content_type(p: &std::path::Path) -> &'static str {
     }
 }
 
-async fn original(State(st): State<AppState>, UrlPath(id): UrlPath<u64>) -> Response {
+async fn original(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+) -> Response {
     let idx = st.index.clone();
     let roots = st.roots.clone();
     let res = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Option<(std::fs::File, &'static str)>> {
-            let Some(rec) = idx.locate(id)? else {
+            let Some(rec) = idx.locate(id)?.filter(|r| viewer.may_see(&r.label)) else {
                 return Ok(None);
             };
             let rel = index::rel_from_bytes(&rec.rel);
