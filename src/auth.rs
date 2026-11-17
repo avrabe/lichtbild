@@ -67,30 +67,46 @@ struct Pending {
     nonce: Nonce,
     next: String,
     created: Instant,
+    /// Random value also set as a cookie in the browser that started the
+    /// login; the callback must carry it (login CSRF).
+    binding: String,
 }
 
 const SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 3600);
 const PENDING_TTL: Duration = Duration::from_secs(10 * 60);
+/// Pending logins kept at most; the oldest go first (unauthenticated input).
+pub const PENDING_MAX: usize = 1000;
+/// Longest `next` kept; longer ones are dropped.
+pub const NEXT_MAX: usize = 512;
+/// After a failed discovery, fail fast for this long.
+const DISCOVERY_BACKOFF: Duration = Duration::from_secs(30);
 pub const COOKIE: &str = "lichtbild_session";
+/// The login-binding cookie, set by /auth/login, read by /auth/callback.
+pub const LOGIN_COOKIE: &str = "lichtbild_login";
 
 pub struct Auth {
     settings: OidcSettings,
     secret: String,
     http: openidconnect::reqwest::Client,
     metadata: tokio::sync::Mutex<Option<CoreProviderMetadata>>,
+    discovery_failed: Mutex<Option<Instant>>,
     pending: Mutex<HashMap<String, Pending>>,
     sessions: Mutex<HashMap<String, Session>>,
     people: Vec<Person>,
     roots: Vec<String>,
 }
 
-/// A `next` target after login: a path inside the app, never another site.
+/// A `next` target after login: a path inside the app, never another site
+/// and never out of the base path.
 pub fn safe_next(next: &str) -> String {
     let n = next.trim_start_matches('/');
-    let ok = !n.contains("://")
+    let path = n.split(['?', '#']).next().unwrap_or("");
+    let ok = n.len() <= NEXT_MAX
+        && !n.contains("://")
         && !n.starts_with('/')
         && !n.contains('\\')
-        && !n.contains("..")
+        && !n.contains('%')
+        && !path.split('/').any(|seg| seg == "." || seg == "..")
         && n.chars().all(|c| !c.is_control());
     if ok {
         n.to_string()
@@ -147,6 +163,7 @@ impl Auth {
             secret,
             http,
             metadata: tokio::sync::Mutex::new(None),
+            discovery_failed: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
             people,
@@ -162,15 +179,53 @@ impl Auth {
     async fn metadata(&self, refresh: bool) -> Result<CoreProviderMetadata> {
         let mut m = self.metadata.lock().await;
         if refresh || m.is_none() {
-            let md = CoreProviderMetadata::discover_async(
+            let failed = *self.discovery_failed.lock().expect("lock");
+            if failed.is_some_and(|t| t.elapsed() < DISCOVERY_BACKOFF) && !refresh {
+                bail!("OIDC discovery failed recently; not retrying yet");
+            }
+            let found = CoreProviderMetadata::discover_async(
                 IssuerUrl::new(self.settings.issuer.clone())?,
                 &self.http,
             )
             .await
-            .context("OIDC discovery")?;
-            *m = Some(md);
+            .context("OIDC discovery")
+            .and_then(|md| self.check_endpoints(&md).map(|()| md));
+            match found {
+                Ok(md) => {
+                    *self.discovery_failed.lock().expect("lock") = None;
+                    *m = Some(md);
+                }
+                Err(e) => {
+                    *self.discovery_failed.lock().expect("lock") = Some(Instant::now());
+                    return Err(e);
+                }
+            }
         }
         Ok(m.clone().expect("set above"))
+    }
+
+    /// The endpoints lichtbild itself calls (token, keys) must be on the
+    /// issuer's host: the issuer is the only outbound destination (SSC-003).
+    fn check_endpoints(&self, md: &CoreProviderMetadata) -> Result<()> {
+        let origin = |u: &openidconnect::url::Url| {
+            (
+                u.scheme().to_string(),
+                u.host_str().map(str::to_string),
+                u.port_or_known_default(),
+            )
+        };
+        let issuer = openidconnect::url::Url::parse(&self.settings.issuer)?;
+        let want = origin(&issuer);
+        let mut urls = vec![md.jwks_uri().url().clone()];
+        if let Some(t) = md.token_endpoint() {
+            urls.push(t.url().clone());
+        }
+        for u in urls {
+            if origin(&u) != want {
+                bail!("OIDC endpoint {} is not on the issuer's host", u);
+            }
+        }
+        Ok(())
     }
 
     fn client(
@@ -197,8 +252,9 @@ impl Auth {
         ))?))
     }
 
-    /// Start a login: the provider URL to redirect the browser to.
-    pub async fn login_url(&self, next: &str) -> Result<String> {
+    /// Start a login: the provider URL to redirect the browser to, and the
+    /// binding value to set as the LOGIN_COOKIE in this browser.
+    pub async fn login_url(&self, next: &str) -> Result<(String, String)> {
         let client = self.client(self.metadata(false).await?)?;
         let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
         let (url, state, nonce) = client
@@ -211,8 +267,19 @@ impl Auth {
             .add_scope(Scope::new("profile".into()))
             .set_pkce_challenge(challenge)
             .url();
+        let binding = CsrfToken::new_random_len(32).secret().clone();
         let mut p = self.pending.lock().expect("pending lock");
         p.retain(|_, v| v.created.elapsed() < PENDING_TTL);
+        while p.len() >= PENDING_MAX {
+            let oldest = p
+                .iter()
+                .min_by_key(|(_, v)| v.created)
+                .map(|(k, _)| k.clone());
+            match oldest {
+                Some(k) => p.remove(&k),
+                None => break,
+            };
+        }
         p.insert(
             state.secret().clone(),
             Pending {
@@ -220,21 +287,40 @@ impl Auth {
                 nonce,
                 next: safe_next(next),
                 created: Instant::now(),
+                binding: binding.clone(),
             },
         );
-        Ok(url.to_string())
+        Ok((url.to_string(), binding))
+    }
+
+    /// Pending logins held now (tests of the cap).
+    #[doc(hidden)]
+    pub fn pending_len(&self) -> usize {
+        self.pending.lock().expect("pending lock").len()
     }
 
     /// Finish a login: exchange the code, verify the ID token, map the
     /// identity to a person. Returns the session id and where to go next.
-    pub async fn callback(&self, code: &str, state: &str) -> Result<(String, String), LoginError> {
-        let pending = self
-            .pending
-            .lock()
-            .expect("pending lock")
-            .remove(state)
-            .filter(|p| p.created.elapsed() < PENDING_TTL)
-            .ok_or(LoginError::UnknownState)?;
+    pub async fn callback(
+        &self,
+        code: &str,
+        state: &str,
+        binding: Option<&str>,
+    ) -> Result<(String, String), LoginError> {
+        let pending = {
+            let mut p = self.pending.lock().expect("pending lock");
+            // The browser must be the one that started this login; check
+            // before consuming, so a foreign callback cannot burn it.
+            let bound = p.get(state).is_some_and(|v| {
+                binding.is_some_and(|b| constant_time_eq(b.as_bytes(), v.binding.as_bytes()))
+            });
+            if !bound {
+                return Err(LoginError::UnknownState);
+            }
+            p.remove(state)
+                .filter(|v| v.created.elapsed() < PENDING_TTL)
+                .ok_or(LoginError::UnknownState)?
+        };
         let md = self.metadata(false).await.map_err(LoginError::Provider)?;
         let client = self.client(md).map_err(LoginError::Provider)?;
         let token = client
@@ -285,7 +371,9 @@ impl Auth {
         Ok((sid, pending.next))
     }
 
-    /// The person this identity is, by subject first, then verified email.
+    /// The person this identity is: by subject; by verified email only for
+    /// people configured without a subject, so an email claim cannot stand
+    /// in for a person bound to a subject.
     pub fn viewer_for(&self, subject: &str, email: Option<&str>) -> Option<Viewer> {
         let p = self
             .people
@@ -294,9 +382,10 @@ impl Auth {
             .or_else(|| {
                 let email = email?;
                 self.people.iter().find(|p| {
-                    p.oidc_email
-                        .as_deref()
-                        .is_some_and(|e| e.eq_ignore_ascii_case(email))
+                    p.oidc_subject.is_none()
+                        && p.oidc_email
+                            .as_deref()
+                            .is_some_and(|e| e.eq_ignore_ascii_case(email))
                 })
             })?;
         let mut labels = vec![p.label.clone()];
@@ -321,6 +410,10 @@ impl Auth {
     pub fn logout(&self, sid: &str) {
         self.sessions.lock().expect("sessions lock").remove(sid);
     }
+}
+
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 #[derive(Debug)]
@@ -349,5 +442,9 @@ mod tests {
         assert_eq!(safe_next("/\\evil.example"), "");
         assert_eq!(safe_next("t/../../x"), "");
         assert_eq!(safe_next("t/p1\r\nSet-Cookie: x"), "");
+        assert_eq!(safe_next("%2e%2e/other-app/"), "");
+        assert_eq!(safe_next("t/./p1"), "");
+        assert_eq!(safe_next(&"a".repeat(NEXT_MAX + 1)), "");
+        assert_eq!(safe_next("v/p1/3?x=a.b"), "v/p1/3?x=a.b");
     }
 }

@@ -200,13 +200,28 @@ async fn require_login(st: &AppState, mut req: Request, next: Next) -> Response 
 }
 
 fn session_cookie(h: &axum::http::HeaderMap) -> Option<String> {
+    cookie_value(h, crate::auth::COOKIE)
+}
+
+fn cookie_value(h: &axum::http::HeaderMap, name: &str) -> Option<String> {
     h.get_all(header::COOKIE)
         .iter()
         .filter_map(|v| v.to_str().ok())
         .flat_map(|v| v.split(';'))
         .filter_map(|kv| kv.trim().split_once('='))
-        .find(|(k, _)| *k == crate::auth::COOKIE)
+        .find(|(k, _)| *k == name)
         .map(|(_, v)| v.to_string())
+}
+
+/// The login-binding cookie, scoped to the login routes, 10 minutes.
+fn login_cookie_header(st: &AppState, value: &str, max_age: u64) -> String {
+    let secure = st.auth.as_ref().is_some_and(|a| a.secure_cookies());
+    format!(
+        "{}={value}; Path={}/auth; Max-Age={max_age}; HttpOnly; SameSite=Lax{}",
+        crate::auth::LOGIN_COOKIE,
+        st.base_path,
+        if secure { "; Secure" } else { "" }
+    )
 }
 
 fn cookie_header(st: &AppState, value: &str, max_age: u64) -> String {
@@ -233,7 +248,13 @@ async fn auth_login(State(st): State<AppState>, Query(q): Query<LoginQuery>) -> 
         return Redirect::to(&format!("{}/", st.base_path)).into_response();
     };
     match auth.login_url(q.next.as_deref().unwrap_or("")).await {
-        Ok(url) => Redirect::to(&url).into_response(),
+        Ok((url, binding)) => {
+            let mut r = Redirect::to(&url).into_response();
+            if let Ok(v) = HeaderValue::from_str(&login_cookie_header(&st, &binding, 600)) {
+                r.headers_mut().insert(header::SET_COOKIE, v);
+            }
+            r
+        }
         Err(e) => {
             tracing::error!("login: {e:#}");
             notice(
@@ -252,7 +273,11 @@ struct CallbackQuery {
     state: Option<String>,
 }
 
-async fn auth_callback(State(st): State<AppState>, Query(q): Query<CallbackQuery>) -> Response {
+async fn auth_callback(
+    State(st): State<AppState>,
+    headers: axum::http::HeaderMap,
+    Query(q): Query<CallbackQuery>,
+) -> Response {
     use crate::auth::LoginError;
     let Some(auth) = &st.auth else {
         return StatusCode::NOT_FOUND.into_response();
@@ -265,11 +290,17 @@ async fn auth_callback(State(st): State<AppState>, Query(q): Query<CallbackQuery
             "<a href=\"auth/login\">Sign in again</a>",
         );
     };
-    match auth.callback(&code, &state).await {
+    let binding = cookie_value(&headers, crate::auth::LOGIN_COOKIE);
+    match auth.callback(&code, &state, binding.as_deref()).await {
         Ok((sid, next)) => {
             let mut r = Redirect::to(&format!("{}/{next}", st.base_path)).into_response();
-            if let Ok(v) = HeaderValue::from_str(&cookie_header(&st, &sid, 30 * 24 * 3600)) {
-                r.headers_mut().insert(header::SET_COOKIE, v);
+            for c in [
+                cookie_header(&st, &sid, 30 * 24 * 3600),
+                login_cookie_header(&st, "", 0),
+            ] {
+                if let Ok(v) = HeaderValue::from_str(&c) {
+                    r.headers_mut().append(header::SET_COOKIE, v);
+                }
             }
             r
         }
@@ -307,6 +338,12 @@ async fn auth_callback(State(st): State<AppState>, Query(q): Query<CallbackQuery
 }
 
 async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+    // A sign-out form on another site must not sign anyone out: browsers
+    // label such requests cross-site.
+    let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    if site.is_some_and(|s| s != "same-origin" && s != "none") {
+        return StatusCode::FORBIDDEN.into_response();
+    }
     if let (Some(auth), Some(sid)) = (&st.auth, session_cookie(&headers)) {
         auth.logout(&sid);
     }

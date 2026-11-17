@@ -46,6 +46,12 @@ at nice 0.
 | F32 | REQ-AUTH-001 | ID token signatures are not checked | `bad_logins_get_no_session` |
 | F33 | REQ-AUTH-001 | the target after login may be another site | `next_after_login_stays_in_the_app` |
 | F34 | REQ-AUTH-002 | an unknown identity gets every library instead of 403 | `bad_logins_get_no_session` |
+| F35 | REQ-AUTH-001 | a callback is accepted without the browser's login binding (login CSRF) | `a_callback_from_another_browser_is_refused` |
+| F36 | REQ-AUTH-001 | pending logins are not capped | `pending_logins_are_capped_and_long_next_is_dropped` |
+| F37 | REQ-AUTH-002 | a verified email signs in as a person bound to a subject | `email_does_not_override_a_configured_subject` |
+| F38 | REQ-AUTH-001 | a cross-site form signs people out | `a_cross_site_logout_is_refused` |
+| F39 | REQ-AUTH-001 | a token endpoint off the issuer's host is used | `endpoints_off_the_issuer_host_are_refused` |
+| F40 | REQ-AUTH-001 | an encoded `..` in `next` leaves the base path | `next_after_login_stays_in_the_app` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

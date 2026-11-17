@@ -483,3 +483,87 @@ artifacts:
     links:
       - type: verifies
         target: REQ-AUTH-001
+
+  - id: VER-035
+    type: verification
+    title: A callback from another browser is refused (login CSRF)
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_callback_from_another_browser_is_refused"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_callback_from_another_browser_is_refused"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-036
+    type: verification
+    title: A foreign callback does not consume the real login
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_foreign_callback_does_not_burn_the_real_login"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_foreign_callback_does_not_burn_the_real_login"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-037
+    type: verification
+    title: Pending logins are capped and an over-long next is dropped
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "pending_logins_are_capped_and_long_next_is_dropped"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth pending_logins_are_capped_and_long_next_is_dropped"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-038
+    type: verification
+    title: An email claim does not sign in as a person bound to a subject
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "email_does_not_override_a_configured_subject"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth email_does_not_override_a_configured_subject"
+    links:
+      - type: verifies
+        target: REQ-AUTH-002
+
+  - id: VER-039
+    type: verification
+    title: A cross-site logout is refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_cross_site_logout_is_refused"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_cross_site_logout_is_refused"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
+  - id: VER-040
+    type: verification
+    title: Provider endpoints off the issuer's host are refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "endpoints_off_the_issuer_host_are_refused"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth endpoints_off_the_issuer_host_are_refused"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
