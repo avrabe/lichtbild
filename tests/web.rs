@@ -801,3 +801,67 @@ async fn viewer_explains_an_undecodable_heic() {
         "a broken image instead of the note"
     );
 }
+
+// rivet: verifies REQ-NAV-001
+#[tokio::test]
+async fn nav_switcher_is_in_every_page_header() {
+    let fx = fixture();
+    let nav = fx.data.with_file_name("nav.json");
+    std::fs::write(
+        &nav,
+        r#"{"version": 1, "home": {"name": "home", "url": "/"},
+            "apps": [{"id": "lichtbild", "name": "lichtbild", "url": "/lichtbild/", "desc": "photos"},
+                     {"id": "other", "name": "other app", "url": "/other/"},
+                     {"id": "login", "name": "login", "url": "https://login.example.test/"}]}"#,
+    )
+    .unwrap();
+    let mut cfg = config(&fx, &fx.data);
+    cfg.nav_html = lichtbild::config::nav_html(Some(&nav), Some("lichtbild")).unwrap();
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    scan::run(&cfg, &idx, &Options::default()).unwrap();
+    let app = app(&cfg, &idx);
+    let id = idx.all().unwrap()[0].0;
+    let label = idx.all().unwrap()[0].1.label.clone();
+    for uri in ["/".to_string(), "/t/p1".into(), format!("/v/{label}/{id}")] {
+        let (_, _, body) = get(&app, &uri, false).await;
+        let page = String::from_utf8(body).unwrap();
+        let header = page
+            .split("<header>")
+            .nth(1)
+            .unwrap()
+            .split("</header>")
+            .next()
+            .unwrap();
+        assert!(
+            header.contains(r#"<nav class="apps"><a class="home" href="/">← home</a>"#),
+            "{uri}: {header}"
+        );
+        assert!(
+            header.contains(
+                r#"<a href="/lichtbild/" aria-current="page" title="photos">lichtbild</a>"#
+            ),
+            "{uri}"
+        );
+        assert!(header.contains(r#"<a href="/other/">other app</a>"#));
+        // Links to other house apps are links, never resources the page loads.
+        assert!(!header.contains("src="), "{uri}");
+        assert_eq!(header.matches("href=\"https://").count(), 1);
+    }
+    // Both settings or neither; a bad file names the field.
+    assert!(lichtbild::config::nav_html(Some(&nav), None).is_err());
+    assert!(lichtbild::config::nav_html(None, Some("lichtbild")).is_err());
+    assert!(lichtbild::config::nav_html(None, None).unwrap().is_empty());
+    let e = lichtbild::config::nav_html(Some(&nav), Some("photos"))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("self"), "{e}");
+    std::fs::write(
+        &nav,
+        r#"{"version": 2, "home": {"name": "h", "url": "/"}, "apps": []}"#,
+    )
+    .unwrap();
+    let e = lichtbild::config::nav_html(Some(&nav), Some("lichtbild"))
+        .unwrap_err()
+        .to_string();
+    assert!(e.contains("version"), "{e}");
+}

@@ -44,6 +44,8 @@ pub struct AppState {
     /// Login through the house OIDC provider; None in operator mode
     /// (loopback only, every library visible).
     pub auth: Option<Arc<crate::auth::Auth>>,
+    /// The nav v1 switcher's HTML, rendered in every page's header.
+    pub nav_html: Arc<String>,
 }
 
 impl AppState {
@@ -63,6 +65,7 @@ impl AppState {
             places: None,
             max_file_bytes: cfg.limits.max_file_bytes,
             auth: None,
+            nav_html: Arc::new(cfg.nav_html.clone()),
         }
     }
 
@@ -362,7 +365,7 @@ async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap)
 /// A small page for login outcomes; `html` is trusted markup from this file.
 fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Response {
     let body = format!("<h1>{}</h1>\n<p>{html}</p>", esc(title));
-    (status, page(&st.base_path, title, &body)).into_response()
+    (status, page_for(st, title, &body)).into_response()
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -411,7 +414,12 @@ pub fn asset_version() -> &'static str {
     })
 }
 
-fn page(base: &str, title: &str, body: &str) -> Html<String> {
+/// A page with this app's header: the name and the nav switcher.
+fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
+    page(&st.base_path, title, body, &st.nav_html)
+}
+
+fn page(base: &str, title: &str, body: &str, nav: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -426,7 +434,7 @@ fn page(base: &str, title: &str, body: &str) -> Html<String> {
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a></header>
+<header><a href="./" class="brand">lichtbild</a>{nav}</header>
 <main>
 {body}
 </main>
@@ -484,7 +492,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     if st.auth.is_some() {
         body += "<form class=\"signout\" method=\"post\" action=\"auth/logout\"><button type=\"submit\">Sign out</button></form>\n";
     }
-    page(&st.base_path, "lichtbild", &body).into_response()
+    page_for(&st, "lichtbild", &body).into_response()
 }
 
 #[derive(Deserialize)]
@@ -759,7 +767,7 @@ async fn timeline(
             ""
         }
     );
-    page(&st.base_path, &title, &body).into_response()
+    page_for(&st, &title, &body).into_response()
 }
 
 /// A photo, its (newer, older) neighbours, the URLs to prefetch for them,
@@ -951,7 +959,7 @@ async fn viewer(
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
-    page(&st.base_path, "lichtbild", &body).into_response()
+    page_for(&st, "lichtbild", &body).into_response()
 }
 
 /// GET /preview/{id}: the JPEG preview of a HEIC original.

@@ -278,13 +278,16 @@ artifacts:
 
   - id: REQ-WEB-003
     type: requirement
-    title: Pages carry a same-origin Content-Security-Policy and no outside URL
+    title: Pages load nothing from another host
     status: implemented
     release: v0.1.0
     description: >
       Every HTML response carries a Content-Security-Policy whose sources are
-      'self' only. A test renders each page and embedded asset and fails on
-      any absolute http(s) URL to another host.
+      'self' only, and pages use no inline style or script. A test renders
+      each page and embedded asset and fails on any absolute http(s) URL to
+      another host. The one exception is the operator's nav file,
+      whose entries may link to other house apps: they are rendered only as
+      links a person follows, never as resources the page loads.
     fields:
       priority: must
       category: constraint
@@ -432,10 +435,14 @@ artifacts:
   - id: REQ-NAV-001
     type: requirement
     title: Render the shared nav v1 app switcher
-    status: draft
+    status: implemented
+    release: v0.2.0
     description: >
-      lichtbild reads the shared nav v1 file the way haus and warte do
-      (contract in `warte docs nav`) and renders the app switcher.
+      With LICHTBILD_NAV (the nav v1 file) and LICHTBILD_NAV_SELF (this app's
+      id) set, every page's header shows the home link and the app switcher,
+      this app marked as current, exactly as haus and warte render it
+      (contract: warte docs nav, since warte v1.6.25). Both settings or
+      neither; a file that breaks the contract stops startup naming the field.
     fields:
       priority: should
       category: interface

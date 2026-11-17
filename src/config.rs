@@ -60,6 +60,8 @@ pub struct Config {
     /// operator mode (loopback only, no login).
     pub oidc: Option<crate::auth::OidcSettings>,
     pub people: Vec<crate::auth::Person>,
+    /// The nav v1 switcher's HTML (REQ-NAV-001); empty when not configured.
+    pub nav_html: String,
 }
 
 /// The OIDC block of the TOML file.
@@ -136,6 +138,9 @@ pub struct Settings {
     pub public_url: Option<String>,
     pub oidc: OidcFile,
     pub people: Vec<crate::auth::Person>,
+    /// LICHTBILD_NAV (the nav v1 file) and LICHTBILD_NAV_SELF (this app's id).
+    pub nav_file: Option<PathBuf>,
+    pub nav_self: Option<String>,
 }
 
 impl Settings {
@@ -183,6 +188,12 @@ impl Settings {
         }
         if let Some(v) = num("LICHTBILD_THUMB_SIZE")? {
             s.limits.thumb_size = u32::try_from(v).context("LICHTBILD_THUMB_SIZE")?;
+        }
+        if let Some(v) = get("LICHTBILD_NAV") {
+            s.nav_file = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_NAV_SELF") {
+            s.nav_self = Some(v);
         }
         if let Some(v) = get("LICHTBILD_PUBLIC_URL") {
             s.public_url = Some(v);
@@ -368,7 +379,25 @@ impl Settings {
             places: self.places,
             oidc,
             people: self.people,
+            nav_html: nav_html(self.nav_file.as_deref(), self.nav_self.as_deref())?,
         })
+    }
+}
+
+/// The nav switcher, as haus does it: both settings or neither; a file that
+/// breaks the contract stops startup with the field named.
+pub fn nav_html(file: Option<&Path>, me: Option<&str>) -> Result<String> {
+    match (file, me.filter(|s| !s.is_empty())) {
+        (None, None) => Ok(String::new()),
+        (Some(_), None) => bail!("LICHTBILD_NAV is set but LICHTBILD_NAV_SELF is not"),
+        (None, Some(_)) => bail!("LICHTBILD_NAV_SELF is set but LICHTBILD_NAV is not"),
+        (Some(f), Some(me)) => {
+            let json = std::fs::read_to_string(f)
+                .with_context(|| format!("LICHTBILD_NAV {}", f.display()))?;
+            let nav =
+                crate::nav::parse(&json, me).map_err(|e| anyhow::anyhow!("LICHTBILD_NAV: {e}"))?;
+            Ok(crate::nav::render(&nav, me, crate::web::esc))
+        }
     }
 }
 

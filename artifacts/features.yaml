@@ -115,3 +115,5 @@ artifacts:
         target: REQ-AUTH-001
       - type: satisfies
         target: REQ-AUTH-002
+      - type: satisfies
+        target: REQ-NAV-001

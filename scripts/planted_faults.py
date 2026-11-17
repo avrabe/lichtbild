@@ -183,6 +183,10 @@ FAULTS = [
      "&& !n.contains('%')",
      "",
      ["test", "--test", "auth", "next_after_login_stays_in_the_app"]),
+    ("F41", "REQ-NAV-001", "src/web.rs",
+     "class=\"brand\">lichtbild</a>{nav}</header>",
+     "class=\"brand\">lichtbild</a></header>",
+     ["test", "--test", "web", "nav_switcher_is_in_every_page_header"]),
 ]
 
 
