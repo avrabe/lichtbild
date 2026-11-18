@@ -919,3 +919,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MEDIA-004
+
+  - id: VER-066
+    type: verification
+    title: Every page behind login shows the running version
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "pages_show_the_running_version"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web pages_show_the_running_version"
+    links:
+      - type: verifies
+        target: REQ-WEB-001
+

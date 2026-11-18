@@ -846,3 +846,21 @@ async fn nav_switcher_is_in_every_page_header() {
         .to_string();
     assert!(e.contains("version"), "{e}");
 }
+
+// Every page behind login says which lichtbild build serves it.
+// rivet: verifies REQ-WEB-001
+#[tokio::test]
+async fn pages_show_the_running_version() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let footer = format!(
+        "<footer class=\"version\">lichtbild {}</footer>",
+        lichtbild::VERSION
+    );
+    for uri in ["/", "/t/p1", "/search?q=x"] {
+        let (s, _, body) = get(&app, uri, false).await;
+        let body = String::from_utf8(body).unwrap();
+        assert_eq!(s, StatusCode::OK, "{uri}");
+        assert!(body.contains(&footer), "{uri}: {body}");
+    }
+}

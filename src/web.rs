@@ -374,9 +374,14 @@ async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap)
 }
 
 /// A small page for login outcomes; `html` is trusted markup from this file.
+/// It is shown before or without a session, so it carries no version.
 fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Response {
     let body = format!("<h1>{}</h1>\n<p>{html}</p>", esc(title));
-    (status, page_for(st, title, &body)).into_response()
+    (
+        status,
+        page(&st.base_path, title, &body, &st.nav_html, "", ""),
+    )
+        .into_response()
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -426,17 +431,41 @@ pub fn asset_version() -> &'static str {
     })
 }
 
+/// The footer of pages behind login: which lichtbild build serves them, so
+/// the household can tell what is running. Pages without a session do not
+/// show it.
+fn version_footer() -> String {
+    format!(
+        "<footer class=\"version\">lichtbild {}</footer>",
+        esc(crate::VERSION)
+    )
+}
+
 /// A page with this app's header: the name and the nav switcher.
 fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
-    page(&st.base_path, title, body, &st.nav_html, "")
+    page(
+        &st.base_path,
+        title,
+        body,
+        &st.nav_html,
+        "",
+        &version_footer(),
+    )
 }
 
 /// A page with extra same-origin stylesheets or scripts in its head (the map).
 pub(crate) fn page_with_head(st: &AppState, title: &str, head: &str, body: &str) -> Html<String> {
-    page(&st.base_path, title, body, &st.nav_html, head)
+    page(
+        &st.base_path,
+        title,
+        body,
+        &st.nav_html,
+        head,
+        &version_footer(),
+    )
 }
 
-fn page(base: &str, title: &str, body: &str, nav: &str, head: &str) -> Html<String> {
+fn page(base: &str, title: &str, body: &str, nav: &str, head: &str, footer: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -455,6 +484,7 @@ fn page(base: &str, title: &str, body: &str, nav: &str, head: &str) -> Html<Stri
 <main>
 {body}
 </main>
+{footer}
 </body>
 </html>
 "#,

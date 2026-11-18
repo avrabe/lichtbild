@@ -283,6 +283,14 @@ FAULTS = [
      "let threshold = (floor + 12.0).max(-45.0);",
      "let threshold = f32::NEG_INFINITY.max(floor - 1000.0);",
      ["test", "--lib", "silence_is_not_voiced"]),
+    ("F66", "REQ-WEB-001", "src/web.rs",
+     "        \"\",\n        &version_footer(),",
+     "        \"\",\n        \"\",",
+     ["test", "--test", "web", "pages_show_the_running_version"]),
+    ("F67", "REQ-AUTH-001", "src/web.rs",
+     "        page(&st.base_path, title, &body, &st.nav_html, \"\", \"\"),",
+     "        page_for(st, title, &body),",
+     ["test", "--test", "auth", "bad_logins_get_no_session"]),
 ]
 
 

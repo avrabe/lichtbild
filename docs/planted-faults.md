@@ -77,6 +77,8 @@ at nice 0.
 | F63 | REQ-MEDIA-004 | a model file with an unknown hash is accepted | `an_unpinned_model_is_refused` |
 | F64 | REQ-SEARCH-001 | a spoken hit opens the video at the start instead of at its moment | `spoken_words_are_found_in_scope_and_open_the_video_there` |
 | F65 | REQ-MEDIA-004 | silence counts as voiced | `silence_is_not_voiced` |
+| F66 | REQ-WEB-001 | pages behind login drop the version footer | `pages_show_the_running_version` |
+| F67 | REQ-AUTH-001 | the login notice pages show the version to anyone | `bad_logins_get_no_session` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
