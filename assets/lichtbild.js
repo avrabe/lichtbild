@@ -227,3 +227,20 @@
   img.addEventListener("dragstart", function (e) { e.preventDefault(); });
 })();
 
+// A thumbnail that fails to load because the session ended (the server
+// restarted for an upgrade) is a redirect to the login: reload the page,
+// which goes through the login, instead of showing empty tiles.
+(function () {
+  "use strict";
+  var checked = false;
+  document.addEventListener("error", function (e) {
+    var img = e.target;
+    if (checked || !img || img.tagName !== "IMG" || !img.closest(".item, .mapstrip, .result")) return;
+    checked = true;
+    fetch(img.src, { redirect: "manual", credentials: "same-origin" }).then(function (r) {
+      if (r.type === "opaqueredirect" || r.status === 401) window.location.reload();
+      else checked = false;
+    }, function () { checked = false; });
+  }, true);
+})();
+

@@ -260,9 +260,9 @@ FAULTS = [
      "include_str!(\"../assets/pmtiles-4.5.0/pmtiles.js\")",
      ["test", "--test", "map", "vendored_map_assets_match_their_pinned_sha256"]),
     ("F60", "REQ-MEDIA-004", "src/stt/whisper.rs",
-     "if looping(&tokens) {",
-     "if false && looping(&tokens) {",
-     ["test", "--test", "transcribe", "tone_and_silence_are_no_speech"]),
+     "tail.chunks(p).all(|c| c == &tail[..p])",
+     "tail.chunks(p).all(|c| c == &tail[..p]) && p > 8",
+     ["test", "--lib", "token_loops_are_seen"]),
     ("F61", "REQ-SEARCH-001", "src/web.rs",
      "None => \"all\".to_string(),\n    };\n    let Some(labels) = scope(&viewer, &who) else {",
      "None => \"all\".to_string(),\n    };\n    let Some(labels) = Some(viewer.labels.clone()) else {",
@@ -291,6 +291,10 @@ FAULTS = [
      "        page(&st.base_path, title, &body, &st.nav_html, \"\", \"\"),",
      "        page_for(st, title, &body),",
      ["test", "--test", "auth", "bad_logins_get_no_session"]),
+    ("F73", "REQ-WEB-001", "src/web.rs",
+     "if html && !h.contains_key(header::CACHE_CONTROL) {",
+     "if false && html && !h.contains_key(header::CACHE_CONTROL) {",
+     ["test", "--test", "web", "pages_show_the_running_version"]),
 ]
 
 

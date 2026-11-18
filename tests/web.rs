@@ -858,11 +858,19 @@ async fn pages_show_the_running_version() {
         lichtbild::VERSION
     );
     for uri in ["/", "/t/p1", "/search?q=x"] {
-        let (s, _, body) = get(&app, uri, false).await;
+        let (s, h, body) = get(&app, uri, false).await;
         let body = String::from_utf8(body).unwrap();
         assert_eq!(s, StatusCode::OK, "{uri}");
         assert!(body.contains(&footer), "{uri}: {body}");
+        // Pages are revalidated, so an upgrade never leaves an old page.
+        assert_eq!(h["cache-control"], "no-cache, private", "{uri}");
     }
+    // Static files keep their caching; their URLs carry the version.
+    let (_, h, _) = get(&app, "/static/lichtbild.css", false).await;
+    assert!(
+        h["cache-control"].to_str().unwrap().contains("max-age"),
+        "{h:?}"
+    );
 }
 
 // The viewer offers full screen, and its script carries the zoom; both

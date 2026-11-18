@@ -399,6 +399,20 @@ async fn security_headers(req: Request, next: Next) -> Response {
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
+    // Pages are asked for again on every visit: a page kept from before an
+    // upgrade (sessions do not survive a restart) showed no thumbnails,
+    // because each one was redirected to the login. Static files carry
+    // their version in the URL and keep their own caching.
+    let html = h
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    if html && !h.contains_key(header::CACHE_CONTROL) {
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, private"),
+        );
+    }
     res
 }
 

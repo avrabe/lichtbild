@@ -71,7 +71,7 @@ at nice 0.
 | F57 | REQ-MAP-001 | the PMTiles URL is absolute and bypasses the base path | `the_map_works_under_the_base_path` |
 | F58 | REQ-MAP-001 | the map page loads pmtiles.js from a CDN | `the_map_loads_nothing_from_another_host` |
 | F59 | REQ-MAP-001 | a vendored file is not the pinned upstream file | `vendored_map_assets_match_their_pinned_sha256` |
-| F60 | REQ-MEDIA-004 | token loops are not cut short, so a tone runs through every temperature | `tone_and_silence_are_no_speech` |
+| F60 | REQ-MEDIA-004 | token loops are never recognised, so a tone runs through every temperature | `token_loops_are_seen` |
 | F61 | REQ-SEARCH-001 | search ignores the library asked for and searches all the viewer's libraries | `spoken_words_are_found_in_scope_and_open_the_video_there` |
 | F62 | REQ-MEDIA-004 | failed transcriptions are not stored and are retried on every pass | `the_pass_stores_transcripts_once_and_survives_failures` |
 | F63 | REQ-MEDIA-004 | a model file with an unknown hash is accepted | `an_unpinned_model_is_refused` |
@@ -79,6 +79,7 @@ at nice 0.
 | F65 | REQ-MEDIA-004 | silence counts as voiced | `silence_is_not_voiced` |
 | F66 | REQ-WEB-001 | pages behind login drop the version footer | `pages_show_the_running_version` |
 | F67 | REQ-AUTH-001 | the login notice pages show the version to anyone | `bad_logins_get_no_session` |
+| F73 | REQ-WEB-001 | pages may be cached by the browser across an upgrade | `pages_show_the_running_version` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
