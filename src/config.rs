@@ -72,6 +72,8 @@ pub struct OidcFile {
     pub client_id: Option<String>,
     pub client_secret_file: Option<PathBuf>,
     pub ca_file: Option<PathBuf>,
+    #[serde(default)]
+    pub trusted_audiences: Vec<String>,
 }
 
 /// Paths of the GeoNames dumps; only `cities` is required to enable names.
@@ -210,6 +212,13 @@ impl Settings {
         if let Some(v) = get("LICHTBILD_OIDC_CA_FILE") {
             s.oidc.ca_file = Some(PathBuf::from(v));
         }
+        if let Some(v) = get("LICHTBILD_OIDC_TRUSTED_AUDIENCES") {
+            s.oidc.trusted_audiences = v
+                .split(',')
+                .map(|a| a.trim().to_string())
+                .filter(|a| !a.is_empty())
+                .collect();
+        }
         if let Some(v) = get("LICHTBILD_PLACES") {
             s.places.cities = Some(PathBuf::from(v));
         }
@@ -253,6 +262,9 @@ impl Settings {
         o.client_id = f.oidc.client_id.or(o.client_id.take());
         o.client_secret_file = f.oidc.client_secret_file.or(o.client_secret_file.take());
         o.ca_file = f.oidc.ca_file.or(o.ca_file.take());
+        if !f.oidc.trusted_audiences.is_empty() {
+            o.trusted_audiences = f.oidc.trusted_audiences;
+        }
         if !f.people.is_empty() {
             self.people = f.people;
         }
@@ -350,6 +362,7 @@ impl Settings {
                         .clone()
                         .context("LICHTBILD_OIDC_CLIENT_SECRET_FILE")?,
                     ca_file: self.oidc.ca_file.clone(),
+                    trusted_audiences: self.oidc.trusted_audiences.clone(),
                     public_url,
                 })
             }
@@ -530,6 +543,14 @@ mod tests {
             s.apply_file("[places]\ntowns = \"/x\"\n").is_err(),
             "unknown key accepted"
         );
+    }
+
+    #[test]
+    fn trusted_audiences_from_file() {
+        let mut s = Settings::default();
+        s.apply_file("[oidc]\ntrusted_audiences = [\"project-1\"]\n")
+            .unwrap();
+        assert_eq!(s.oidc.trusted_audiences, vec!["project-1".to_string()]);
     }
 
     #[test]

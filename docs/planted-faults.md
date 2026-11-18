@@ -53,6 +53,7 @@ at nice 0.
 | F39 | REQ-AUTH-001 | a token endpoint off the issuer's host is used | `endpoints_off_the_issuer_host_are_refused` |
 | F40 | REQ-AUTH-001 | an encoded `..` in `next` leaves the base path | `next_after_login_stays_in_the_app` |
 | F41 | REQ-NAV-001 | the nav switcher is left out of the page header | `nav_switcher_is_in_every_page_header` |
+| F42 | REQ-AUTH-001 | a token with a second audience is accepted without `azp` naming this client | `a_trusted_second_audience_signs_in_only_with_azp` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

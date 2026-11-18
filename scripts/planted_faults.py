@@ -148,8 +148,8 @@ FAULTS = [
      "true || self.labels.iter().any(|l| l == label)",
      ["test", "--test", "auth", "login_gives_a_session_scoped_to_the_person"]),
     ("F32", "REQ-AUTH-001", "src/auth.rs",
-     "let verifier = client.id_token_verifier();",
-     "let verifier = client.id_token_verifier().insecure_disable_signature_check();",
+     ".set_other_audience_verifier_fn(move |a| trusted.iter().any(|t| t == a.as_str()));",
+     ".insecure_disable_signature_check().set_other_audience_verifier_fn(move |a| trusted.iter().any(|t| t == a.as_str()));",
      ["test", "--test", "auth", "bad_logins_get_no_session"]),
     ("F33", "REQ-AUTH-001", "src/auth.rs",
      "        && !n.contains(\"://\")\n",
@@ -187,6 +187,10 @@ FAULTS = [
      "class=\"brand\">lichtbild</a>{nav}</header>",
      "class=\"brand\">lichtbild</a></header>",
      ["test", "--test", "web", "nav_switcher_is_in_every_page_header"]),
+    ("F42", "REQ-AUTH-001", "src/auth.rs",
+     "None if audiences > 1 => Err(\"several audiences but no authorized party\".into()),",
+     "",
+     ["test", "--test", "auth", "a_trusted_second_audience_signs_in_only_with_azp"]),
 ]
 
 
@@ -198,7 +202,7 @@ def cargo(fid):
         sys.exit(f"{fid} needs a process at nice 0; this one runs at nice {os.getpriority(os.PRIO_PROCESS, 0)}")
     # Plain nice, not macOS background QoS: taskpolicy -b throttled builds
     # to a crawl even on an idle machine.
-    nice = [] if fid in NO_NICE else ["nice", "-n", "10"]
+    nice = [] if fid in NO_NICE else ["nice", "-n", "19"]
     return nice + [exe]
 
 
