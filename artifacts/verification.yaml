@@ -821,3 +821,116 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MAP-001
+
+  - id: VER-059
+    type: verification
+    title: Speech is transcribed in its language with times
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "speech_is_transcribed_in_its_language_with_times"
+      test-location: tests/transcribe.rs
+      steps:
+        - run: "cargo test --test transcribe speech_is_transcribed_in_its_language_with_times"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-060
+    type: verification
+    title: A tone and silence give no speech, quickly
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "tone_and_silence_are_no_speech"
+      test-location: tests/transcribe.rs
+      steps:
+        - run: "cargo test --test transcribe tone_and_silence_are_no_speech"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-061
+    type: verification
+    title: A model whose hash is not pinned is refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "an_unpinned_model_is_refused"
+      test-location: tests/transcribe.rs
+      steps:
+        - run: "cargo test --test transcribe an_unpinned_model_is_refused"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-062
+    type: verification
+    title: The pass stores transcripts once and survives failures
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_stores_transcripts_once_and_survives_failures"
+      test-location: tests/transcribe.rs
+      steps:
+        - run: "cargo test --test transcribe the_pass_stores_transcripts_once_and_survives_failures"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-063
+    type: verification
+    title: Spoken words are found in scope and open the video there
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "spoken_words_are_found_in_scope_and_open_the_video_there"
+      test-location: tests/transcribe.rs
+      steps:
+        - run: "cargo test --test transcribe spoken_words_are_found_in_scope_and_open_the_video_there"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-001
+
+  - id: VER-064
+    type: verification
+    title: Silence is not voiced
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "silence_is_not_voiced"
+      test-location: src/stt/mod.rs
+      steps:
+        - run: "cargo test --lib silence_is_not_voiced"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-065
+    type: verification
+    title: Repeated phrases, echoes and stock phrases are recognised
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "repetition_is_recognised"
+      test-location: src/stt/mod.rs
+      steps:
+        - run: "cargo test --lib repetition_is_recognised"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-004
+
+  - id: VER-066
+    type: verification
+    title: Every page behind login shows the running version
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "pages_show_the_running_version"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web pages_show_the_running_version"
+    links:
+      - type: verifies
+        target: REQ-WEB-001
+

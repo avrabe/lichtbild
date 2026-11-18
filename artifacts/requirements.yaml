@@ -544,3 +544,43 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-007
+
+  - id: REQ-MEDIA-004
+    type: requirement
+    title: Speech in videos is transcribed in the house, with times
+    status: implemented
+    release: v0.4.0
+    description: >
+      After each scan, videos without a transcript from the configured
+      Whisper model are transcribed one at a time, in a separate process
+      under a timeout and CPU and memory limits, until the next scan is due.
+      Transcripts carry a time and language per line, are stored per content
+      hash, and are shown in the viewer, where a time seeks the video. The
+      model files are pinned by SHA-256 and checked at startup. No audio,
+      text or request leaves the house. Silence, tones and music give no
+      text rather than invented text.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-005
+
+  - id: REQ-SEARCH-001
+    type: requirement
+    title: One search box over what was said, places, dates and names
+    status: implemented
+    release: v0.4.0
+    description: >
+      A search box in every page's header finds items by words spoken in
+      their videos, the nearest town, the year and month (German and
+      English), and file and folder names. A spoken hit links to its moment
+      in the video. Results come only from the libraries the viewer may
+      see, enforced in the query.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+

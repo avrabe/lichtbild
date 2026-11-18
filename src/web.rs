@@ -46,6 +46,8 @@ pub struct AppState {
     pub auth: Option<Arc<crate::auth::Auth>>,
     /// The nav v1 switcher's HTML, rendered in every page's header.
     pub nav_html: Arc<String>,
+    /// The search index (REQ-SEARCH-001), rebuilt by the scan thread.
+    pub search: Arc<crate::search::Search>,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
 }
@@ -68,6 +70,7 @@ impl AppState {
             max_file_bytes: cfg.limits.max_file_bytes,
             auth: None,
             nav_html: Arc::new(cfg.nav_html.clone()),
+            search: Arc::new(crate::search::Search::default()),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -90,6 +93,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(home))
         .route("/t/{who}", get(timeline))
         .route("/v/{who}/{id}", get(viewer))
+        .route("/search", get(search))
         .route("/thumb/{id}", get(thumb))
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
@@ -370,9 +374,14 @@ async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap)
 }
 
 /// A small page for login outcomes; `html` is trusted markup from this file.
+/// It is shown before or without a session, so it carries no version.
 fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Response {
     let body = format!("<h1>{}</h1>\n<p>{html}</p>", esc(title));
-    (status, page_for(st, title, &body)).into_response()
+    (
+        status,
+        page(&st.base_path, title, &body, &st.nav_html, "", ""),
+    )
+        .into_response()
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -422,17 +431,41 @@ pub fn asset_version() -> &'static str {
     })
 }
 
+/// The footer of pages behind login: which lichtbild build serves them, so
+/// the household can tell what is running. Pages without a session do not
+/// show it.
+fn version_footer() -> String {
+    format!(
+        "<footer class=\"version\">lichtbild {}</footer>",
+        esc(crate::VERSION)
+    )
+}
+
 /// A page with this app's header: the name and the nav switcher.
 fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
-    page(&st.base_path, title, body, &st.nav_html, "")
+    page(
+        &st.base_path,
+        title,
+        body,
+        &st.nav_html,
+        "",
+        &version_footer(),
+    )
 }
 
 /// A page with extra same-origin stylesheets or scripts in its head (the map).
 pub(crate) fn page_with_head(st: &AppState, title: &str, head: &str, body: &str) -> Html<String> {
-    page(&st.base_path, title, body, &st.nav_html, head)
+    page(
+        &st.base_path,
+        title,
+        body,
+        &st.nav_html,
+        head,
+        &version_footer(),
+    )
 }
 
-fn page(base: &str, title: &str, body: &str, nav: &str, head: &str) -> Html<String> {
+fn page(base: &str, title: &str, body: &str, nav: &str, head: &str, footer: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -447,10 +480,11 @@ fn page(base: &str, title: &str, body: &str, nav: &str, head: &str) -> Html<Stri
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a><a href="map" class="views">Map</a>{nav}</header>
+<header><a href="./" class="brand">lichtbild</a><a href="map" class="views">Map</a><form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200"></form>{nav}</header>
 <main>
 {body}
 </main>
+{footer}
 </body>
 </html>
 "#,
@@ -798,7 +832,43 @@ type ViewerItem = (
     Option<u64>,
     Vec<String>,
     Vec<(&'static str, String)>,
+    Option<crate::stt::Transcript>,
 );
+
+#[derive(Deserialize)]
+pub struct ViewerQuery {
+    /// Start a video at this second (from a transcript search hit).
+    t: Option<f32>,
+}
+
+/// A video's transcript as a panel of timed lines; a click on a time seeks
+/// the video (assets/lichtbild.js), the link works without JavaScript.
+pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> String {
+    if tr.pieces.is_empty() {
+        return String::new();
+    }
+    let mut langs: Vec<&str> = tr.pieces.iter().map(|p| p.lang.as_str()).collect();
+    langs.sort_unstable();
+    langs.dedup();
+    let mut s = format!(
+        "<details class=\"transcript\"><summary title=\"Transcript (t)\" aria-label=\"Transcript\">≡</summary>\
+         <div class=\"tpanel\"><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
+        esc(&langs.join(", ")),
+        if tr.partial { ", first 30 minutes" } else { "" },
+        esc(&tr.model)
+    );
+    for p in &tr.pieces {
+        s += &format!(
+            "<li><a class=\"ts\" data-t=\"{t:.1}\" href=\"v/{who}/{id}?t={t:.1}\">{at}</a> {text}</li>",
+            t = p.start,
+            who = esc(who),
+            at = duration((p.start * 1000.0) as u64),
+            text = esc(&p.text)
+        );
+    }
+    s += "</ol></div></details>";
+    s
+}
 
 /// The viewer's info panel (REQ-WEB-008): date and its source, place,
 /// camera details, size and file. The place name comes from the offline
@@ -948,6 +1018,7 @@ async fn viewer(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath((who, id)): UrlPath<(String, u64)>,
+    Query(vq): Query<ViewerQuery>,
 ) -> Response {
     let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
@@ -983,10 +1054,14 @@ async fn viewer(
             })
             .map(|b| crate::media::exif_details(&b))
             .unwrap_or_default();
-        Ok(Some((rec, newer, older, prefetch, exif)))
+        let transcript = match rec.video {
+            Some(_) => idx.transcript(&rec.hash)?,
+            None => None,
+        };
+        Ok(Some((rec, newer, older, prefetch, exif, transcript)))
     })
     .await;
-    let (rec, newer, older, prefetch, exif) = match res {
+    let (rec, newer, older, prefetch, exif, transcript) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1015,17 +1090,136 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{info}</div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
-        photo = photo_html(id, &rec),
+        photo = match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
+            // A W3C media fragment (#t=) starts the video at the hit.
+            Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
+                &format!("src=\"original/{id}\""),
+                &format!("src=\"original/{id}#t={t:.1}\""),
+                1,
+            ),
+            _ => photo_html(id, &rec),
+        },
+        tr = transcript
+            .as_ref()
+            .map(|t| render_transcript(id, &who, t))
+            .unwrap_or_default(),
         info = render_info(&rec, &exif, st.places.as_deref()),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
     page_for(&st, "lichtbild", &body).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    q: Option<String>,
+    who: Option<String>,
+}
+
+/// GET /search?q=: one search box over transcripts, places, dates and
+/// names (REQ-SEARCH-001), in the viewer's libraries only.
+async fn search(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(sq): Query<SearchQuery>,
+) -> Response {
+    let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
+    // Without `who`, every library the viewer may see; result links open
+    // the merged timeline, or the single one when there is only one.
+    let who = match sq.who {
+        Some(w) => w,
+        None if viewer.labels.len() == 1 => viewer.labels[0].clone(),
+        None => "all".to_string(),
+    };
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let sx = st.search.clone();
+    let q2 = q.clone();
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Vec<(crate::search::Hit, index::Record)>> {
+            let mut out = Vec::new();
+            for h in sx.query(&q2, &labels)?.into_iter().take(200) {
+                if let Some(rec) = idx.locate(h.id)? {
+                    out.push((h, rec));
+                }
+            }
+            Ok(out)
+        },
+    )
+    .await;
+    let hits = match res {
+        Ok(Ok(h)) => h,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let body = render_search(&who, &q, &hits, st.places.as_deref());
+    page_for(&st, "lichtbild search", &body).into_response()
+}
+
+/// The results page: each item as a tile with its date, place and the
+/// transcript lines that matched (a time opens the video there).
+pub fn render_search(
+    who: &str,
+    q: &str,
+    hits: &[(crate::search::Hit, index::Record)],
+    places: Option<&crate::places::Places>,
+) -> String {
+    let who = esc(who);
+    let mut s = format!(
+        "<section class=\"results\"><h2 class=\"rhead\">{n} {what} for \u{201c}{q}\u{201d}</h2>",
+        n = hits.len(),
+        what = if hits.len() == 1 { "result" } else { "results" },
+        q = esc(q)
+    );
+    if q.trim().is_empty() {
+        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, places, dates (2021, Juli, July) and file names.</p></section>".into();
+    }
+    for (h, rec) in hits {
+        let id = h.id;
+        let img = if rec.thumb == "ok" {
+            format!(
+                "<img src=\"thumb/{id}?h={hv}\" loading=\"lazy\" alt=\"\">",
+                hv = esc(rec.hash.get(..12).unwrap_or(""))
+            )
+        } else if rec.video.is_some() {
+            "<span class=\"nothumb\">video</span>".to_string()
+        } else {
+            "<span class=\"nothumb\">no preview</span>".to_string()
+        };
+        let place = match (places, rec.lat, rec.lon) {
+            (Some(p), Some(lat), Some(lon)) => p
+                .nearest(lat, lon)
+                .map(|n| format!(" · {}", esc(&n.label)))
+                .unwrap_or_default(),
+            _ => String::new(),
+        };
+        let mut lines = String::new();
+        for (t, text) in &h.speech {
+            lines += &format!(
+                "<li><a class=\"ts\" href=\"v/{who}/{id}?t={t:.1}\">{at}</a> {text}</li>",
+                at = duration((*t * 1000.0) as u64),
+                text = esc(text)
+            );
+        }
+        if !lines.is_empty() {
+            lines = format!("<ul class=\"said\">{lines}</ul>");
+        }
+        s += &format!(
+            "<div class=\"result\"><a class=\"item{vid}\" href=\"v/{who}/{id}\">{img}</a>\
+             <div class=\"rmeta\"><span class=\"when\">{when}</span>{place}{lines}</div></div>",
+            vid = if rec.video.is_some() { " video" } else { "" },
+            when = esc(&rec.taken_local.replace('T', " ")),
+        );
+    }
+    s += "</section>";
+    s
 }
 
 /// GET /preview/{id}: the JPEG preview of a HEIC original.

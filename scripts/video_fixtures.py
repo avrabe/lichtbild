@@ -126,6 +126,35 @@ def main():
         with open(os.path.join(OUT, "synthetic-hevc10-rot90.mov"), "wb") as f:
             f.write(data)
 
+    # Speech for transcripts (REQ-MEDIA-004): 19.5 s of a public-domain
+    # LibriVox reading (Kafka, "Auf der Galerie", read by Thorsten
+    # Herbold; librivox.org, public domain), from the title on, as AAC mono
+    # in an MP4 with a still frame. Downloaded and checked by SHA-256.
+    kafka = os.path.join(tempfile.gettempdir(), "lichtbild-kafka-galerie.mp3")
+    if not os.path.isfile(kafka):
+        subprocess.run(["curl", "-sfL", "-o", kafka,
+                        "https://archive.org/download/kafka_galerie_librivox/auf_der_galerie_kafka_64kb.mp3"],
+                       check=True)
+    import hashlib
+    with open(kafka, "rb") as f:
+        assert hashlib.sha256(f.read()).hexdigest() == \
+            "6b658c94403a972c51c8d192ecdfd4e9a3ad86ecf154bfa8341ac32f6a572edf", "kafka mp3 changed"
+    run("-ss", "15.5", "-t", "19.5", "-i", kafka,
+        "-f", "lavfi", "-i", "color=c=0x334455:s=64x48:r=5",
+        "-map", "1:v", "-map", "0:a", "-shortest",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-ac", "1", "-ar", "16000", "-b:a", "24k",
+        "-map_metadata", "-1", "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+        os.path.join(OUT, "librivox-kafka-galerie-de.mp4"))
+    # No speech: 3 s of a 440 Hz tone, then 4 s of silence.
+    run("-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+        "-f", "lavfi", "-i", "anullsrc=r=16000:cl=mono:d=4",
+        "-f", "lavfi", "-i", "color=c=gray:s=64x48:r=5:d=7",
+        "-filter_complex", "[0:a]aresample=16000[a0];[a0][1:a]concat=n=2:v=0:a=1[a]",
+        "-map", "2:v", "-map", "[a]", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+        "-c:a", "aac", "-ac", "1", "-b:a", "24k", "-map_metadata", "-1",
+        "-fflags", "+bitexact", "-flags:v", "+bitexact", "-flags:a", "+bitexact",
+        os.path.join(OUT, "synthetic-tone-silence.mp4"))
+
     # MPEG-4 Part 2, a codec lichtbild does not decode.
     run("-f", "lavfi", "-i", "testsrc2=size=160x120:rate=25:duration=1",
         "-c:v", "mpeg4", "-q:v", "31", "-map_metadata", "-1",

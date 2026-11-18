@@ -150,3 +150,22 @@ artifacts:
       - type: satisfies
         target: REQ-MAP-001
 
+  - id: FEAT-008
+    type: feature
+    title: Transcripts and one search box
+    status: implemented
+    release: v0.4.0
+    description: >
+      Owner request 2026-11-18: decode the audio of videos into transcripts
+      that can be read and searched.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A word spoken in a household video finds it, and the hit opens the video at that moment
+        - The first full pass on the Pi runs at most 2x real time on speech
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-004
+      - type: satisfies
+        target: REQ-SEARCH-001
+

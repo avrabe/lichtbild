@@ -589,6 +589,8 @@ async fn bad_logins_get_no_session() {
         }
         let r = login(&e, "").await.unwrap_err();
         assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{fault}: {}", r.body);
+        // Pages without a session do not tell which version runs.
+        assert!(!r.body.contains("class=\"version\""), "{fault}: {}", r.body);
         assert!(!r.session_set(), "{fault}: session set");
     }
 

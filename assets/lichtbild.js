@@ -76,16 +76,19 @@
     else if (e.key === "i") {
       var d = viewer.querySelector("details.info");
       if (d) d.open = !d.open;
+    } else if (e.key === "t") {
+      var tr = viewer.querySelector("details.transcript");
+      if (tr) tr.open = !tr.open;
     }
   });
   var x0 = null, y0 = null, t0 = 0;
   var stage = viewer.querySelector(".stage") || viewer;
   stage.addEventListener("touchstart", function (e) {
-    if (e.touches.length !== 1 || onVideo(e.target)) { x0 = null; return; }
+    if (e.touches.length !== 1 || onVideo(e.target) || viewer.classList.contains("zoomed")) { x0 = null; return; }
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now();
   }, { passive: true });
   stage.addEventListener("touchend", function (e) {
-    if (x0 === null) return;
+    if (x0 === null || viewer.classList.contains("zoomed")) { x0 = null; return; }
     var dx = e.changedTouches[0].clientX - x0;
     var dy = e.changedTouches[0].clientY - y0;
     x0 = null;
@@ -95,3 +98,132 @@
     }
   }, { passive: true });
 })();
+
+// Transcript: a click on a time seeks the video instead of reloading.
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  if (!viewer) return;
+  viewer.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a.ts");
+    var v = viewer.querySelector("video");
+    if (!a || !v) return;
+    e.preventDefault();
+    v.currentTime = parseFloat(a.getAttribute("data-t")) || 0;
+    v.play();
+  });
+})();
+
+// Viewer: full screen (button or f) for photos and videos, and zoom for
+// photos: wheel or trackpad pinch at the pointer, double click or double
+// tap between fit and 100 %, drag to pan, two-finger pinch on touch, keys
+// + - 0. The original is shown at its full resolution when the browser can
+// display it (HEIC: the 2048 px preview).
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  if (!viewer) return;
+  var fs = viewer.querySelector("button.fs");
+  if (fs && document.fullscreenEnabled) {
+    fs.hidden = false;
+    fs.addEventListener("click", toggleFull);
+  }
+  function toggleFull() {
+    if (document.fullscreenElement) document.exitFullscreen();
+    else if (viewer.requestFullscreen) viewer.requestFullscreen();
+  }
+  var img = viewer.querySelector("img.photo");
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target && e.target.closest && e.target.closest("video, input")) return;
+    if (e.key === "f" && document.fullscreenEnabled) { toggleFull(); return; }
+    if (!img) return;
+    var r = img.getBoundingClientRect();
+    var cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    if (e.key === "+" || e.key === "=") zoomAt(scale * 1.5, cx, cy);
+    else if (e.key === "-") zoomAt(scale / 1.5, cx, cy);
+    else if (e.key === "0") reset();
+  });
+  if (!img) return;
+
+  var scale = 1, tx = 0, ty = 0;
+  function apply() {
+    img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
+    viewer.classList.toggle("zoomed", scale > 1.001);
+  }
+  function maxScale() {
+    // At least 4x, and enough to show every pixel of the original.
+    var w = img.getBoundingClientRect().width / scale;
+    return Math.max(4, (img.naturalWidth || 0) / Math.max(w, 1));
+  }
+  // Keep the image point under (cx, cy) in place while the scale changes.
+  // The transform origin is the image's top left corner (CSS).
+  function zoomAt(s, cx, cy) {
+    s = Math.min(Math.max(s, 1), maxScale());
+    var r = img.getBoundingClientRect();
+    var lx = r.left - tx, ly = r.top - ty;
+    var qx = (cx - lx - tx) / scale, qy = (cy - ly - ty) / scale;
+    scale = s;
+    tx = cx - lx - s * qx;
+    ty = cy - ly - s * qy;
+    if (scale <= 1.001) { scale = 1; tx = 0; ty = 0; }
+    apply();
+  }
+  function reset() { scale = 1; tx = 0; ty = 0; apply(); }
+
+  img.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    zoomAt(scale * Math.exp(-e.deltaY * 0.0025), e.clientX, e.clientY);
+  }, { passive: false });
+  img.addEventListener("dblclick", function (e) {
+    if (scale > 1.001) reset();
+    // 100 %: one image pixel per screen pixel, at least twice the fit.
+    else zoomAt(Math.max(2, (img.naturalWidth || 0) / img.getBoundingClientRect().width), e.clientX, e.clientY);
+  });
+
+  // Pointers: one drags when zoomed, two pinch.
+  var pts = {}, last = null, pinch = null, tapAt = 0;
+  img.addEventListener("pointerdown", function (e) {
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+    img.setPointerCapture(e.pointerId);
+    var ids = Object.keys(pts);
+    if (ids.length === 2) {
+      var a = pts[ids[0]], b = pts[ids[1]];
+      pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), s: scale };
+      last = null;
+    } else if (ids.length === 1) {
+      last = { x: e.clientX, y: e.clientY };
+      // Double tap on touch screens (dblclick does not fire there).
+      if (e.pointerType === "touch") {
+        var now = Date.now();
+        if (now - tapAt < 300) {
+          if (scale > 1.001) reset(); else zoomAt(2.5, e.clientX, e.clientY);
+          tapAt = 0;
+        } else tapAt = now;
+      }
+    }
+  });
+  img.addEventListener("pointermove", function (e) {
+    if (!pts[e.pointerId]) return;
+    pts[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var ids = Object.keys(pts);
+    if (pinch && ids.length === 2) {
+      var a = pts[ids[0]], b = pts[ids[1]];
+      var d = Math.hypot(a.x - b.x, a.y - b.y);
+      zoomAt(pinch.s * d / Math.max(pinch.d, 1), (a.x + b.x) / 2, (a.y + b.y) / 2);
+    } else if (last && scale > 1.001) {
+      tx += e.clientX - last.x; ty += e.clientY - last.y;
+      last = { x: e.clientX, y: e.clientY };
+      apply();
+    }
+  });
+  function up(e) {
+    delete pts[e.pointerId];
+    if (Object.keys(pts).length < 2) pinch = null;
+    if (!Object.keys(pts).length) last = null;
+  }
+  img.addEventListener("pointerup", up);
+  img.addEventListener("pointercancel", up);
+  img.addEventListener("dragstart", function (e) { e.preventDefault(); });
+})();
+

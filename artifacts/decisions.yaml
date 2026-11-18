@@ -472,3 +472,70 @@ artifacts:
       - type: satisfies
         target: REQ-MAP-001
 
+  - id: DD-018
+    type: design-decision
+    title: Whisper base with candle, in a limited child process
+    status: implemented
+    release: v0.4.0
+    description: >
+      Owner decision 2026-11-18 after a spike (spikes/stt-bench on branch
+      spike/stt-bench): pure-Rust Whisper if base runs at most 2x real time
+      on the Pi 5. Measured there at 1.2 to 1.7.
+    fields:
+      decision: >
+        candle 0.11.1 with Whisper base (openai/whisper-base refs/pr/22,
+        SHA-256 pinned), audio by symphonia (AAC, MP3, PCM) and rubato, run
+        as `lichtbild transcribe` with a cleared environment, a wall-clock
+        timeout of six times the audio plus a minute, RLIMIT_CPU and on
+        Linux RLIMIT_AS. Compared to candle's example: language per 30 s
+        window (optionally among configured codes); energy VAD; compression
+        ratio computed; early cut of token loops; three fallback
+        temperatures; windows still below the log-probability threshold
+        dropped; resume at the last timestamp; the first timestamp must be
+        followed by text (candle's example forced a second timestamp and
+        skipped 30 s windows) and lie within 1 s; nothing past the audio;
+        stock subtitle phrases and echoed lines dropped. Transcription
+        runs after the scan, not beside it (about 600 MB resident).
+      rationale: >
+        One static binary, no host packages, decoder code out of the
+        server process. Open media, base on an M4: LibriVox Kafka (German,
+        language detected) WER 33% (example as shipped: 99% from a wrong
+        language, 42% with German forced), Tears of Steel 35% (57%).
+      alternatives: >
+        whisper.cpp as a child process (C++ build per target); whisper-rs
+        linked in; sherpa-onnx or ONNX Runtime (C++); a glibc build would
+        run about 1.3x faster than the static musl one.
+      kill-criterion: >
+        Move to whisper.cpp in a child process if on the Pi the first full
+        pass runs slower than 2x real time on speech, or if the owner finds
+        transcripts of household videos mostly wrong.
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-004
+
+  - id: DD-019
+    type: design-decision
+    title: Search with tantivy in memory, rebuilt from the index
+    status: implemented
+    release: v0.4.0
+    description: >
+      Owner choice 2026-11-18: tantivy over a word table in redb.
+    fields:
+      decision: >
+        tantivy 0.27 without default features (lz4 only, no C), an index
+        in RAM rebuilt by the scan thread at start, after each scan and
+        after each transcription pass: one document per live item, one per
+        transcript line. Lower case and ASCII folding, no stemming (German
+        and English mixed). The label filter is part of the query, and each
+        hit is checked against the scope again.
+      rationale: >
+        Rebuilding 31,000 items and their transcripts takes seconds and
+        keeps the index the only state on disk: nothing new to back up,
+        migrate or write outside the data directory module.
+      alternatives: >
+        A persistent tantivy directory (writes outside datadir.rs, a second
+        store to keep in step); a word table in redb (no ranking).
+    links:
+      - type: satisfies
+        target: REQ-SEARCH-001
+

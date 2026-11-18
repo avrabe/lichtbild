@@ -29,6 +29,8 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET_FILE / _CA_FILE   login (OIDC)
   LICHTBILD_OIDC_TRUSTED_AUDIENCES  id,id        extra ID-token audiences (azp must be this client)
   people: [[people]] label, oidc_subject or oidc_email, sees = [..]  (TOML only)
+  LICHTBILD_WHISPER_DIR  /path                   Whisper base (config.json, tokenizer.json, model.safetensors; sha256-pinned)
+  LICHTBILD_TRANSCRIBE_LANGUAGES  de,en          languages to detect among (default: all)
   LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
   LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
   LICHTBILD_MAP_PMTILES  /path/world.pmtiles     Protomaps PMTiles v3 file for the map
@@ -60,6 +62,12 @@ fn main() -> ExitCode {
         ["scan"] => report(run_scan()),
         // Internal: the scan runs this to decode one video keyframe in a
         // separate, limited process (DD-016).
+        // Internal: transcribe one video in a separate, limited process
+        // (DD-018).
+        ["transcribe", rest @ ..] => match lichtbild::stt::child_main(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
@@ -142,14 +150,13 @@ fn run_serve() -> Result<ExitCode> {
         }
     };
     let idx = Arc::new(Index::open(&cfg.data_dir)?);
-    spawn_scanner(cfg.clone(), idx.clone());
+    let state = web::AppState::new(&cfg, idx.clone())
+        .with_places(places)
+        .with_auth(auth);
+    spawn_scanner(cfg.clone(), idx, state.search.clone(), state.places.clone());
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let app = web::router(
-            web::AppState::new(&cfg, idx)
-                .with_places(places)
-                .with_auth(auth),
-        );
+        let app = web::router(state);
         let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
         tracing::info!("listening on {}{}", cfg.listen, cfg.base_path);
         axum::serve(listener, app)
@@ -165,18 +172,45 @@ fn run_serve() -> Result<ExitCode> {
 /// Scan in one background thread: at start, then every interval. The thread
 /// lowers its own priority (on Linux nice and I/O priority are per thread,
 /// and the scan's workers inherit them), so serving stays responsive.
-fn spawn_scanner(cfg: Config, idx: Arc<Index>) {
-    std::thread::spawn(move || loop {
-        match scan::run(&cfg, &idx, &scan::Options::default()) {
-            Ok(rep) if rep.reconciled => tracing::info!("scan finished\n{}", rep.to_text()),
-            Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
-            Err(e) => tracing::error!("scan failed: {e:#}"),
+fn spawn_scanner(
+    cfg: Config,
+    idx: Arc<Index>,
+    search: Arc<lichtbild::search::Search>,
+    places: Option<Arc<lichtbild::places::Places>>,
+) {
+    std::thread::spawn(move || {
+        let rebuild = |when: &str| match search.rebuild(&idx, places.as_deref()) {
+            Ok(n) => tracing::info!("search index {when}: {n} documents"),
+            Err(e) => tracing::error!("search index {when} failed: {e:#}"),
+        };
+        // What the index already holds is searchable before the scan ends.
+        rebuild("at start");
+        loop {
+            match scan::run(&cfg, &idx, &scan::Options::default()) {
+                Ok(rep) if rep.reconciled => tracing::info!("scan finished\n{}", rep.to_text()),
+                Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
+                Err(e) => tracing::error!("scan failed: {e:#}"),
+            }
+            rebuild("after the scan");
+            // Transcripts after the scan, not beside it (memory), until
+            // the next scan is due; an unfinished pass continues after it.
+            let interval = std::time::Duration::from_secs(cfg.scan_interval_hours * 3600);
+            let started = std::time::Instant::now();
+            if cfg.transcribe.is_some() {
+                let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| lichtbild::stt::run_pass(&cfg, &idx, &exe, deadline))
+                {
+                    Ok(rep) => tracing::info!("{}", rep.to_text()),
+                    Err(e) => tracing::error!("transcription pass failed: {e:#}"),
+                }
+                rebuild("after transcription");
+            }
+            if cfg.scan_interval_hours == 0 {
+                break;
+            }
+            std::thread::sleep(interval.saturating_sub(started.elapsed()));
         }
-        if cfg.scan_interval_hours == 0 {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_secs(
-            cfg.scan_interval_hours * 3600,
-        ));
     });
 }

@@ -9,6 +9,10 @@ workers = 2                         # scan workers
 scan_interval_hours = 24            # serve rescans this often; 0 = only at start
 allowed_hosts = ["photos.example"]  # Host names answered besides localhost (REQ-WEB-005)
 
+[transcribe]                        # transcripts of videos (REQ-MEDIA-004); optional
+model_dir = "/srv/whisper/base"     # config.json, tokenizer.json, model.safetensors (openai/whisper-base refs/pr/22, sha256-pinned)
+languages = ["de", "en"]            # detect among these; empty or absent: all of Whisper's
+
 [map]                               # world map (REQ-MAP-001); both optional, read-only
 pmtiles = "/srv/map/world.pmtiles"  # Protomaps basemap, PMTiles v3; without it /map shows a notice
 assets = "/srv/map/basemaps-assets" # fonts/ and sprites/v4/ of protomaps/basemaps-assets; without it no labels

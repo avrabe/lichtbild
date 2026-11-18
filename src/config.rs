@@ -62,6 +62,9 @@ pub struct Config {
     pub people: Vec<crate::auth::Person>,
     /// The nav v1 switcher's HTML (REQ-NAV-001); empty when not configured.
     pub nav_html: String,
+    /// Transcripts of videos (REQ-MEDIA-004); None when no model is
+    /// configured.
+    pub transcribe: Option<Transcribe>,
     /// The world map's PMTiles file and glyph/sprite directory
     /// (REQ-MAP-001); canonical paths, each optional.
     pub map: MapFiles,
@@ -86,6 +89,25 @@ pub struct PlacesFiles {
     pub cities: Option<PathBuf>,
     pub admin1: Option<PathBuf>,
     pub countries: Option<PathBuf>,
+}
+
+/// The `[transcribe]` block: the Whisper model directory and the language
+/// codes detection may choose from (all when empty).
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct TranscribeFiles {
+    pub model_dir: Option<PathBuf>,
+    #[serde(default)]
+    pub languages: Vec<String>,
+}
+
+/// A checked transcription setup.
+#[derive(Debug, Clone)]
+pub struct Transcribe {
+    pub model_dir: PathBuf,
+    /// Name of the pinned model (crate::stt::MODELS).
+    pub model: &'static str,
+    pub languages: Vec<String>,
 }
 
 /// The world map's files (REQ-MAP-001): one Protomaps PMTiles file, and a
@@ -127,6 +149,8 @@ struct FileConfig {
     #[serde(default)]
     places: PlacesFiles,
     #[serde(default)]
+    transcribe: TranscribeFiles,
+    #[serde(default)]
     map: MapFiles,
     public_url: Option<String>,
     #[serde(default)]
@@ -152,6 +176,7 @@ pub struct Settings {
     pub allow_remote_without_login: bool,
     pub allowed_hosts: Vec<String>,
     pub places: PlacesFiles,
+    pub transcribe: TranscribeFiles,
     pub map: MapFiles,
     pub public_url: Option<String>,
     pub oidc: OidcFile,
@@ -235,6 +260,16 @@ impl Settings {
                 .filter(|a| !a.is_empty())
                 .collect();
         }
+        if let Some(v) = get("LICHTBILD_WHISPER_DIR") {
+            s.transcribe.model_dir = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_TRANSCRIBE_LANGUAGES") {
+            s.transcribe.languages = v
+                .split(',')
+                .map(|l| l.trim().to_string())
+                .filter(|l| !l.is_empty())
+                .collect();
+        }
         if let Some(v) = get("LICHTBILD_PLACES") {
             s.places.cities = Some(PathBuf::from(v));
         }
@@ -274,6 +309,9 @@ impl Settings {
         self.workers = f.workers.or(self.workers);
         if !f.allowed_hosts.is_empty() {
             self.allowed_hosts = f.allowed_hosts;
+        }
+        if f.transcribe != TranscribeFiles::default() {
+            self.transcribe = f.transcribe;
         }
         if f.places != PlacesFiles::default() {
             self.places = f.places;
@@ -414,6 +452,17 @@ impl Settings {
                 .map(|h| crate::web::host_name(h))
                 .collect(),
             places: self.places,
+            transcribe: match self.transcribe.model_dir {
+                // The model is checked against its pinned hash at startup,
+                // so a wrong or truncated file stops the server, not the
+                // first transcription hours later.
+                Some(dir) => Some(Transcribe {
+                    model: crate::stt::check_model(&dir)?,
+                    model_dir: dir,
+                    languages: self.transcribe.languages,
+                }),
+                None => None,
+            },
             oidc,
             people: self.people,
             nav_html: nav_html(self.nav_file.as_deref(), self.nav_self.as_deref())?,

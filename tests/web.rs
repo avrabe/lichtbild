@@ -846,3 +846,46 @@ async fn nav_switcher_is_in_every_page_header() {
         .to_string();
     assert!(e.contains("version"), "{e}");
 }
+
+// Every page behind login says which lichtbild build serves it.
+// rivet: verifies REQ-WEB-001
+#[tokio::test]
+async fn pages_show_the_running_version() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let footer = format!(
+        "<footer class=\"version\">lichtbild {}</footer>",
+        lichtbild::VERSION
+    );
+    for uri in ["/", "/t/p1", "/search?q=x"] {
+        let (s, _, body) = get(&app, uri, false).await;
+        let body = String::from_utf8(body).unwrap();
+        assert_eq!(s, StatusCode::OK, "{uri}");
+        assert!(body.contains(&footer), "{uri}: {body}");
+    }
+}
+
+// The viewer offers full screen, and its script carries the zoom; both
+// are same-origin and work without a server round trip.
+// rivet: verifies REQ-WEB-007
+#[tokio::test]
+async fn viewer_offers_full_screen_and_zoom() {
+    let (_fx, cfg, idx) = scanned();
+    let app = app(&cfg, &idx);
+    let (_, _, body) = get(&app, "/t/p2", false).await;
+    let p2 = item_ids(&String::from_utf8(body).unwrap(), "p2");
+    let (s, _, body) = get(&app, &format!("/v/p2/{}", p2[0]), false).await;
+    let page = String::from_utf8(body).unwrap();
+    assert_eq!(s, StatusCode::OK);
+    assert!(page.contains("class=\"fs\""), "{page}");
+    let (_, _, js) = get(&app, "/static/lichtbild.js", false).await;
+    let js = String::from_utf8(js).unwrap();
+    for needle in [
+        "requestFullscreen",
+        "\"wheel\"",
+        "\"dblclick\"",
+        "pointermove",
+    ] {
+        assert!(js.contains(needle), "{needle} missing from lichtbild.js");
+    }
+}

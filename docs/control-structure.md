@@ -34,6 +34,8 @@ Controllers and their control actions:
 | scan thread | insert, update, mark missing | index |
 | scan thread | write then rename | derived files |
 | scan thread | start with one keyframe, kill at the timeout | decode-keyframe child (DD-016) |
+| scan thread | start with one video's path, kill at the timeout | transcribe child (DD-018) |
+| scan thread | rebuild in memory | search index (DD-019) |
 | web handlers | query scoped to the viewer | index |
 | web handlers | open for reading by item id | source roots, derived files |
 | web handlers | open for reading, fixed path or confined to its directory | map files (PMTiles, glyphs, sprites; DD-017) |
