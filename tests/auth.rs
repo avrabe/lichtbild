@@ -25,6 +25,8 @@ use lichtbild::web::{self, AppState};
 
 const KEY_PEM: &str = include_str!("fixtures/test-oidc-rsa.pem");
 const CLIENT_ID: &str = "lichtbild-test";
+/// A made-up provider project id, the extra audience Zitadel adds.
+const PROJECT_ID: &str = "project-1";
 
 #[derive(Default, Clone)]
 struct Mock {
@@ -37,6 +39,11 @@ struct Mock {
     /// Faults to plant.
     wrong_nonce: bool,
     wrong_audience: bool,
+    /// A second audience next to the client id, as Zitadel adds its
+    /// project id.
+    extra_audience: Option<String>,
+    /// The `azp` claim, when set.
+    azp: Option<String>,
     foreign_key: bool,
     /// Discovery names a token endpoint on another host.
     foreign_token_endpoint: bool,
@@ -129,15 +136,20 @@ async fn mock_provider() -> Shared {
                         m.nonce.clone().unwrap_or_default()
                     };
                     let aud = if m.wrong_audience {
-                        "someone-else"
+                        serde_json::json!("someone-else")
+                    } else if let Some(extra) = &m.extra_audience {
+                        serde_json::json!([CLIENT_ID, extra])
                     } else {
-                        CLIENT_ID
+                        serde_json::json!(CLIENT_ID)
                     };
-                    let claims = serde_json::json!({
+                    let mut claims = serde_json::json!({
                         "iss": m.issuer, "sub": m.sub, "aud": aud,
                         "iat": now, "exp": now + 300, "nonce": nonce,
                         "email": m.email, "email_verified": true,
                     });
+                    if let Some(azp) = &m.azp {
+                        claims["azp"] = serde_json::json!(azp);
+                    }
                     let token = serde_json::json!({
                         "access_token": "at", "token_type": "Bearer", "expires_in": 300,
                         "id_token": sign(&claims, m.foreign_key),
@@ -175,6 +187,7 @@ async fn env(public_url: &str) -> Env {
             client_id: CLIENT_ID.into(),
             client_secret_file: secret,
             ca_file: None,
+            trusted_audiences: vec![PROJECT_ID.into()],
             public_url: public_url.into(),
         },
         vec![
@@ -515,6 +528,40 @@ async fn a_granted_person_sees_both_libraries_and_the_merged_view() {
         home.body.contains(r#"href="t/all""#),
         "merged view missing with a grant"
     );
+}
+
+// Zitadel puts its project id into `aud` next to the client id. Such a
+// token signs in when the extra audience is trusted and `azp` names this
+// client (OIDC Core 3.1.3.7), and nowhere else.
+// rivet: verifies REQ-AUTH-001
+#[tokio::test]
+async fn a_trusted_second_audience_signs_in_only_with_azp() {
+    let e = env("https://photos.example").await;
+    let cases = [
+        (Some(PROJECT_ID), Some(CLIENT_ID), true),
+        (Some(PROJECT_ID), None, false),
+        (Some(PROJECT_ID), Some("another-client"), false),
+        (Some("untrusted-project"), Some(CLIENT_ID), false),
+        (None, Some("another-client"), false),
+        (None, Some(CLIENT_ID), true),
+    ];
+    for (extra, azp, ok) in cases {
+        {
+            let mut m = e.mock.lock().unwrap();
+            m.sub = "user-1".into();
+            m.extra_audience = extra.map(String::from);
+            m.azp = azp.map(String::from);
+        }
+        let case = format!("aud+{extra:?} azp={azp:?}");
+        match login(&e, "").await {
+            Ok(_) => assert!(ok, "{case}: signed in"),
+            Err(r) => {
+                assert!(!ok, "{case}: refused with {} {}", r.status, r.body);
+                assert_eq!(r.status, StatusCode::BAD_GATEWAY, "{case}: {}", r.body);
+                assert!(!r.session_set(), "{case}: session set");
+            }
+        }
+    }
 }
 
 // rivet: verifies REQ-AUTH-001

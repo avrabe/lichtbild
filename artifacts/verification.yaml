@@ -583,3 +583,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-NAV-001
+
+  - id: VER-042
+    type: verification
+    title: A trusted second audience signs in only when azp names this client
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_trusted_second_audience_signs_in_only_with_azp"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_trusted_second_audience_signs_in_only_with_azp"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001

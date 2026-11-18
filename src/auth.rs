@@ -38,6 +38,10 @@ pub struct OidcSettings {
     pub client_id: String,
     pub client_secret_file: PathBuf,
     pub ca_file: Option<PathBuf>,
+    /// Audiences besides the client id an ID token may carry, e.g. the
+    /// provider's project id (Zitadel always adds it). Accepted only when
+    /// `azp` names this client.
+    pub trusted_audiences: Vec<String>,
     /// External base URL, e.g. https://host/lichtbild (no trailing slash).
     pub public_url: String,
 }
@@ -336,20 +340,34 @@ impl Auth {
             .ok_or_else(|| LoginError::Provider(anyhow::anyhow!("no ID token")))?;
         // Verify signature, issuer, audience, expiry and nonce. On a failure,
         // fetch the keys once more in case the provider rotated them.
-        let verifier = client.id_token_verifier();
+        let trusted = self.settings.trusted_audiences.clone();
+        let verifier = client
+            .id_token_verifier()
+            .set_other_audience_verifier_fn(move |a| trusted.iter().any(|t| t == a.as_str()));
         let first = id_token.claims(&verifier, &pending.nonce).cloned();
         let claims = match first {
             Ok(c) => c,
             Err(_) => {
                 let md = self.metadata(true).await.map_err(LoginError::Provider)?;
                 let fresh = self.client(md).map_err(LoginError::Provider)?;
-                let verifier = fresh.id_token_verifier();
+                let trusted = self.settings.trusted_audiences.clone();
+                let verifier = fresh
+                    .id_token_verifier()
+                    .set_other_audience_verifier_fn(move |a| {
+                        trusted.iter().any(|t| t == a.as_str())
+                    });
                 id_token
                     .claims(&verifier, &pending.nonce)
                     .map_err(|e| LoginError::InvalidToken(e.to_string()))?
                     .clone()
             }
         };
+        check_authorized_party(
+            claims.audiences().len(),
+            claims.authorized_party().map(|a| a.as_str()),
+            &self.settings.client_id,
+        )
+        .map_err(LoginError::InvalidToken)?;
         let subject = claims.subject().as_str().to_string();
         let email = claims
             .email()
@@ -409,6 +427,21 @@ impl Auth {
 
     pub fn logout(&self, sid: &str) {
         self.sessions.lock().expect("sessions lock").remove(sid);
+    }
+}
+
+/// OIDC Core 3.1.3.7 steps 4-5, which openidconnect leaves to the client:
+/// a token with several audiences must name this client as `azp`, and an
+/// `azp`, when present, must be this client.
+fn check_authorized_party(
+    audiences: usize,
+    azp: Option<&str>,
+    client_id: &str,
+) -> Result<(), String> {
+    match azp {
+        Some(a) if a != client_id => Err(format!("authorized party {a:?} is not this client")),
+        None if audiences > 1 => Err("several audiences but no authorized party".into()),
+        _ => Ok(()),
     }
 }
 
