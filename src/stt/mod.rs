@@ -535,7 +535,10 @@ pub fn run_pass(
         let Ok(path) = crate::source::resolve(&root.path, &rel) else {
             continue;
         };
-        let seconds = rec.video.as_ref().map_or(60.0, |v| v.duration_ms as f64 / 1000.0);
+        let seconds = rec
+            .video
+            .as_ref()
+            .map_or(60.0, |v| v.duration_ms as f64 / 1000.0);
         let tr = run_child(exe, &path, &t.model_dir, &t.languages, time_budget(seconds))
             .unwrap_or_else(|e| Transcript {
                 state: format!("failed ({})", short_reason(&e)),

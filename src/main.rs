@@ -148,14 +148,13 @@ fn run_serve() -> Result<ExitCode> {
         }
     };
     let idx = Arc::new(Index::open(&cfg.data_dir)?);
-    spawn_scanner(cfg.clone(), idx.clone());
+    let state = web::AppState::new(&cfg, idx.clone())
+        .with_places(places)
+        .with_auth(auth);
+    spawn_scanner(cfg.clone(), idx, state.search.clone(), state.places.clone());
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
-        let app = web::router(
-            web::AppState::new(&cfg, idx)
-                .with_places(places)
-                .with_auth(auth),
-        );
+        let app = web::router(state);
         let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
         tracing::info!("listening on {}{}", cfg.listen, cfg.base_path);
         axum::serve(listener, app)
@@ -171,30 +170,45 @@ fn run_serve() -> Result<ExitCode> {
 /// Scan in one background thread: at start, then every interval. The thread
 /// lowers its own priority (on Linux nice and I/O priority are per thread,
 /// and the scan's workers inherit them), so serving stays responsive.
-fn spawn_scanner(cfg: Config, idx: Arc<Index>) {
-    std::thread::spawn(move || loop {
-        match scan::run(&cfg, &idx, &scan::Options::default()) {
-            Ok(rep) if rep.reconciled => tracing::info!("scan finished\n{}", rep.to_text()),
-            Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
-            Err(e) => tracing::error!("scan failed: {e:#}"),
-        }
-        // Transcripts after the scan, not beside it (memory), until the
-        // next scan is due; an unfinished pass continues after that scan.
-        let interval = std::time::Duration::from_secs(cfg.scan_interval_hours * 3600);
-        let started = std::time::Instant::now();
-        if cfg.transcribe.is_some() {
-            let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
-            match std::env::current_exe()
-                .map_err(anyhow::Error::from)
-                .and_then(|exe| lichtbild::stt::run_pass(&cfg, &idx, &exe, deadline))
-            {
-                Ok(rep) => tracing::info!("{}", rep.to_text()),
-                Err(e) => tracing::error!("transcription pass failed: {e:#}"),
+fn spawn_scanner(
+    cfg: Config,
+    idx: Arc<Index>,
+    search: Arc<lichtbild::search::Search>,
+    places: Option<Arc<lichtbild::places::Places>>,
+) {
+    std::thread::spawn(move || {
+        let rebuild = |when: &str| match search.rebuild(&idx, places.as_deref()) {
+            Ok(n) => tracing::info!("search index {when}: {n} documents"),
+            Err(e) => tracing::error!("search index {when} failed: {e:#}"),
+        };
+        // What the index already holds is searchable before the scan ends.
+        rebuild("at start");
+        loop {
+            match scan::run(&cfg, &idx, &scan::Options::default()) {
+                Ok(rep) if rep.reconciled => tracing::info!("scan finished\n{}", rep.to_text()),
+                Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
+                Err(e) => tracing::error!("scan failed: {e:#}"),
             }
+            rebuild("after the scan");
+            // Transcripts after the scan, not beside it (memory), until
+            // the next scan is due; an unfinished pass continues after it.
+            let interval = std::time::Duration::from_secs(cfg.scan_interval_hours * 3600);
+            let started = std::time::Instant::now();
+            if cfg.transcribe.is_some() {
+                let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| lichtbild::stt::run_pass(&cfg, &idx, &exe, deadline))
+                {
+                    Ok(rep) => tracing::info!("{}", rep.to_text()),
+                    Err(e) => tracing::error!("transcription pass failed: {e:#}"),
+                }
+                rebuild("after transcription");
+            }
+            if cfg.scan_interval_hours == 0 {
+                break;
+            }
+            std::thread::sleep(interval.saturating_sub(started.elapsed()));
         }
-        if cfg.scan_interval_hours == 0 {
-            break;
-        }
-        std::thread::sleep(interval.saturating_sub(started.elapsed()));
     });
 }

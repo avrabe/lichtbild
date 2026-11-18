@@ -283,3 +283,21 @@ h4.day {
   font-variant-numeric: tabular-nums; margin-right: 6px; text-decoration: none;
   color: var(--kaki);
 }
+
+/* One search box in the header; results as tiles with what matched. */
+header form.search { margin-left: 18px; flex: 0 1 260px; }
+header form.search input {
+  width: 100%; font: inherit; font-size: 14px; padding: 5px 10px;
+  border: 1px solid var(--line); border-radius: 14px; background: transparent; color: inherit;
+}
+header form.search input:focus { outline: 2px solid var(--shu); outline-offset: 1px; }
+.results .rhead { font-weight: 400; font-size: 16px; letter-spacing: .04em; margin: 8px 0 18px; }
+.results .result { display: flex; gap: 14px; align-items: flex-start; margin: 0 0 14px; }
+.results .result .item { flex: none; }
+.results .rmeta { font-size: 14px; line-height: 1.5; min-width: 0; }
+.results .rmeta .when { font-variant-numeric: tabular-nums; color: var(--ink-faint); }
+.results ul.said { list-style: none; margin: 6px 0 0; padding: 0; }
+.results ul.said a.ts { font-variant-numeric: tabular-nums; margin-right: 6px; color: var(--shu); text-decoration: none; }
+@media (max-width: 600px) {
+  header form.search { flex: 1 1 auto; margin-left: 10px; }
+}
