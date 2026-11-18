@@ -10,7 +10,7 @@ lichtbild indexes photo folders read-only, in place, without copying or moving t
 
 Everything runs on the home server. The map tiles come from a local file, and no photo, place or face leaves the house.
 
-Status: v0.2.0. `lichtbild serve` indexes the configured folders read-only (JPEG, PNG, WebP, GIF and HEIC; video is counted, not shown yet) and serves a timeline per person with a date scrubber, a photo viewer with swipe and arrow keys, an info panel with offline town names, and the house's nav switcher. With an OIDC issuer configured, everyone signs in through the house identity provider and sees their own library plus what they were granted; without one it stays on loopback for the operator. See [docs/BRIEF.md](docs/BRIEF.md) for what it should become.
+Status: v0.2.1. `lichtbild serve` indexes the configured folders read-only (JPEG, PNG, WebP, GIF and HEIC; video is counted, not shown yet) and serves a timeline per person with a date scrubber, a photo viewer with swipe and arrow keys, an info panel with offline town names, and the house's nav switcher. With an OIDC issuer configured, everyone signs in through the house identity provider and sees their own library plus what they were granted; without one it stays on loopback for the operator. See [docs/BRIEF.md](docs/BRIEF.md) for what it should become.
 
 ## Use
 
