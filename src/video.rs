@@ -464,6 +464,7 @@ pub fn inspect(
     hasher
         .update_reader(&mut *f)
         .map_err(|_| Skip::Unreadable)?;
+    crate::source::drop_cache(f);
     Ok((
         ImageInfo {
             width: tr.width,
@@ -646,6 +647,7 @@ pub fn poster(f: &mut File, tr: &Track, max_pixels: u64, exe: &Path) -> Result<D
         .map_err(|_| Skip::Unreadable)?;
     let mut sample = vec![0u8; size as usize];
     f.read_exact(&mut sample).map_err(|_| bad(codec))?;
+    crate::source::drop_cache(f);
     let (kind, data) = match &tr.config {
         Config::H264 {
             length_size,

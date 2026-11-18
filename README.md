@@ -5,12 +5,12 @@ A self-hosted photo and video library for a household, as one Rust binary.
 lichtbild indexes photo folders read-only, in place, without copying or moving them. It serves:
 
 - a timeline per person, or merged;
-- a world map of where photos were taken (planned);
+- a world map of where photos and videos were taken;
 - later, face recognition and similar search.
 
 Everything runs on the home server. The map tiles come from a local file, and no photo, place or face leaves the house.
 
-Status: v0.3.0. `lichtbild serve` indexes the configured folders read-only (JPEG, PNG, WebP, GIF and HEIC photos; MP4 and MOV videos with a poster frame and their length) and serves a timeline per person with a date scrubber, a viewer with swipe and arrow keys that plays videos, an info panel with offline town names, and the house's nav switcher. With an OIDC issuer configured, everyone signs in through the house identity provider and sees their own library plus what they were granted; without one it stays on loopback for the operator. See [docs/BRIEF.md](docs/BRIEF.md) for what it should become.
+Status: v0.3.0. `lichtbild serve` indexes the configured folders read-only (JPEG, PNG, WebP, GIF and HEIC photos; MP4 and MOV videos with a poster frame and their length) and serves a timeline per person with a date scrubber, a viewer with swipe and arrow keys that plays videos, an info panel with offline town names, the house's nav switcher, and a world map at `/map` (tiles from one Protomaps PMTiles file the deployment provides, `LICHTBILD_MAP_PMTILES`; labels from `LICHTBILD_MAP_ASSETS`; the map libraries are vendored, see [assets/VENDORED.md](assets/VENDORED.md)). With an OIDC issuer configured, everyone signs in through the house identity provider and sees their own library plus what they were granted; without one it stays on loopback for the operator. See [docs/BRIEF.md](docs/BRIEF.md) for what it should become.
 
 ## Use
 

@@ -435,3 +435,40 @@ artifacts:
       - type: satisfies
         target: REQ-MEDIA-001
 
+  - id: DD-017
+    type: design-decision
+    title: World map with vendored MapLibre (CSP build), one PMTiles file and server-side clusters
+    status: implemented
+    description: >
+      The map (step 3 of the brief) runs entirely from lichtbild's origin.
+    fields:
+      decision: >
+        MapLibre GL JS 5.24.1 in its CSP build, pmtiles 4.5.0 and
+        @protomaps/basemaps 5.7.2 are embedded like htmx, byte-for-byte as
+        released, with their sha256 pinned in a test and assets/VENDORED.md.
+        The CSP build loads its worker from a same-origin file, so the CSP
+        needs no blob:, worker-src or unsafe-eval; MapLibre's data: control
+        icons are replaced in lichtbild.css. The PMTiles file is served with
+        the same single-range code as originals. Clusters are computed in
+        Rust on a Web Mercator grid of 64-pixel cells per zoom over an
+        in-memory list of positioned items, rebuilt when the index's
+        generation changes and filtered by the viewer's libraries on every
+        request; clusters of up to 12 items (and every cluster from zoom 16)
+        list their newest items with thumbnail URLs, shown as markers.
+      rationale: >
+        The brief requires that no request leaves the house. 31,000 items
+        cluster in a few milliseconds, and computing clusters on the server
+        keeps the scoping in one place next to the timeline's instead of
+        sending every position to the browser.
+      alternatives: >
+        MapLibre 6 (ES modules only, no CSP bundle); the standard MapLibre
+        bundle with blob: workers allowed in the CSP; clustering in the
+        browser with a GeoJSON source (needs glyphs for counts and ships all
+        positions); a tile server process next to lichtbild.
+      kill-criterion: >
+        Move to MapLibre 6 module workers when the 5.x line stops getting
+        fixes, keeping the CSP 'self' only.
+    links:
+      - type: satisfies
+        target: REQ-MAP-001
+

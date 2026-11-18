@@ -294,3 +294,22 @@ pub fn projection(data: &Path) -> BTreeMap<String, String> {
         })
         .collect()
 }
+
+/// Absolute URLs or protocol-relative references to any host (REQ-WEB-003).
+pub fn outside_urls(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for pat in ["http://", "https://", "//"] {
+        let mut from = 0;
+        while let Some(i) = text[from..].find(pat) {
+            let at = from + i;
+            let prev = text[..at].chars().last();
+            // "//" only counts as protocol-relative inside an attribute or url().
+            let counts = pat != "//" || matches!(prev, Some('"' | '\'' | '('));
+            if counts {
+                found.push(text[at..text.len().min(at + 60)].to_string());
+            }
+            from = at + pat.len();
+        }
+    }
+    found
+}

@@ -33,6 +33,8 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_TRANSCRIBE_LANGUAGES  de,en          languages to detect among (default: all)
   LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
   LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
+  LICHTBILD_MAP_PMTILES  /path/world.pmtiles     Protomaps PMTiles v3 file for the map
+  LICHTBILD_MAP_ASSETS   /path/basemaps-assets   its fonts/ and sprites/v4/ (map labels)
   LICHTBILD_DATA_DIR must exist; lichtbild creates nothing at startup.
   LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN  1 to listen beyond loopback before login exists
 

@@ -135,3 +135,18 @@ artifacts:
       - type: satisfies
         target: REQ-MEDIA-001
 
+  - id: FEAT-007
+    type: feature
+    title: World map of photos and videos
+    status: implemented
+    description: >
+      Step 3 of the brief: a map of where photos and videos were taken, with
+      tiles from a self-hosted PMTiles file and nothing loaded from outside.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A signed-in person sees their own positioned items, clustered by zoom, on the deployment's PMTiles map, and opens one in the viewer by clicking it
+    links:
+      - type: satisfies
+        target: REQ-MAP-001
+

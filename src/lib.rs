@@ -6,6 +6,7 @@ pub mod auth;
 pub mod config;
 pub mod datadir;
 pub mod index;
+pub mod map;
 pub mod media;
 pub mod nav;
 pub mod places;
