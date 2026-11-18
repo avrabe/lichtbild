@@ -364,3 +364,18 @@ footer.version {
 }
 body:has(.viewer) footer.version { display: none; }
 
+/* Viewer zoom and full screen. The image scales from its top left corner
+   (assets/lichtbild.js keeps the point under the pointer in place); the
+   browser's own pinch and pan stay off the photo, which handles them. */
+.viewer img.photo { transform-origin: 0 0; cursor: zoom-in; touch-action: none; will-change: transform; }
+.viewer.zoomed img.photo { cursor: grab; box-shadow: none; border-radius: 0; }
+.viewer.zoomed img.photo:active { cursor: grabbing; }
+.viewer.zoomed .stage { overflow: hidden; }
+.viewer.zoomed .prev, .viewer.zoomed .next { opacity: .25; }
+.viewer button.fs {
+  background: none; border: 0; color: inherit; cursor: pointer;
+  font-size: 18px; padding: 0 8px; line-height: 1;
+}
+.viewer button.fs:hover { color: var(--kaki); }
+.viewer:fullscreen { padding: 0; }
+
