@@ -307,6 +307,10 @@ FAULTS = [
      "        if !still {",
      "        if false && !still {",
      ["test", "--test", "auth", "sessions_survive_a_restart_but_not_a_removal_or_logout"]),
+    ("F78", "REQ-WEB-006", "src/web.rs",
+     "last.1[m - 1] += n;",
+     "last.1[0] += n;",
+     ["test", "--test", "web", "date_scrubber_jumps_to_years_and_months"]),
 ]
 
 

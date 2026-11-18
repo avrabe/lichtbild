@@ -367,6 +367,20 @@ async fn date_scrubber_jumps_to_years_and_months() {
     assert!(jan24 < may23 && may23 < mar22, "rail not newest first");
     assert!(html.contains(r#"<a class="y" href="t/p2?from=2023">2023</a>"#));
     assert!(html.contains(r#"<details class="jumpmenu">"#));
+    // The chooser: one row per year with its count, newest first and
+    // open, and a month grid in which empty months are greyed.
+    let y24 = pos(
+        r#"<details class="jyear" data-y="2024" open><summary><span class="y">2024</span><span class="n">30</span>"#,
+    );
+    let y23 = pos(
+        r#"<details class="jyear" data-y="2023"><summary><span class="y">2023</span><span class="n">120</span>"#,
+    );
+    assert!(y24 < y23);
+    assert!(html.contains(
+        r#"<a href="t/p2?from=2023-05" data-ym="2023-05">May<span class="n">120</span></a>"#
+    ));
+    assert!(html.contains(r#"<span class="none">Apr</span><a href="t/p2?from=2023-05""#));
+    assert!(html.contains(r#"<a class="whole" href="t/p2?from=2023">All of 2023</a>"#));
     assert_eq!(
         html.matches(r#"href="t/p2?from=2023-05""#).count(),
         2,

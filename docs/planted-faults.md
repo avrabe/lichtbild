@@ -83,6 +83,7 @@ at nice 0.
 | F74 | REQ-AUTH-001 | the session id itself is stored, not its hash | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
 | F76 | REQ-AUTH-001 | sign-out leaves the stored session | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
 | F77 | REQ-AUTH-002 | a stored session counts for whoever now has its label | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
+| F78 | REQ-WEB-006 | the date chooser puts every month's photos under January | `date_scrubber_jumps_to_years_and_months` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
