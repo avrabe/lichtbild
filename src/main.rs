@@ -29,6 +29,8 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET_FILE / _CA_FILE   login (OIDC)
   LICHTBILD_OIDC_TRUSTED_AUDIENCES  id,id        extra ID-token audiences (azp must be this client)
   people: [[people]] label, oidc_subject or oidc_email, sees = [..]  (TOML only)
+  LICHTBILD_WHISPER_DIR  /path                   Whisper base (config.json, tokenizer.json, model.safetensors; sha256-pinned)
+  LICHTBILD_TRANSCRIBE_LANGUAGES  de,en          languages to detect among (default: all)
   LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
   LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
   LICHTBILD_DATA_DIR must exist; lichtbild creates nothing at startup.
@@ -176,11 +178,23 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>) {
             Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
             Err(e) => tracing::error!("scan failed: {e:#}"),
         }
+        // Transcripts after the scan, not beside it (memory), until the
+        // next scan is due; an unfinished pass continues after that scan.
+        let interval = std::time::Duration::from_secs(cfg.scan_interval_hours * 3600);
+        let started = std::time::Instant::now();
+        if cfg.transcribe.is_some() {
+            let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+            match std::env::current_exe()
+                .map_err(anyhow::Error::from)
+                .and_then(|exe| lichtbild::stt::run_pass(&cfg, &idx, &exe, deadline))
+            {
+                Ok(rep) => tracing::info!("{}", rep.to_text()),
+                Err(e) => tracing::error!("transcription pass failed: {e:#}"),
+            }
+        }
         if cfg.scan_interval_hours == 0 {
             break;
         }
-        std::thread::sleep(std::time::Duration::from_secs(
-            cfg.scan_interval_hours * 3600,
-        ));
+        std::thread::sleep(interval.saturating_sub(started.elapsed()));
     });
 }

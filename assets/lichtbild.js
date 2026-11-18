@@ -76,6 +76,9 @@
     else if (e.key === "i") {
       var d = viewer.querySelector("details.info");
       if (d) d.open = !d.open;
+    } else if (e.key === "t") {
+      var tr = viewer.querySelector("details.transcript");
+      if (tr) tr.open = !tr.open;
     }
   });
   var x0 = null, y0 = null, t0 = 0;
@@ -94,4 +97,19 @@
       go(dx < 0 ? "a.next" : "a.prev");
     }
   }, { passive: true });
+})();
+
+// Transcript: a click on a time seeks the video instead of reloading.
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  if (!viewer) return;
+  viewer.addEventListener("click", function (e) {
+    var a = e.target.closest && e.target.closest("a.ts");
+    var v = viewer.querySelector("video");
+    if (!a || !v) return;
+    e.preventDefault();
+    v.currentTime = parseFloat(a.getAttribute("data-t")) || 0;
+    v.play();
+  });
 })();

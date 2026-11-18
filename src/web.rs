@@ -785,7 +785,43 @@ type ViewerItem = (
     Option<u64>,
     Vec<String>,
     Vec<(&'static str, String)>,
+    Option<crate::stt::Transcript>,
 );
+
+#[derive(Deserialize)]
+pub struct ViewerQuery {
+    /// Start a video at this second (from a transcript search hit).
+    t: Option<f32>,
+}
+
+/// A video's transcript as a panel of timed lines; a click on a time seeks
+/// the video (assets/lichtbild.js), the link works without JavaScript.
+pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> String {
+    if tr.pieces.is_empty() {
+        return String::new();
+    }
+    let mut langs: Vec<&str> = tr.pieces.iter().map(|p| p.lang.as_str()).collect();
+    langs.sort_unstable();
+    langs.dedup();
+    let mut s = format!(
+        "<details class=\"transcript\"><summary title=\"Transcript (t)\" aria-label=\"Transcript\">≡</summary>\
+         <div class=\"tpanel\"><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
+        esc(&langs.join(", ")),
+        if tr.partial { ", first 30 minutes" } else { "" },
+        esc(&tr.model)
+    );
+    for p in &tr.pieces {
+        s += &format!(
+            "<li><a class=\"ts\" data-t=\"{t:.1}\" href=\"v/{who}/{id}?t={t:.1}\">{at}</a> {text}</li>",
+            t = p.start,
+            who = esc(who),
+            at = duration((p.start * 1000.0) as u64),
+            text = esc(&p.text)
+        );
+    }
+    s += "</ol></div></details>";
+    s
+}
 
 /// The viewer's info panel (REQ-WEB-008): date and its source, place,
 /// camera details, size and file. The place name comes from the offline
@@ -935,6 +971,7 @@ async fn viewer(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath((who, id)): UrlPath<(String, u64)>,
+    Query(vq): Query<ViewerQuery>,
 ) -> Response {
     let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
@@ -970,10 +1007,14 @@ async fn viewer(
             })
             .map(|b| crate::media::exif_details(&b))
             .unwrap_or_default();
-        Ok(Some((rec, newer, older, prefetch, exif)))
+        let transcript = match rec.video {
+            Some(_) => idx.transcript(&rec.hash)?,
+            None => None,
+        };
+        Ok(Some((rec, newer, older, prefetch, exif, transcript)))
     })
     .await;
-    let (rec, newer, older, prefetch, exif) = match res {
+    let (rec, newer, older, prefetch, exif, transcript) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1002,12 +1043,24 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{info}</div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}</div>\n\
          <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
-        photo = photo_html(id, &rec),
+        photo = match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
+            // A W3C media fragment (#t=) starts the video at the hit.
+            Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
+                &format!("src=\"original/{id}\""),
+                &format!("src=\"original/{id}#t={t:.1}\""),
+                1,
+            ),
+            _ => photo_html(id, &rec),
+        },
+        tr = transcript
+            .as_ref()
+            .map(|t| render_transcript(id, &who, t))
+            .unwrap_or_default(),
         info = render_info(&rec, &exif, st.places.as_deref()),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),

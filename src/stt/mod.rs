@@ -487,6 +487,83 @@ fn limit_self(cpu_seconds: u64) {
     set(libc::RLIMIT_AS, 4 << 30);
 }
 
+/// What one transcription pass did.
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
+pub struct PassReport {
+    pub transcribed: u64,
+    pub no_speech: u64,
+    pub failed: u64,
+    /// Left for the next pass because the deadline came.
+    pub remaining: u64,
+}
+
+impl PassReport {
+    pub fn to_text(&self) -> String {
+        format!(
+            "transcripts: {} with speech, {} without, {} failed, {} left for the next pass",
+            self.transcribed, self.no_speech, self.failed, self.remaining
+        )
+    }
+}
+
+/// Transcribe the videos that have no transcript from the configured
+/// model yet, one child at a time, until `deadline`. Each result, failures
+/// included, is stored under the video's content hash, so a pass never
+/// repeats work and an interrupted pass resumes.
+pub fn run_pass(
+    cfg: &crate::config::Config,
+    idx: &crate::index::Index,
+    exe: &Path,
+    deadline: Option<Instant>,
+) -> Result<PassReport> {
+    let mut rep = PassReport::default();
+    let Some(t) = &cfg.transcribe else {
+        return Ok(rep);
+    };
+    let todo = idx.videos_to_transcribe(t.model)?;
+    let total = todo.len() as u64;
+    for (n, (_, rec)) in todo.into_iter().enumerate() {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            rep.remaining = total - n as u64;
+            break;
+        }
+        let Some(root) = cfg.roots.iter().find(|r| r.label == rec.label) else {
+            continue;
+        };
+        let rel = crate::index::rel_from_bytes(&rec.rel);
+        // SSC-004: the stored path must still resolve inside its root.
+        let Ok(path) = crate::source::resolve(&root.path, &rel) else {
+            continue;
+        };
+        let seconds = rec.video.as_ref().map_or(60.0, |v| v.duration_ms as f64 / 1000.0);
+        let tr = run_child(exe, &path, &t.model_dir, &t.languages, time_budget(seconds))
+            .unwrap_or_else(|e| Transcript {
+                state: format!("failed ({})", short_reason(&e)),
+                model: t.model.into(),
+                audio_seconds: 0.0,
+                partial: false,
+                pieces: Vec::new(),
+            });
+        match tr.state.as_str() {
+            "ok" => rep.transcribed += 1,
+            "no-speech" => rep.no_speech += 1,
+            _ => rep.failed += 1,
+        }
+        idx.set_transcript(&rec.hash, &tr)?;
+    }
+    Ok(rep)
+}
+
+/// A failure reason short and free of paths, for the index and the log.
+fn short_reason(e: &anyhow::Error) -> String {
+    let s = e.to_string();
+    let s = s.split(':').next().unwrap_or("error").trim();
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '-')
+        .take(40)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

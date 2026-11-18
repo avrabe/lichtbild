@@ -28,6 +28,9 @@ const ITEMS: TableDefinition<u64, &[u8]> = TableDefinition::new("items");
 const PATHS: TableDefinition<(&str, &[u8]), u64> = TableDefinition::new("paths");
 const BY_ROOT: TableDefinition<(&str, &str, u64), ()> = TableDefinition::new("by_root");
 const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_time");
+/// Content hash -> transcript JSON (crate::stt::Transcript), so a moved or
+/// renamed video keeps its transcript (REQ-MEDIA-004).
+const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -135,6 +138,7 @@ impl Index {
             w.open_table(PATHS)?;
             w.open_table(BY_ROOT)?;
             w.open_table(BY_TIME)?;
+            w.open_table(TRANSCRIPTS)?;
         }
         w.commit()?;
         Ok(Index { db })
@@ -360,6 +364,54 @@ impl Index {
         for e in items.iter()? {
             let (k, v) = e?;
             out.push((k.value(), decode(v.value())?));
+        }
+        Ok(out)
+    }
+
+    /// The stored transcript for a content hash.
+    pub fn transcript(&self, hash: &str) -> Result<Option<crate::stt::Transcript>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TRANSCRIPTS)?;
+        match t.get(hash)? {
+            Some(v) => Ok(Some(
+                serde_json::from_slice(v.value()).context("corrupt transcript")?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_transcript(&self, hash: &str, tr: &crate::stt::Transcript) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(TRANSCRIPTS)?;
+            t.insert(hash, serde_json::to_vec(tr)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Live videos whose content has no transcript from `model` yet,
+    /// oldest id first: (id, record).
+    pub fn videos_to_transcribe(&self, model: &str) -> Result<Vec<(u64, Record)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let t = r.open_table(TRANSCRIPTS)?;
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in items.iter()? {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            if rec.missing || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
+                continue;
+            }
+            let done = match t.get(rec.hash.as_str())? {
+                Some(v) => serde_json::from_slice::<crate::stt::Transcript>(v.value())
+                    .is_ok_and(|tr| tr.model == model),
+                None => false,
+            };
+            if !done {
+                out.push((k.value(), rec));
+            }
         }
         Ok(out)
     }
