@@ -80,6 +80,9 @@ at nice 0.
 | F66 | REQ-WEB-001 | pages behind login drop the version footer | `pages_show_the_running_version` |
 | F67 | REQ-AUTH-001 | the login notice pages show the version to anyone | `bad_logins_get_no_session` |
 | F73 | REQ-WEB-001 | pages may be cached by the browser across an upgrade | `pages_show_the_running_version` |
+| F74 | REQ-AUTH-001 | the session id itself is stored, not its hash | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
+| F75 | REQ-AUTH-002 | a stored session survives the person's removal from the configuration | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
+| F76 | REQ-AUTH-001 | sign-out leaves the stored session | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

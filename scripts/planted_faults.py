@@ -295,6 +295,18 @@ FAULTS = [
      "if html && !h.contains_key(header::CACHE_CONTROL) {",
      "if false && html && !h.contains_key(header::CACHE_CONTROL) {",
      ["test", "--test", "web", "pages_show_the_running_version"]),
+    ("F74", "REQ-AUTH-001", "src/auth.rs",
+     "                &session_key(&sid),",
+     "                &sid,",
+     ["test", "--test", "auth", "sessions_survive_a_restart_but_not_a_removal_or_logout"]),
+    ("F75", "REQ-AUTH-002", "src/auth.rs",
+     "let p = self.people.iter().find(|p| p.label == person)?;",
+     "let p = self.people.iter().find(|p| p.label == person).or_else(|| self.people.first())?;",
+     ["test", "--test", "auth", "sessions_survive_a_restart_but_not_a_removal_or_logout"]),
+    ("F76", "REQ-AUTH-001", "src/auth.rs",
+     "if let Err(e) = store.remove_session(&session_key(sid)) {",
+     "if let Err(e) = store.remove_session(\"not-this-one\") {",
+     ["test", "--test", "auth", "sessions_survive_a_restart_but_not_a_removal_or_logout"]),
 ]
 
 

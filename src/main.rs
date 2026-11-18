@@ -137,6 +137,7 @@ fn run_serve() -> Result<ExitCode> {
             Some(p)
         }
     };
+    let idx = Arc::new(Index::open(&cfg.data_dir)?);
     let auth = match &cfg.oidc {
         None => None,
         Some(o) => {
@@ -146,10 +147,10 @@ fn run_serve() -> Result<ExitCode> {
                 cfg.roots.iter().map(|r| r.label.clone()).collect(),
             )?;
             tracing::info!("login through {} for {} people", o.issuer, cfg.people.len());
-            Some(a)
+            // Sessions outlive a restart (stored by hash in the index).
+            Some(a.with_store(idx.clone()))
         }
     };
-    let idx = Arc::new(Index::open(&cfg.data_dir)?);
     let state = web::AppState::new(&cfg, idx.clone())
         .with_places(places)
         .with_auth(auth);

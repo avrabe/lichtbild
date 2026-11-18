@@ -18,7 +18,9 @@ use rsa::traits::PublicKeyParts;
 use tower::ServiceExt;
 
 use common::*;
-use lichtbild::auth::{Auth, OidcSettings, Person, NEXT_MAX, PENDING_MAX};
+use lichtbild::auth::{
+    session_key, Auth, OidcSettings, Person, SessionStore, NEXT_MAX, PENDING_MAX,
+};
 use lichtbild::index::Index;
 use lichtbild::scan::{self, Options};
 use lichtbild::web::{self, AppState};
@@ -181,32 +183,7 @@ async fn env(public_url: &str) -> Env {
     let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
     scan::run(&cfg, &idx, &Options::default()).unwrap();
     let issuer = mock.lock().unwrap().issuer.clone();
-    let auth = Auth::new(
-        OidcSettings {
-            issuer,
-            client_id: CLIENT_ID.into(),
-            client_secret_file: secret,
-            ca_file: None,
-            trusted_audiences: vec![PROJECT_ID.into()],
-            public_url: public_url.into(),
-        },
-        vec![
-            Person {
-                label: "p1".into(),
-                oidc_subject: Some("user-1".into()),
-                oidc_email: Some("one@example.test".into()),
-                ..Person::default()
-            },
-            Person {
-                label: "p2".into(),
-                oidc_email: Some("Two@Example.test".into()),
-                sees: vec!["p1".into()],
-                ..Person::default()
-            },
-        ],
-        vec!["p1".into(), "p2".into()],
-    )
-    .unwrap();
+    let auth = make_auth(&issuer, &secret, public_url, true).with_store(idx.clone());
     let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
     let auth = state.auth.clone().unwrap();
     let app = web::router(state);
@@ -217,6 +194,40 @@ async fn env(public_url: &str) -> Env {
         idx,
         auth,
     }
+}
+
+/// The login setup of `env`; `with_p1` leaves person p1 out when false.
+fn make_auth(issuer: &str, secret: &std::path::Path, public_url: &str, with_p1: bool) -> Auth {
+    let mut people = vec![
+        Person {
+            label: "p1".into(),
+            oidc_subject: Some("user-1".into()),
+            oidc_email: Some("one@example.test".into()),
+            ..Person::default()
+        },
+        Person {
+            label: "p2".into(),
+            oidc_email: Some("Two@Example.test".into()),
+            sees: vec!["p1".into()],
+            ..Person::default()
+        },
+    ];
+    if !with_p1 {
+        people.remove(0);
+    }
+    Auth::new(
+        OidcSettings {
+            issuer: issuer.into(),
+            client_id: CLIENT_ID.into(),
+            client_secret_file: secret.to_path_buf(),
+            ca_file: None,
+            trusted_audiences: vec![PROJECT_ID.into()],
+            public_url: public_url.into(),
+        },
+        people,
+        vec!["p1".into(), "p2".into()],
+    )
+    .unwrap()
 }
 
 struct Resp {
@@ -854,4 +865,44 @@ async fn the_map_shows_a_person_only_their_own_positions() {
         "{}",
         page.body
     );
+}
+
+// A restart (an upgrade) keeps everyone signed in: the session is stored
+// by its hash, and the person's access is worked out again from the
+// configuration, so someone taken out of it is signed out. Sign-out ends
+// the stored session too.
+// rivet: verifies REQ-AUTH-001
+#[tokio::test]
+async fn sessions_survive_a_restart_but_not_a_removal_or_logout() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((sid, _)) = login(&e, "").await else {
+        panic!("login failed");
+    };
+    // Only the hash is stored, never the cookie value.
+    assert!(e.idx.get_session(&sid).unwrap().is_none());
+    let (person, _) = e.idx.get_session(&session_key(&sid)).unwrap().unwrap();
+    assert_eq!(person, "p1");
+
+    let issuer = e.mock.lock().unwrap().issuer.clone();
+    let secret = e._fx.data.join("client-secret");
+    // "Restart": a new Auth with empty memory over the same index.
+    let again =
+        make_auth(&issuer, &secret, "https://photos.example", true).with_store(e.idx.clone());
+    let v = again.session(&sid).expect("session lost in the restart");
+    assert_eq!(v.labels, vec!["p1".to_string()]);
+    assert!(again.session("made-up").is_none());
+    // p1 taken out of the configuration: the stored session no longer counts.
+    let without =
+        make_auth(&issuer, &secret, "https://photos.example", false).with_store(e.idx.clone());
+    assert!(without.session(&sid).is_none());
+    // Sign-out removes the stored session.
+    again.logout(&sid);
+    assert!(e.idx.get_session(&session_key(&sid)).unwrap().is_none());
+    let after =
+        make_auth(&issuer, &secret, "https://photos.example", true).with_store(e.idx.clone());
+    assert!(after.session(&sid).is_none());
 }
