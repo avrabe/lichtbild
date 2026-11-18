@@ -81,11 +81,15 @@ pub fn check_model(dir: &Path) -> Result<&'static str> {
     let weights = weights_path(dir)?;
     let mut h = blake3_free_sha256(&weights)?;
     h.make_ascii_lowercase();
+    pinned(&h).with_context(|| format!("{}: unknown model (sha256 {h})", weights.display()))
+}
+
+/// The pinned model with this SHA-256, if any.
+fn pinned(h: &str) -> Option<&'static str> {
     MODELS
         .iter()
         .find(|(_, sum)| *sum == h)
         .map(|(name, _)| *name)
-        .with_context(|| format!("{}: unknown model (sha256 {h})", weights.display()))
 }
 
 fn weights_path(dir: &Path) -> Result<PathBuf> {
@@ -103,7 +107,15 @@ fn blake3_free_sha256(p: &Path) -> Result<String> {
     let mut f = File::open(p).with_context(|| p.display().to_string())?;
     let mut h = sha2::Sha256::new();
     std::io::copy(&mut f, &mut h)?;
+    crate::source::drop_cache(&f);
     Ok(format!("{:x}", h.finalize()))
+}
+
+/// The pinned model whose weights are `data`.
+fn model_of(data: &[u8]) -> Result<&'static str> {
+    use sha2::Digest;
+    let h = format!("{:x}", sha2::Sha256::digest(data));
+    pinned(&h).with_context(|| format!("unknown model (sha256 {h})"))
 }
 
 /// A loaded model, ready to transcribe.
@@ -121,7 +133,6 @@ impl Engine {
     /// Load the model in `dir`. `languages` limits detection to these
     /// Whisper codes (e.g. ["de", "en"]); empty means all.
     pub fn load(dir: &Path, languages: &[String]) -> Result<Engine> {
-        let name = check_model(dir)?;
         let device = Device::Cpu;
         let config: m::Config =
             serde_json::from_str(&std::fs::read_to_string(dir.join("config.json"))?)?;
@@ -136,15 +147,29 @@ impl Engine {
             .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
             .collect();
         let weights = weights_path(dir)?;
-        let model = if weights.extension().is_some_and(|e| e == "gguf") {
+        let (name, model) = if weights.extension().is_some_and(|e| e == "gguf") {
+            let name = check_model(dir)?;
             let vb = candle_transformers::quantized_var_builder::VarBuilder::from_gguf(
                 &weights, &device,
             )?;
-            Model::Quantized(m::quantized_model::Whisper::load(&vb, config.clone())?)
+            (
+                name,
+                Model::Quantized(m::quantized_model::Whisper::load(&vb, config.clone())?),
+            )
         } else {
-            let data = std::fs::read(&weights)?;
+            // One read: the hash is checked on the bytes that are loaded,
+            // and the file's pages leave the page cache (it counts against
+            // the service's memory limit; a child starts per video).
+            let mut f = File::open(&weights)?;
+            let mut data = Vec::new();
+            f.read_to_end(&mut data)?;
+            crate::source::drop_cache(&f);
+            let name = model_of(&data)?;
             let vb = candle_nn::VarBuilder::from_buffered_safetensors(data, m::DTYPE, &device)?;
-            Model::Normal(m::model::Whisper::load(&vb, config.clone())?)
+            (
+                name,
+                Model::Normal(m::model::Whisper::load(&vb, config.clone())?),
+            )
         };
         let mut allowed = Vec::new();
         for l in languages {
@@ -397,7 +422,10 @@ fn to_16k(pcm: Vec<f32>, rate: u32) -> Result<Vec<f32>> {
 
 /// Transcribe one media file in this process.
 pub fn transcribe_file(engine: &mut Engine, f: File) -> Result<Transcript> {
+    let keep = f.try_clone()?;
     let (pcm, rate, partial) = audio::pcm_decode(f, MAX_AUDIO_SECONDS)?;
+    // The video was read once for its audio; its pages are not needed again.
+    crate::source::drop_cache(&keep);
     let pcm = to_16k(pcm, rate)?;
     let audio_seconds = pcm.len() as f32 / m::SAMPLE_RATE as f32;
     let pieces = engine.transcribe(&pcm)?;
@@ -536,7 +564,23 @@ pub fn run_pass(
     };
     let todo = idx.videos_to_transcribe(t.model)?;
     let total = todo.len() as u64;
+    let started = Instant::now();
+    let mut said = Instant::now();
+    if total > 0 {
+        tracing::info!("transcripts: {total} videos to transcribe");
+    }
     for (n, (_, rec)) in todo.into_iter().enumerate() {
+        // Progress for the operator: every 10 videos or 10 minutes.
+        if n > 0 && (n % 10 == 0 || said.elapsed() >= Duration::from_secs(600)) {
+            said = Instant::now();
+            tracing::info!(
+                "transcripts: {n} of {total} done ({} with speech, {} without, {} failed) in {} min",
+                rep.transcribed,
+                rep.no_speech,
+                rep.failed,
+                started.elapsed().as_secs() / 60
+            );
+        }
         if deadline.is_some_and(|d| Instant::now() >= d) {
             rep.remaining = total - n as u64;
             break;
