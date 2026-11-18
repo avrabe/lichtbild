@@ -149,6 +149,7 @@ fn interrupted_scan_resumes_to_the_same_index() {
         &cfg_a,
         &Options {
             stop_after: Some(2),
+            ..Options::default()
         },
     );
     assert!(!rep.complete && !rep.reconciled);
@@ -433,7 +434,7 @@ fn undecodable_heic_is_counted_by_format_and_listed() {
         "{tsv}"
     );
     assert!(
-        lines.contains(&"skipped\tnot yet supported (video)\tp1\tb/clip.mp4"),
+        lines.contains(&"skipped\tnot yet supported (video)\tp1\tb/clip.webm"),
         "{tsv}"
     );
     let skipped = lines.iter().filter(|l| l.starts_with("skipped\t")).count() as u64;

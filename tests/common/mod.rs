@@ -145,7 +145,7 @@ pub fn fixture() -> Fixture {
     );
     w(&root1.join("a/IMG_20200102_030405.jpg"), &jpeg(40, 30, 2));
     w(&root1.join("a/plain.png"), &png(32, 24, 3));
-    w(&root1.join("b/clip.mp4"), b"\0\0\0\x18ftypmp42synthetic");
+    w(&root1.join("b/clip.webm"), b"\x1a\x45\xdf\xa3synthetic");
     // Synthetic HEIC made with macOS sips from a generated gradient
     // (tests/fixtures/README.md); 640x480, stored as a 2x1 tile grid.
     w(&root1.join("b/IMG_20190704_102030.HEIC"), HEIC_640X480);

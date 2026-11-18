@@ -15,6 +15,7 @@ use crate::datadir;
 use crate::index::{self, Index};
 use crate::media::{self, Class, ImageInfo};
 use crate::source::{self, Entry, Skip};
+use crate::video;
 
 /// Where the browser-viewable preview for a content hash lives (HEIC).
 pub fn preview_path(data_dir: &Path, hash: &str) -> PathBuf {
@@ -37,6 +38,9 @@ pub struct Options {
     /// Stop after this many files were processed, as if the process had been
     /// killed (tests of SC-003).
     pub stop_after: Option<usize>,
+    /// The program that decodes video keyframes (`<exe> decode-keyframe`);
+    /// this executable when unset. Tests name the lichtbild binary.
+    pub keyframe_decoder: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Clone, Serialize, PartialEq, Eq)]
@@ -200,9 +204,13 @@ struct Shared {
     data_dir: PathBuf,
     limits: Limits,
     cache_bytes: AtomicU64,
+    decoder: PathBuf,
 }
 
 fn process(sh: &Shared, job: &Job) -> Outcome {
+    if job.format.is_video() {
+        return process_video(sh, job);
+    }
     let bytes = match source::read_limited(&sh.root, &job.rel, sh.limits.max_file_bytes) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::FileTooLarge => {
@@ -220,8 +228,40 @@ fn process(sh: &Shared, job: &Job) -> Outcome {
         Ok(i) => i,
         Err(s) => return Outcome::Skipped(s),
     };
+    let (format, max_pixels) = (job.format, sh.limits.max_pixels);
+    // One decode serves the thumbnail and, for HEIC, the preview.
+    thumbnails(sh, info, format.needs_preview(), move || {
+        media::decode(&bytes, format, max_pixels)
+    })
+}
+
+/// A video: container and metadata from the `moov` index, the poster from
+/// one keyframe; the file is never read whole except to hash it
+/// (REQ-MEDIA-001). A container that cannot be read is skipped; a codec
+/// that cannot be decoded still indexes the video, without a poster.
+fn process_video(sh: &Shared, job: &Job) -> Outcome {
+    let Ok(mut f) = source::open(&sh.root, &job.rel) else {
+        return Outcome::Skipped(Skip::Unreadable);
+    };
+    let (info, track) = match video::inspect(&mut f, &job.rel, job.mtime_ns, sh.limits.max_pixels) {
+        Ok(x) => x,
+        Err(s) => return Outcome::Skipped(s),
+    };
+    let max_pixels = sh.limits.max_pixels;
+    thumbnails(sh, info, true, move || {
+        video::poster(&mut f, &track, max_pixels, &sh.decoder)
+    })
+}
+
+/// Write the thumbnail and, when wanted, the preview for `info`, decoding
+/// only if one of them is missing.
+fn thumbnails(
+    sh: &Shared,
+    info: ImageInfo,
+    wants_preview: bool,
+    decode: impl FnOnce() -> Result<image::DynamicImage, Skip>,
+) -> Outcome {
     let thumb_dest = thumb_path(&sh.data_dir, &info.hash);
-    let wants_preview = job.format.needs_preview();
     let preview_dest = preview_path(&sh.data_dir, &info.hash);
     let has_thumb = thumb_dest.is_file();
     let has_preview = !wants_preview || preview_dest.is_file();
@@ -237,12 +277,10 @@ fn process(sh: &Shared, job: &Job) -> Outcome {
     if sh.cache_bytes.load(Ordering::Relaxed) >= sh.limits.thumb_cache_bytes {
         return indexed("cache-full", false, false);
     }
-    // One decode serves the thumbnail and, for HEIC, the preview.
-    let img = match media::decode(&bytes, job.format, sh.limits.max_pixels) {
+    let img = match decode() {
         Ok(i) => i,
         Err(_) => return indexed("decode-error", false, false),
     };
-    drop(bytes);
     let mut written = 0u64;
     if !has_thumb {
         let Ok(t) = media::jpeg_fit(&img, sh.limits.thumb_size, 80) else {
@@ -282,6 +320,10 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
     let mut problems: Vec<String> = Vec::new();
     let cache = Arc::new(AtomicU64::new(cache_bytes));
     let mut budget = opts.stop_after;
+    let decoder = match &opts.keyframe_decoder {
+        Some(p) => p.clone(),
+        None => std::env::current_exe()?,
+    };
 
     for root in &cfg.roots {
         let known = idx.known_for_root(&root.label)?;
@@ -299,9 +341,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
         let thumb_failed = |rr: &mut RootReport,
                             problems: &mut Vec<String>,
                             thumb: &str,
-                            format: media::Format,
+                            kind: &str,
                             rel: &Path| {
-            let reason = format!("{thumb} ({})", format.name());
+            // Images by format, videos by codec (the kill criterion for
+            // posters counts by codec).
+            let reason = format!("{thumb} ({kind})");
             problems.push(problem_line("thumbnail", &reason, &label, rel));
             *rr.thumbnails.failed.entry(reason).or_default() += 1;
         };
@@ -328,7 +372,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     mtime_ns,
                 } => match media::classify(&rel) {
                     Class::Skip(s) => skip(&mut rr, &mut problems, s, &rel),
-                    Class::Image(format) => {
+                    Class::Media(format) => {
                         let k = known.get(index::rel_bytes(&rel));
                         // Unchanged: same size and time, and the thumbnail is
                         // either present or failed for good (decode error).
@@ -360,7 +404,8 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                                     rr.thumbnails.previews += 1;
                                 }
                             } else {
-                                thumb_failed(&mut rr, &mut problems, &k.thumb, format, &rel);
+                                let kind = k.codec.as_deref().unwrap_or(format.name());
+                                thumb_failed(&mut rr, &mut problems, &k.thumb, kind, &rel);
                             }
                             indexed_rels.insert(index::rel_bytes(&rel).to_vec());
                         } else {
@@ -389,6 +434,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
             data_dir: cfg.data_dir.clone(),
             limits: cfg.limits.clone(),
             cache_bytes: AtomicU64::new(cache.load(Ordering::Relaxed)),
+            decoder: decoder.clone(),
         });
         let queue = Arc::new(Mutex::new(jobs.into_iter()));
         let (tx, rx) = mpsc::channel::<(Job, Outcome)>();
@@ -443,7 +489,11 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                     } else if thumb == "ok" {
                         rr.thumbnails.reused += 1;
                     } else {
-                        thumb_failed(&mut rr, &mut problems, &thumb, job.format, &job.rel);
+                        let kind = info
+                            .video
+                            .as_ref()
+                            .map_or(job.format.name(), |v| v.codec.as_str());
+                        thumb_failed(&mut rr, &mut problems, &thumb, kind, &job.rel);
                     }
                     if preview {
                         rr.thumbnails.previews += 1;

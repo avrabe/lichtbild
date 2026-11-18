@@ -394,3 +394,44 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-WEB-001
+
+  - id: DD-016
+    type: design-decision
+    title: Video posters in pure Rust, decoded in a limited child process
+    status: implemented
+    release: v0.3.0
+    description: >
+      Owner decision 2026-11-18, after a survey of the crates: pure Rust for
+      video, with ffmpeg only as a measured fallback.
+    fields:
+      decision: >
+        A small box walk finds moov (capped at 64 MiB) and the video track;
+        mp4-atom =0.17.1 decodes mvhd, tkhd and mdia. Apple keys, ©xyz and
+        mvhd give date and position (nom-exif was tried and found neither
+        the Apple keys nor ©xyz in the fixtures). The first sync sample
+        (capped at 64 MiB) is decoded by rust_h264 =0.6.1 or rust_h265
+        =0.4.1. Both contain unsafe code (SIMD kernels, frame-threading
+        tables), so decoding runs in `lichtbild decode-keyframe`, a child
+        process with a cleared environment, a 60 s wall-clock timeout, a
+        60 s CPU limit and on Linux an address-space limit; a crash, hang or
+        bad output costs only that poster. Originals are served with single
+        byte ranges for seeking; nothing is transcoded.
+      rationale: >
+        Keeps the release one static binary with no host packages, and keeps
+        unsafe decoder code out of the server and scan process.
+        Posters match ffmpeg 9.0.1 within 2 levels per channel on the
+        synthetic fixtures, rotation included.
+      alternatives: >
+        ffmpeg or ffprobe as child processes (host package on the Pi and in
+        CI); ffmpeg linked in (C in process); decoding in a thread (no way to
+        stop a hang, unsafe code in process); transcoding HEVC for browsers
+        that cannot play it (CPU on the Pi, a second copy of every video).
+      kill-criterion: >
+        Add an ffmpeg child-process fallback for posters if, on the real
+        library, more than 5% of the H.264 and HEVC videos end as
+        "decode-error (h264)" or "decode-error (hevc)", or their posters are
+        visibly wrong.
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-001
+

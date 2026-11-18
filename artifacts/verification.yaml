@@ -597,3 +597,101 @@ artifacts:
     links:
       - type: verifies
         target: REQ-AUTH-001
+
+  - id: VER-043
+    type: verification
+    title: Videos are indexed with poster, length, date and place
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "videos_are_indexed_with_poster_length_date_and_place"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video videos_are_indexed_with_poster_length_date_and_place"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-044
+    type: verification
+    title: A rescan keeps videos and counts failed posters by codec
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "rescan_keeps_videos_and_counts_failed_posters_by_codec"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video rescan_keeps_videos_and_counts_failed_posters_by_codec"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-045
+    type: verification
+    title: Videos play with their poster and seek by byte range
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "videos_play_with_poster_and_seek_by_range"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video videos_play_with_poster_and_seek_by_range"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-046
+    type: verification
+    title: Range headers are parsed as RFC 9110 single ranges
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "range_headers"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video range_headers"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-047
+    type: verification
+    title: Videos over the pixel limit are skipped before decoding
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "videos_over_the_pixel_limit_are_skipped"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video videos_over_the_pixel_limit_are_skipped"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-048
+    type: verification
+    title: A failing keyframe decoder costs only the poster
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_failing_decoder_costs_only_the_poster"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video a_failing_decoder_costs_only_the_poster"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001
+
+  - id: VER-049
+    type: verification
+    title: A hanging keyframe decoder is killed at the timeout
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_hanging_decoder_is_killed"
+      test-location: src/video.rs
+      steps:
+        - run: "cargo test --lib a_hanging_decoder_is_killed"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-001

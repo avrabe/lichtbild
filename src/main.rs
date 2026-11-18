@@ -27,6 +27,7 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_MAX_PIXELS / _MAX_FILE_MIB / _THUMB_CACHE_MIB / _THUMB_SIZE   limits
   LICHTBILD_PUBLIC_URL https://host/prefix       external URL; needed with login
   LICHTBILD_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET_FILE / _CA_FILE   login (OIDC)
+  LICHTBILD_OIDC_TRUSTED_AUDIENCES  id,id        extra ID-token audiences (azp must be this client)
   people: [[people]] label, oidc_subject or oidc_email, sees = [..]  (TOML only)
   LICHTBILD_PLACES     /path/cities1000.txt      GeoNames towns for offline place names
   LICHTBILD_PLACES_ADMIN1 / _COUNTRIES           admin1CodesASCII.txt / countryInfo.txt
@@ -55,6 +56,12 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         ["scan"] => report(run_scan()),
+        // Internal: the scan runs this to decode one video keyframe in a
+        // separate, limited process (DD-016).
+        ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["serve"] => report(run_serve()),
         _ => {
             eprint!("{HELP}");

@@ -64,8 +64,12 @@
     var a = viewer.querySelector(sel);
     if (a && a.href) window.location.href = a.href;
   }
+  // Keys and swipes that start on a video belong to its controls (seek,
+  // volume, scrubbing), not to the photo navigation.
+  function onVideo(t) { return t && t.closest && t.closest("video"); }
   document.addEventListener("keydown", function (e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (onVideo(e.target) && e.key !== "Escape") return;
     if (e.key === "ArrowLeft") go("a.prev");
     else if (e.key === "ArrowRight") go("a.next");
     else if (e.key === "Escape") go("a.back");
@@ -77,7 +81,7 @@
   var x0 = null, y0 = null, t0 = 0;
   var stage = viewer.querySelector(".stage") || viewer;
   stage.addEventListener("touchstart", function (e) {
-    if (e.touches.length !== 1) { x0 = null; return; }
+    if (e.touches.length !== 1 || onVideo(e.target)) { x0 = null; return; }
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now();
   }, { passive: true });
   stage.addEventListener("touchend", function (e) {

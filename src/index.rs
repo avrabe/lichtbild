@@ -64,6 +64,9 @@ pub struct Record {
     /// A JPEG preview exists for an original the browser cannot show (HEIC).
     #[serde(default)]
     pub preview: bool,
+    /// Length and codec, for a video (REQ-MEDIA-001).
+    #[serde(default)]
+    pub video: Option<crate::video::VideoMeta>,
 }
 
 /// What the index knows about one file, for change detection.
@@ -75,6 +78,8 @@ pub struct Known {
     pub missing: bool,
     pub hash: String,
     pub thumb: String,
+    /// The video codec, which names a failed poster in the report.
+    pub codec: Option<String>,
 }
 
 /// One timeline entry.
@@ -90,6 +95,8 @@ pub struct Item {
     pub hash: String,
     pub width: u32,
     pub height: u32,
+    /// Length of a video, in milliseconds.
+    pub video_ms: Option<u64>,
 }
 
 pub struct Index {
@@ -156,6 +163,7 @@ impl Index {
                     missing: rec.missing,
                     hash: rec.hash,
                     thumb: rec.thumb,
+                    codec: rec.video.map(|v| v.codec),
                 },
             );
         }
@@ -327,6 +335,7 @@ impl Index {
                 hash: rec.hash,
                 width: rec.width,
                 height: rec.height,
+                video_ms: rec.video.map(|v| v.duration_ms),
             });
         }
         Ok(out)
@@ -456,6 +465,7 @@ impl Batch {
             thumb: thumb.to_string(),
             missing: false,
             preview,
+            video: info.video.clone(),
         };
         self.store(id, &rec)?;
         self.link(id, &rec)

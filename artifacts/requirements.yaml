@@ -464,14 +464,35 @@ artifacts:
 
   - id: REQ-MEDIA-001
     type: requirement
-    title: Motion Photos and video with poster frames and streaming
-    status: draft
+    title: MP4 and MOV video with poster frames, length and streaming
+    status: implemented
+    release: v0.3.0
     description: >
-      Motion Photos play their embedded clip; MP4 and MOV videos get poster
-      frames and are streamed with range requests. Native decoders or
-      external tools run under limits. HEIC stills have their own requirement.
+      MP4, M4V, 3GP and MOV videos are indexed with their length, codec,
+      capture date (Apple keys with offset, else the container's UTC time)
+      and position (Apple keys or ©xyz). H.264 and HEVC (8 and 10 bit) get a
+      poster from their first keyframe, rotated as the track says; other
+      codecs are indexed without one and counted by codec. Only the moov
+      index and one keyframe are read, both capped; the decoders run in a
+      separate process under a timeout and CPU and memory limits. The
+      viewer plays the original, which is served with byte ranges.
     fields:
       priority: must
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-005
+
+  - id: REQ-MEDIA-003
+    type: requirement
+    title: Motion Photos play their embedded clip
+    status: draft
+    description: >
+      Pixel and Samsung Motion Photos (a JPEG with an MP4 appended) and
+      Apple Live Photos (a HEIC next to a MOV of the same name) show their
+      clip in the viewer. Split from the video requirement at v0.3.0.
+    fields:
+      priority: should
       category: functional
     links:
       - type: satisfies

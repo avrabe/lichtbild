@@ -117,3 +117,21 @@ artifacts:
         target: REQ-AUTH-002
       - type: satisfies
         target: REQ-NAV-001
+
+  - id: FEAT-006
+    type: feature
+    title: Videos in the timeline
+    status: implemented
+    release: v0.3.0
+    description: >
+      Owner request 2026-11-18: the 790 videos the scan reported as "not yet
+      supported (video)" appear in the timeline with a poster and their
+      length, and play in the viewer. Transcripts follow (v0.4.0).
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - The real library's scan reports at most 5% of H.264 and HEVC videos as "decode-error (h264)" or "decode-error (hevc)"
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-001
+
