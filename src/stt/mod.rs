@@ -194,6 +194,10 @@ impl Engine {
                 None => break,
             }
             let size = (content - seek).min(m::N_FRAMES);
+            // Less than a second left: Whisper only invents text there.
+            if size < 100 {
+                break;
+            }
             let window = mel.narrow(2, seek, size)?;
             let offset = (seek * m::HOP_LENGTH) as f32 / m::SAMPLE_RATE as f32;
             let features = self.decoder.features(&window)?;
@@ -202,7 +206,17 @@ impl Engine {
             let no_speech =
                 dr.no_speech_prob > m::NO_SPEECH_THRESHOLD && dr.avg_logprob < m::LOGPROB_THRESHOLD;
             let looped = dr.compression_ratio > m::COMPRESSION_RATIO_THRESHOLD;
+            // Still unlikely after every temperature: over music Whisper
+            // writes fluent text that was never said ("Wherever the train
+            // goes" in Tears of Steel); such a window is left out.
+            let unsure = dr.avg_logprob < m::LOGPROB_THRESHOLD;
             let (timed, resume) = self.decoder.timed_text(&dr.tokens)?;
+            // Whisper pads the last window to 30 s and may invent text in the
+            // padding: nothing that starts past the audio counts, and the
+            // next window never starts past it either.
+            let window_s = size as f32 * 0.01;
+            let timed: Vec<_> = timed.into_iter().filter(|p| p.0 < window_s - 0.2).collect();
+            let resume = resume.filter(|&at| at < window_s);
             if std::env::var_os("LICHTBILD_STT_DEBUG").is_some() {
                 eprintln!(
                     "window {offset:.1}s size {:.1}s lang {lang} no_speech {:.2} logprob {:.2} cr {:.2} t {} looped {looped} pieces {} resume {resume:?} rep {:?}",
@@ -210,7 +224,7 @@ impl Engine {
                     timed.iter().map(|p| repetitive(&p.2)).collect::<Vec<_>>()
                 );
             }
-            if !no_speech && !looped {
+            if !no_speech && !looped && !unsure {
                 let code = self
                     .codes
                     .iter()
@@ -222,7 +236,7 @@ impl Engine {
                     }
                     pieces.push(Piece {
                         start: offset + s,
-                        end: offset + e.min(size as f32 * 0.01),
+                        end: offset + e.min(window_s),
                         lang: code.to_string(),
                         text,
                     });
@@ -230,7 +244,7 @@ impl Engine {
             }
             // Advance to the last complete timestamp, at least one second.
             let step = match resume {
-                Some(at) if at >= 1.0 && !no_speech && !looped => {
+                Some(at) if at >= 1.0 && !no_speech && !looped && !unsure => {
                     ((at * m::SAMPLE_RATE as f32) as usize / m::HOP_LENGTH).min(size)
                 }
                 _ => size,
@@ -603,6 +617,16 @@ mod tests {
         .map(|x| x.text)
         .collect();
         assert_eq!(kept, ["Komm!", "komm", "Heute backen wir Kuchen."]);
+    }
+
+    #[test]
+    fn token_loops_are_seen() {
+        assert!(whisper::looping(&[5; 6]));
+        assert!(whisper::looping(&[
+            1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3, 1, 2, 3
+        ]));
+        assert!(!whisper::looping(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]));
+        assert!(!whisper::looping(&[5; 5]));
     }
 
     #[test]

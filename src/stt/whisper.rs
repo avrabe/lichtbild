@@ -175,6 +175,7 @@ impl Decoder {
         self.language_token = Some(language);
         let sample_len = self.model.config().max_target_positions / 2;
         let mut sum_logprob = 0f64;
+        let mut looped = false;
         let mut no_speech_prob = f64::NAN;
         let mut tokens = vec![self.sot_token];
         if let Some(language_token) = self.language_token {
@@ -242,10 +243,21 @@ impl Decoder {
                 break;
             }
             sum_logprob += prob.ln();
+            // A loop ("I'm I'm I'm", a hum turned into "Sssss") is cut short
+            // instead of filling the whole token budget; it is marked so the
+            // caller treats it like a high compression ratio.
+            if looping(&tokens) {
+                looped = true;
+                break;
+            }
         }
         let text = self.tokenizer.decode(&tokens, true).map_err(E::msg)?;
         let avg_logprob = sum_logprob / tokens.len() as f64;
-        let compression_ratio = compression_ratio(&text);
+        let compression_ratio = if looped {
+            f64::INFINITY
+        } else {
+            compression_ratio(&text)
+        };
 
         Ok(DecodingResult {
             tokens,
@@ -312,9 +324,9 @@ impl Decoder {
         features: &Tensor,
         language: u32,
     ) -> Result<DecodingResult> {
-        for (i, &t) in m::TEMPERATURES.iter().enumerate() {
+        for (i, &t) in TEMPERATURES.iter().enumerate() {
             let dr: Result<DecodingResult> = self.decode(features, language, t);
-            if i == m::TEMPERATURES.len() - 1 {
+            if i == TEMPERATURES.len() - 1 {
                 return dr;
             }
             // On errors, we try again with a different temperature.
@@ -509,4 +521,21 @@ pub fn compression_ratio(text: &str) -> f64 {
     }
     let packed = miniz_oxide::deflate::compress_to_vec(text.as_bytes(), 6);
     text.len() as f64 / packed.len().max(1) as f64
+}
+
+/// Fallback temperatures: three of Whisper's six. Each step re-decodes a
+/// whole window; on music and noise all of them run, so six cost twice as
+/// much for little gain (measured on open media).
+pub const TEMPERATURES: [f64; 3] = [0.0, 0.4, 0.8];
+
+/// Whether the last tokens repeat a period of 1 to 8 tokens at least six
+/// times in a row.
+pub fn looping(tokens: &[u32]) -> bool {
+    (1..=8usize).any(|p| {
+        let need = p * 6;
+        tokens.len() >= need && {
+            let tail = &tokens[tokens.len() - need..];
+            tail.chunks(p).all(|c| c == &tail[..p])
+        }
+    })
 }
