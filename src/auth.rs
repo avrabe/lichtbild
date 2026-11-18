@@ -71,8 +71,11 @@ struct Session {
 /// id itself; the value names the person, whose access is worked out again
 /// from the current configuration.
 pub trait SessionStore: Send + Sync {
-    fn put_session(&self, key: &str, person: &str, expires_unix: u64) -> Result<()>;
-    fn get_session(&self, key: &str) -> Result<Option<(String, u64)>>;
+    /// `identity` is how the person signed in ("sub:<subject>" or
+    /// "email:<address>"); a restored session must still match it.
+    fn put_session(&self, key: &str, person: &str, identity: &str, expires_unix: u64)
+        -> Result<()>;
+    fn get_session(&self, key: &str) -> Result<Option<(String, String, u64)>>;
     fn remove_session(&self, key: &str) -> Result<()>;
 }
 
@@ -402,10 +405,21 @@ impl Auth {
             .ok_or(LoginError::NotAPerson)?;
         let sid = CsrfToken::new_random_len(32).secret().clone();
         if let (Some(store), Some(person)) = (&self.store, viewer.name.as_deref()) {
+            // The identity the person was found by, as viewer_for does.
+            let by_subject = self
+                .people
+                .iter()
+                .any(|p| p.label == person && p.oidc_subject.as_deref() == Some(subject.as_str()));
+            let identity = if by_subject {
+                format!("sub:{subject}")
+            } else {
+                format!("email:{}", email.as_deref().unwrap_or_default())
+            };
             // A session that cannot be stored still works until a restart.
             if let Err(e) = store.put_session(
                 &session_key(&sid),
                 person,
+                &identity,
                 unix_now() + SESSION_TTL.as_secs(),
             ) {
                 tracing::error!("login: session not stored: {e:#}");
@@ -463,23 +477,37 @@ impl Auth {
     }
 
     pub fn session(&self, sid: &str) -> Option<Viewer> {
-        {
-            let s = self.sessions.lock().expect("sessions lock");
-            if let Some(v) = s.get(sid).filter(|v| v.expires > Instant::now()) {
-                return Some(v.viewer.clone());
-            }
+        // One lock across the memory check, the store read and the insert,
+        // so a concurrent sign-out cannot be undone by a restore.
+        let mut s = self.sessions.lock().expect("sessions lock");
+        if let Some(v) = s.get(sid).filter(|v| v.expires > Instant::now()) {
+            return Some(v.viewer.clone());
         }
         // Not in memory (the server restarted): the stored session, for a
-        // person who is still configured, with today's grants.
+        // person who is still configured with the identity they signed in
+        // with, with today's grants.
         let store = self.store.as_ref()?;
-        let (person, expires) = store.get_session(&session_key(sid)).ok()??;
+        let (person, identity, expires) = store.get_session(&session_key(sid)).ok()??;
         let now = unix_now();
         if expires <= now {
             return None;
         }
         let p = self.people.iter().find(|p| p.label == person)?;
+        let still = match identity.split_once(':') {
+            Some(("sub", sub)) => p.oidc_subject.as_deref() == Some(sub),
+            Some(("email", mail)) => {
+                p.oidc_subject.is_none()
+                    && p.oidc_email
+                        .as_deref()
+                        .is_some_and(|e| !mail.is_empty() && e.eq_ignore_ascii_case(mail))
+            }
+            _ => false,
+        };
+        if !still {
+            return None;
+        }
         let viewer = self.viewer_of(p);
-        self.sessions.lock().expect("sessions lock").insert(
+        s.insert(
             sid.to_string(),
             Session {
                 viewer: viewer.clone(),
@@ -489,13 +517,16 @@ impl Auth {
         Some(viewer)
     }
 
-    pub fn logout(&self, sid: &str) {
-        self.sessions.lock().expect("sessions lock").remove(sid);
+    /// End a session: the stored one first, then memory, under the lock
+    /// session() restores under. Err when the stored session could not be
+    /// removed (it would come back after a restart).
+    pub fn logout(&self, sid: &str) -> Result<()> {
+        let mut s = self.sessions.lock().expect("sessions lock");
         if let Some(store) = &self.store {
-            if let Err(e) = store.remove_session(&session_key(sid)) {
-                tracing::error!("logout: stored session not removed: {e:#}");
-            }
+            store.remove_session(&session_key(sid))?;
         }
+        s.remove(sid);
+        Ok(())
     }
 }
 

@@ -884,8 +884,8 @@ async fn sessions_survive_a_restart_but_not_a_removal_or_logout() {
     };
     // Only the hash is stored, never the cookie value.
     assert!(e.idx.get_session(&sid).unwrap().is_none());
-    let (person, _) = e.idx.get_session(&session_key(&sid)).unwrap().unwrap();
-    assert_eq!(person, "p1");
+    let (person, identity, _) = e.idx.get_session(&session_key(&sid)).unwrap().unwrap();
+    assert_eq!((person.as_str(), identity.as_str()), ("p1", "sub:user-1"));
 
     let issuer = e.mock.lock().unwrap().issuer.clone();
     let secret = e._fx.data.join("client-secret");
@@ -899,8 +899,13 @@ async fn sessions_survive_a_restart_but_not_a_removal_or_logout() {
     let without =
         make_auth(&issuer, &secret, "https://photos.example", false).with_store(e.idx.clone());
     assert!(without.session(&sid).is_none());
+    // The label given to someone else: the stored session is not theirs.
+    e.idx
+        .put_session(&session_key("other"), "p1", "sub:someone-else", u64::MAX)
+        .unwrap();
+    assert!(again.session("other").is_none());
     // Sign-out removes the stored session.
-    again.logout(&sid);
+    again.logout(&sid).unwrap();
     assert!(e.idx.get_session(&session_key(&sid)).unwrap().is_none());
     let after =
         make_auth(&issuer, &secret, "https://photos.example", true).with_store(e.idx.clone());

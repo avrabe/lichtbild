@@ -359,7 +359,15 @@ async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap)
         return StatusCode::FORBIDDEN.into_response();
     }
     if let (Some(auth), Some(sid)) = (&st.auth, session_cookie(&headers)) {
-        auth.logout(&sid);
+        if let Err(e) = auth.logout(&sid) {
+            tracing::error!("logout: stored session not removed: {e:#}");
+            return notice(
+                &st,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Sign-out failed",
+                "The session could not be ended. <a href=\"./\">Back</a>",
+            );
+        }
     }
     let mut r = notice(
         &st,

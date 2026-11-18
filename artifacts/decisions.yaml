@@ -550,12 +550,14 @@ artifacts:
     fields:
       decision: >
         Besides memory, each session is stored in the redb index as the
-        SHA-256 of its id with the person's label and an expiry (30 days).
-        A session not in memory is looked up there; the person's libraries
-        are worked out again from the current configuration, so a person
-        removed from it is signed out and grant changes apply. Sign-out
-        deletes the stored session; expired ones go when a new one is
-        stored. Pages are sent with "Cache-Control: no-cache, private", and
+        SHA-256 of its id with the person's label, the identity they signed
+        in with (subject, or verified email) and an expiry (30 days). A
+        session not in memory is looked up there, under the same lock
+        sign-out takes; it counts only if the configured person with that
+        label still has that identity, and their libraries are worked out
+        again from the current configuration. Sign-out removes the stored
+        session first and reports a failure; expired ones go when a new one
+        is stored. Pages are sent with "Cache-Control: no-cache, private", and
         a thumbnail that fails with a redirect reloads the page.
       rationale: >
         Upgrades are frequent; signing the household out each time, and the

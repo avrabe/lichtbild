@@ -33,9 +33,9 @@ const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_tim
 /// Content hash -> transcript JSON (crate::stt::Transcript), so a moved or
 /// renamed video keeps its transcript (REQ-MEDIA-004).
 const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
-/// SHA-256 of a session id -> (person, expiry in Unix seconds), so a
+/// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
 /// restart does not sign anyone out (crate::auth::SessionStore).
-const SESSIONS: TableDefinition<&str, (&str, u64)> = TableDefinition::new("sessions");
+const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -568,7 +568,13 @@ impl Batch {
 }
 
 impl crate::auth::SessionStore for Index {
-    fn put_session(&self, key: &str, person: &str, expires_unix: u64) -> Result<()> {
+    fn put_session(
+        &self,
+        key: &str,
+        person: &str,
+        identity: &str,
+        expires_unix: u64,
+    ) -> Result<()> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
@@ -579,24 +585,24 @@ impl crate::auth::SessionStore for Index {
             let expired: Vec<String> = t
                 .iter()?
                 .filter_map(|e| e.ok())
-                .filter(|(_, v)| v.value().1 <= now)
+                .filter(|(_, v)| v.value().2 <= now)
                 .map(|(k, _)| k.value().to_string())
                 .collect();
             for k in expired {
                 t.remove(k.as_str())?;
             }
-            t.insert(key, (person, expires_unix))?;
+            t.insert(key, (person, identity, expires_unix))?;
         }
         w.commit()?;
         Ok(())
     }
 
-    fn get_session(&self, key: &str) -> Result<Option<(String, u64)>> {
+    fn get_session(&self, key: &str) -> Result<Option<(String, String, u64)>> {
         let r = self.db.begin_read()?;
         let t = r.open_table(SESSIONS)?;
         Ok(t.get(key)?.map(|v| {
-            let (p, e) = v.value();
-            (p.to_string(), e)
+            let (p, i, e) = v.value();
+            (p.to_string(), i.to_string(), e)
         }))
     }
 
