@@ -62,6 +62,7 @@ at nice 0.
 | F48 | REQ-MEDIA-001 | the viewer prefetches a whole video that has no poster | `videos_play_with_poster_and_seek_by_range` |
 | F49 | REQ-MEDIA-001 | a hanging keyframe decoder is waited for instead of killed | `a_hanging_decoder_is_killed` |
 | F50 | REQ-MEDIA-001 | a failing keyframe decoder takes the whole video out of the index | `a_failing_decoder_costs_only_the_poster` |
+| F51 | REQ-MEDIA-001 | unchanged videos drop out of the per-codec count on a rescan | `rescan_keeps_videos_and_counts_failed_posters_by_codec` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
