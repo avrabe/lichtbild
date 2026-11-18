@@ -367,3 +367,30 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-NAV-001
+
+  - id: DD-015
+    type: design-decision
+    title: The timeline orders by the camera's local time, not UTC
+    status: implemented
+    release: v0.2.1
+    description: >
+      Items sort by taken_local, the wall-clock time the camera recorded.
+      taken_offset is stored, but it does not change the order (issue #4).
+    fields:
+      decision: >
+        Keep local wall-clock order and the day headers it gives: a photo
+        taken at 23:30 on holiday stays on that evening's day, wherever the
+        viewer is.
+      rationale: >
+        Many items carry no offset at all: older cameras, scans, names that
+        carry only a date, and stills from a camera next to a phone. Sorting
+        by UTC where an offset exists and by local time where it does not
+        would order one timeline on two clocks, which is worse than the rare
+        interleaving of photos from two time zones on one travel day. Day
+        grouping by UTC would also move evening photos to the next day.
+      alternatives: >
+        UTC order with local day headers, once nearly every item has an
+        offset; it needs an index migration of by_root and by_time.
+    links:
+      - type: satisfies
+        target: REQ-WEB-001
