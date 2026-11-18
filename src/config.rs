@@ -62,6 +62,9 @@ pub struct Config {
     pub people: Vec<crate::auth::Person>,
     /// The nav v1 switcher's HTML (REQ-NAV-001); empty when not configured.
     pub nav_html: String,
+    /// The world map's PMTiles file and glyph/sprite directory
+    /// (REQ-MAP-001); canonical paths, each optional.
+    pub map: MapFiles,
 }
 
 /// The OIDC block of the TOML file.
@@ -83,6 +86,16 @@ pub struct PlacesFiles {
     pub cities: Option<PathBuf>,
     pub admin1: Option<PathBuf>,
     pub countries: Option<PathBuf>,
+}
+
+/// The world map's files (REQ-MAP-001): one Protomaps PMTiles file, and a
+/// directory with `fonts/` (glyph PBFs) and `sprites/v4/`, as in
+/// protomaps/basemaps-assets. Both are read-only and optional.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct MapFiles {
+    pub pmtiles: Option<PathBuf>,
+    pub assets: Option<PathBuf>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -113,6 +126,8 @@ struct FileConfig {
     allowed_hosts: Vec<String>,
     #[serde(default)]
     places: PlacesFiles,
+    #[serde(default)]
+    map: MapFiles,
     public_url: Option<String>,
     #[serde(default)]
     oidc: OidcFile,
@@ -137,6 +152,7 @@ pub struct Settings {
     pub allow_remote_without_login: bool,
     pub allowed_hosts: Vec<String>,
     pub places: PlacesFiles,
+    pub map: MapFiles,
     pub public_url: Option<String>,
     pub oidc: OidcFile,
     pub people: Vec<crate::auth::Person>,
@@ -228,6 +244,12 @@ impl Settings {
         if let Some(v) = get("LICHTBILD_PLACES_COUNTRIES") {
             s.places.countries = Some(PathBuf::from(v));
         }
+        if let Some(v) = get("LICHTBILD_MAP_PMTILES") {
+            s.map.pmtiles = Some(PathBuf::from(v));
+        }
+        if let Some(v) = get("LICHTBILD_MAP_ASSETS") {
+            s.map.assets = Some(PathBuf::from(v));
+        }
         if let Some(v) = get("LICHTBILD_ALLOWED_HOSTS") {
             s.allowed_hosts = v
                 .split(',')
@@ -256,6 +278,8 @@ impl Settings {
         if f.places != PlacesFiles::default() {
             self.places = f.places;
         }
+        self.map.pmtiles = f.map.pmtiles.or(self.map.pmtiles.take());
+        self.map.assets = f.map.assets.or(self.map.assets.take());
         self.public_url = f.public_url.or(self.public_url.take());
         let o = &mut self.oidc;
         o.issuer = f.oidc.issuer.or(o.issuer.take());
@@ -393,6 +417,7 @@ impl Settings {
             oidc,
             people: self.people,
             nav_html: nav_html(self.nav_file.as_deref(), self.nav_self.as_deref())?,
+            map: crate::map::check_files(&self.map)?,
         })
     }
 }
@@ -541,6 +566,19 @@ mod tests {
         );
         assert!(
             s.apply_file("[places]\ntowns = \"/x\"\n").is_err(),
+            "unknown key accepted"
+        );
+    }
+
+    #[test]
+    fn map_files_from_file() {
+        let mut s = Settings::default();
+        s.apply_file("[map]\npmtiles = \"/x/world.pmtiles\"\nassets = \"/x/assets\"\n")
+            .unwrap();
+        assert_eq!(s.map.pmtiles, Some(PathBuf::from("/x/world.pmtiles")));
+        assert_eq!(s.map.assets, Some(PathBuf::from("/x/assets")));
+        assert!(
+            s.apply_file("[map]\ntiles = \"/x\"\n").is_err(),
             "unknown key accepted"
         );
     }

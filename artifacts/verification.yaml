@@ -695,3 +695,129 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MEDIA-001
+
+  - id: VER-050
+    type: verification
+    title: Map clusters hold only the libraries the viewer may see
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "clusters_hold_only_the_libraries_the_viewer_may_see"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map clusters_hold_only_the_libraries_the_viewer_may_see"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-051
+    type: verification
+    title: A signed-in person's map shows only their own positions
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_map_shows_a_person_only_their_own_positions"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth the_map_shows_a_person_only_their_own_positions"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-052
+    type: verification
+    title: Clusters split with zoom and follow the bounding box
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "clusters_split_with_zoom_and_follow_the_box"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map clusters_split_with_zoom_and_follow_the_box"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-053
+    type: verification
+    title: The PMTiles file is served with byte ranges, 416 past the end
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pmtiles_file_is_served_with_byte_ranges"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map the_pmtiles_file_is_served_with_byte_ranges"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-054
+    type: verification
+    title: Glyphs and sprites are confined to their directory
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "glyphs_and_sprites_are_confined_to_their_directory"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map glyphs_and_sprites_are_confined_to_their_directory"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-055
+    type: verification
+    title: Without a PMTiles file the map page says so and clusters still work
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "without_a_map_file_the_page_says_so_and_clusters_still_work"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map without_a_map_file_the_page_says_so_and_clusters_still_work"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-056
+    type: verification
+    title: The map works under the base path
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_map_works_under_the_base_path"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map the_map_works_under_the_base_path"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-057
+    type: verification
+    title: The map loads nothing from another host
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_map_loads_nothing_from_another_host"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map the_map_loads_nothing_from_another_host"
+    links:
+      - type: verifies
+        target: REQ-MAP-001
+
+  - id: VER-058
+    type: verification
+    title: Vendored map libraries match their pinned sha256
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "vendored_map_assets_match_their_pinned_sha256"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map vendored_map_assets_match_their_pinned_sha256"
+    links:
+      - type: verifies
+        target: REQ-MAP-001

@@ -778,3 +778,78 @@ async fn next_after_login_stays_in_the_app() {
         );
     }
 }
+
+// The world map with a real session: p1 sees only p1's positions, and the
+// map routes need a session like every other route.
+// rivet: verifies REQ-MAP-001
+// rivet: verifies REQ-AUTH-002
+#[tokio::test]
+async fn the_map_shows_a_person_only_their_own_positions() {
+    let e = env("http://localhost").await;
+    // Positions in p2 too, at the made-up Westdorf coordinates.
+    std::fs::write(
+        e._fx.root2.join("IMG_west.jpg"),
+        jpeg_with_exif(
+            "2023:01:02 12:00:00",
+            "+01:00",
+            Some(((10, 24, 'N'), (19, 54, 'E'))),
+            31,
+        ),
+    )
+    .unwrap();
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    let positioned = |label: &str| -> Vec<u64> {
+        e.idx
+            .all()
+            .unwrap()
+            .into_iter()
+            .filter(|(_, r)| r.label == label && r.lat.is_some())
+            .map(|(id, _)| id)
+            .collect()
+    };
+    let (p1, p2) = (positioned("p1"), positioned("p2"));
+    assert!(!p1.is_empty() && !p2.is_empty());
+
+    for uri in [
+        "/map",
+        "/map/clusters?z=3",
+        "/map/tiles.pmtiles",
+        "/map/assets/fonts/a/0-255.pbf",
+    ] {
+        let r = req(&e.app, "GET", uri, None, false).await;
+        assert_eq!(r.status, StatusCode::SEE_OTHER, "{uri} without session");
+    }
+    let (sid, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let r = req(&e.app, "GET", "/map/clusters?z=18", Some(&sid), false).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let json: serde_json::Value = serde_json::from_str(&r.body).unwrap();
+    let mut seen = Vec::new();
+    for c in json["clusters"].as_array().unwrap() {
+        for it in c["items"].as_array().into_iter().flatten() {
+            assert_eq!(it["who"], "p1", "{}", r.body);
+            seen.push(it["id"].as_u64().unwrap());
+        }
+    }
+    assert_eq!(json["total"].as_u64().unwrap() as usize, p1.len());
+    assert_eq!(seen.len(), p1.len());
+    assert!(
+        seen.iter().all(|id| !p2.contains(id)),
+        "p2's items on p1's map"
+    );
+    for uri in [
+        "/map/clusters?who=p2",
+        "/map/clusters?who=all",
+        "/map?who=p2",
+    ] {
+        let r = req(&e.app, "GET", uri, Some(&sid), false).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri} for p1");
+    }
+    let page = req(&e.app, "GET", "/map", Some(&sid), false).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains(&format!("{} photo", p1.len())),
+        "{}",
+        page.body
+    );
+}
