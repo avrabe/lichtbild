@@ -644,12 +644,19 @@ pub fn render_items(
                 h = (u64::from(it.height) * u64::from(it.width.min(360))
                     / u64::from(it.width.max(1))),
             )
+        } else if it.video_ms.is_some() {
+            "<span class=\"nothumb\">video</span>".to_string()
         } else {
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
+        let dur = it
+            .video_ms
+            .map(|ms| format!("<span class=\"dur\">{}</span>", duration(ms)))
+            .unwrap_or_default();
         s += &format!(
-            "<a class=\"item{cls}\" id=\"i{id}\" href=\"v/{who}/{id}\" title=\"{t}\">{img}</a>",
+            "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}\" title=\"{t}\">{img}{dur}</a>",
             cls = if weak { " weak" } else { "" },
+            vid = if it.video_ms.is_some() { " video" } else { "" },
             id = it.id,
             who = esc(who),
             t = esc(&title),
@@ -783,6 +790,16 @@ type ViewerItem = (
 /// The viewer's info panel (REQ-WEB-008): date and its source, place,
 /// camera details, size and file. The place name comes from the offline
 /// GeoNames index (REQ-PLACE-001); nothing is looked up outside.
+/// "m:ss", or "h:mm:ss" from an hour.
+pub fn duration(ms: u64) -> String {
+    let s = (ms + 500) / 1000;
+    if s >= 3600 {
+        format!("{}:{:02}:{:02}", s / 3600, s / 60 % 60, s % 60)
+    } else {
+        format!("{}:{:02}", s / 60, s % 60)
+    }
+}
+
 pub fn render_info(
     rec: &index::Record,
     exif: &[(&'static str, String)],
@@ -798,6 +815,8 @@ pub fn render_info(
         "exif-other" => "camera (EXIF, not the capture time)",
         "file-name" => "file name",
         "file-time" => "file time",
+        "video" => "camera (video)",
+        "video-utc" => "camera (video, in UTC)",
         other => other,
     };
     taken += &format!("<br><span class=\"dim\">from {}</span>", esc(source));
@@ -821,6 +840,21 @@ pub fn render_info(
             "Place",
             "<span class=\"dim\">no position recorded</span>".into(),
         )),
+    }
+    if let Some(v) = &rec.video {
+        let codec = match v.codec.as_str() {
+            "h264" => "H.264",
+            "hevc" => "HEVC",
+            other => other,
+        };
+        rows.push((
+            "Length",
+            format!(
+                "{} <span class=\"dim\">· {}</span>",
+                duration(v.duration_ms),
+                esc(codec)
+            ),
+        ));
     }
     for (k, v) in exif {
         rows.push((k, esc(v)));
@@ -854,6 +888,21 @@ pub fn render_info(
 /// The viewer's photo, or a note when the original is a format browsers
 /// cannot display and no preview could be made from it.
 pub fn photo_html(id: u64, rec: &index::Record) -> String {
+    if rec.video.is_some() {
+        // The original plays in the browser, seeking by range requests;
+        // the poster is the decoded first keyframe when there is one.
+        let poster = if rec.preview {
+            format!(
+                " poster=\"preview/{id}?h={}\"",
+                esc(rec.hash.get(..12).unwrap_or(""))
+            )
+        } else {
+            String::new()
+        };
+        return format!(
+            "<video class=\"photo\" controls playsinline preload=\"metadata\"{poster} src=\"original/{id}\"></video>"
+        );
+    }
     let rel = String::from_utf8_lossy(&rec.rel).to_ascii_lowercase();
     let browser_cannot_show = rel.ends_with(".heic") || rel.ends_with(".heif");
     if browser_cannot_show && !rec.preview {
@@ -905,12 +954,16 @@ async fn viewer(
         let mut prefetch = Vec::new();
         for n in [newer, older].into_iter().flatten() {
             if let Some(r) = idx.locate(n)? {
-                prefetch.push(photo_src(n, &r));
+                // A video prefetches its poster, never the video itself.
+                if r.video.is_none() || r.preview {
+                    prefetch.push(photo_src(n, &r));
+                }
             }
         }
         // EXIF for the info panel, read from the original (read-only).
         let exif = roots
             .get(&rec.label)
+            .filter(|_| rec.video.is_none())
             .and_then(|root| {
                 crate::source::read_limited(root, &index::rel_from_bytes(&rec.rel), max_file_bytes)
                     .ok()
@@ -1038,7 +1091,56 @@ fn content_type(p: &std::path::Path) -> &'static str {
         Some("webp") => "image/webp",
         Some("gif") => "image/gif",
         Some("heic" | "heif") => "image/heic",
+        Some("mp4" | "m4v") => "video/mp4",
+        Some("mov") => "video/quicktime",
+        Some("3gp") => "video/3gpp",
         _ => "application/octet-stream",
+    }
+}
+
+/// A `Range` header against a file of `len` bytes (RFC 9110 14.2): one
+/// range only; several ranges or a malformed header get the whole file.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ByteRange {
+    Whole,
+    /// First and last byte, inclusive.
+    Part(u64, u64),
+    Unsatisfiable,
+}
+
+pub fn byte_range(header: Option<&str>, len: u64) -> ByteRange {
+    let Some(spec) = header.and_then(|h| h.trim().strip_prefix("bytes=")) else {
+        return ByteRange::Whole;
+    };
+    if spec.contains(',') {
+        return ByteRange::Whole;
+    }
+    let Some((a, b)) = spec.trim().split_once('-') else {
+        return ByteRange::Whole;
+    };
+    let num = |s: &str| -> Option<u64> {
+        (!s.is_empty() && s.bytes().all(|c| c.is_ascii_digit()))
+            .then(|| s.parse().ok())
+            .flatten()
+    };
+    match (num(a), num(b), a.is_empty()) {
+        // bytes=-n: the last n bytes.
+        (None, Some(n), true) if n > 0 && len > 0 => {
+            ByteRange::Part(len.saturating_sub(n), len - 1)
+        }
+        (None, Some(_), true) => ByteRange::Unsatisfiable,
+        (Some(first), last, false) if b.is_empty() || last.is_some() => {
+            if first >= len {
+                return ByteRange::Unsatisfiable;
+            }
+            let last = last.unwrap_or(u64::MAX).min(len - 1);
+            if last < first {
+                ByteRange::Whole
+            } else {
+                ByteRange::Part(first, last)
+            }
+        }
+        _ => ByteRange::Whole,
     }
 }
 
@@ -1046,6 +1148,7 @@ async fn original(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
 ) -> Response {
     let idx = st.index.clone();
     let roots = st.roots.clone();
@@ -1066,29 +1169,56 @@ async fn original(
         },
     )
     .await;
-    match res {
-        Ok(Ok(Some((f, ct)))) => {
-            let stream = tokio_util_stream(f);
-            (
-                [
-                    (header::CONTENT_TYPE, ct),
-                    (header::CACHE_CONTROL, "private, max-age=3600"),
-                ],
-                stream,
-            )
-                .into_response()
-        }
-        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
-        Ok(Err(e)) => internal(e),
-        Err(e) => internal(e),
+    let (f, ct) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let len = match f.metadata() {
+        Ok(m) => m.len(),
+        Err(e) => return internal(e),
+    };
+    let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
+    let common = [
+        (header::CONTENT_TYPE, ct.to_string()),
+        (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        (header::ACCEPT_RANGES, "bytes".to_string()),
+    ];
+    match byte_range(range, len) {
+        ByteRange::Whole => (
+            common,
+            [(header::CONTENT_LENGTH, len.to_string())],
+            tokio_util_stream(f, 0, len),
+        )
+            .into_response(),
+        ByteRange::Part(first, last) => (
+            StatusCode::PARTIAL_CONTENT,
+            common,
+            [
+                (header::CONTENT_LENGTH, (last - first + 1).to_string()),
+                (header::CONTENT_RANGE, format!("bytes {first}-{last}/{len}")),
+            ],
+            tokio_util_stream(f, first, last - first + 1),
+        )
+            .into_response(),
+        ByteRange::Unsatisfiable => (
+            StatusCode::RANGE_NOT_SATISFIABLE,
+            [(header::CONTENT_RANGE, format!("bytes */{len}"))],
+        )
+            .into_response(),
     }
 }
 
-/// Stream a file in chunks without loading it whole.
-fn tokio_util_stream(f: std::fs::File) -> Body {
-    Body::from_stream(tokio_util::io::ReaderStream::new(
-        tokio::fs::File::from_std(f),
-    ))
+/// Stream `count` bytes of a file from `start`, in chunks, without
+/// loading it whole.
+fn tokio_util_stream(mut f: std::fs::File, start: u64, count: u64) -> Body {
+    use std::io::{Seek, SeekFrom};
+    if f.seek(SeekFrom::Start(start)).is_err() {
+        return Body::empty();
+    }
+    let part = tokio::io::AsyncReadExt::take(tokio::fs::File::from_std(f), count);
+    Body::from_stream(tokio_util::io::ReaderStream::new(part))
 }
 
 async fn static_file(UrlPath(file): UrlPath<String>) -> Response {

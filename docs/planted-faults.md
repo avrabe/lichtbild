@@ -54,6 +54,14 @@ at nice 0.
 | F40 | REQ-AUTH-001 | an encoded `..` in `next` leaves the base path | `next_after_login_stays_in_the_app` |
 | F41 | REQ-NAV-001 | the nav switcher is left out of the page header | `nav_switcher_is_in_every_page_header` |
 | F42 | REQ-AUTH-001 | a token with a second audience is accepted without `azp` naming this client | `a_trusted_second_audience_signs_in_only_with_azp` |
+| F43 | REQ-MEDIA-001 | a clockwise 90° track matrix (iPhone portrait) is not applied to the poster | `videos_are_indexed_with_poster_length_date_and_place` |
+| F44 | REQ-MEDIA-001 | the Apple creation date with its offset is ignored for the UTC `mvhd` time | `videos_are_indexed_with_poster_length_date_and_place` |
+| F45 | REQ-MEDIA-001 | a failed poster is counted by container instead of by codec | `videos_are_indexed_with_poster_length_date_and_place` |
+| F46 | REQ-MEDIA-001 | a video over the pixel limit is decoded anyway | `videos_over_the_pixel_limit_are_skipped` |
+| F47 | REQ-MEDIA-001 | a range request returns one byte too few | `videos_play_with_poster_and_seek_by_range` |
+| F48 | REQ-MEDIA-001 | the viewer prefetches a whole video that has no poster | `videos_play_with_poster_and_seek_by_range` |
+| F49 | REQ-MEDIA-001 | a hanging keyframe decoder is waited for instead of killed | `a_hanging_decoder_is_killed` |
+| F50 | REQ-MEDIA-001 | a failing keyframe decoder takes the whole video out of the index | `a_failing_decoder_costs_only_the_poster` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

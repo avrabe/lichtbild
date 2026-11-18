@@ -18,6 +18,10 @@ analyses share this control structure. Names are roles, not hosts.
   +-------|----------------------------------------------------|--------+
           v                                                    v
   source roots (read-only)  <------------ list, read ----------+
+                                                               |
+                         one video keyframe on stdin           v
+                   decode-keyframe child (timeout, CPU and memory limits)
+                         RGB frame on stdout  --------------->  scan thread
           ^
           |  nightly copy (outside lichtbild) writes
 ```
@@ -29,6 +33,7 @@ Controllers and their control actions:
 | scan thread | list, stat, open for reading | source roots |
 | scan thread | insert, update, mark missing | index |
 | scan thread | write then rename | derived files |
+| scan thread | start with one keyframe, kill at the timeout | decode-keyframe child (DD-016) |
 | web handlers | query scoped to the viewer | index |
 | web handlers | open for reading by item id | source roots, derived files |
 | identity provider | issue session | web handlers |

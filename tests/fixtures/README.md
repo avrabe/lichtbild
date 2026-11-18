@@ -13,3 +13,16 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
 - `test-oidc-rsa.pem`: an RSA key generated for these tests only. The mock
   identity provider in `tests/auth.rs` signs ID tokens with it. It protects
   nothing and is used nowhere else.
+- `video/`: made by `python3 scripts/video_fixtures.py` from ffmpeg's
+  `testsrc2` pattern and a sine tone, with made-up dates and the made-up
+  coordinates above. The script moves two metadata boxes to where phones
+  write them, because ffmpeg writes them elsewhere:
+  - `synthetic-h264-160x120.mp4`: H.264 High with B-frames and AAC, UTC
+    `mvhd` time and a `©xyz` position in `moov/udta`, as Android writes
+    them.
+  - `synthetic-hevc10-rot90.mov`: 10-bit HEVC (`hvc1`) stored 176x144 with
+    the clockwise 90° matrix of an iPhone portrait clip, and the
+    `com.apple.quicktime.*` creation date (with offset) and location in
+    `moov/meta`.
+  - `synthetic-mpeg4.mp4`: MPEG-4 Part 2, a codec lichtbild does not decode.
+  - `truncated.mp4`: the first 3,000 bytes of the H.264 clip, with no `moov`.

@@ -1,6 +1,6 @@
 //! File classification, metadata (capture date and position with their
 //! source, SC-004) and thumbnails under decoder limits (SC-005, SSC-005).
-//! Decoding is pure Rust (DD-005); HEIC and video are reported, not decoded.
+//! Decoding is pure Rust (DD-005); video posters come from src/video.rs.
 
 use std::io::Cursor;
 use std::path::Path;
@@ -13,7 +13,7 @@ use crate::source::Skip;
 /// What a file is, by name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Class {
-    Image(Format),
+    Media(Format),
     Skip(Skip),
 }
 
@@ -26,6 +26,10 @@ pub enum Format {
     Webp,
     Gif,
     Heic,
+    /// ISO-BMFF video: MP4, M4V, 3GP.
+    Mp4,
+    /// QuickTime video.
+    Mov,
 }
 
 impl Format {
@@ -36,11 +40,17 @@ impl Format {
             Format::Webp => "webp",
             Format::Gif => "gif",
             Format::Heic => "heic",
+            Format::Mp4 => "mp4",
+            Format::Mov => "mov",
         }
     }
-    /// Formats a browser cannot be relied on to display get a JPEG preview.
+    /// Formats a browser cannot be relied on to display get a JPEG
+    /// preview; for a video it is the poster.
     pub fn needs_preview(self) -> bool {
-        self == Format::Heic
+        matches!(self, Format::Heic | Format::Mp4 | Format::Mov)
+    }
+    pub fn is_video(self) -> bool {
+        matches!(self, Format::Mp4 | Format::Mov)
     }
 }
 
@@ -58,15 +68,15 @@ pub fn classify(rel: &Path) -> Class {
         .map(|e| e.to_string_lossy().to_ascii_lowercase())
         .unwrap_or_default();
     match ext.as_str() {
-        "jpg" | "jpeg" => Class::Image(Format::Jpeg),
-        "png" => Class::Image(Format::Png),
-        "webp" => Class::Image(Format::Webp),
-        "gif" => Class::Image(Format::Gif),
-        "heic" | "heif" => Class::Image(Format::Heic),
+        "jpg" | "jpeg" => Class::Media(Format::Jpeg),
+        "png" => Class::Media(Format::Png),
+        "webp" => Class::Media(Format::Webp),
+        "gif" => Class::Media(Format::Gif),
+        "heic" | "heif" => Class::Media(Format::Heic),
         "avif" => Class::Skip(Skip::NotYetSupported("avif".into())),
-        "mp4" | "mov" | "m4v" | "3gp" | "mkv" | "avi" | "webm" => {
-            Class::Skip(Skip::NotYetSupported("video".into()))
-        }
+        "mp4" | "m4v" | "3gp" => Class::Media(Format::Mp4),
+        "mov" => Class::Media(Format::Mov),
+        "mkv" | "avi" | "webm" => Class::Skip(Skip::NotYetSupported("video".into())),
         "dng" | "cr2" | "cr3" | "nef" | "arw" | "orf" | "rw2" | "raf" => {
             Class::Skip(Skip::NotYetSupported("raw".into()))
         }
@@ -96,6 +106,10 @@ pub enum DateSource {
     ExifOther,
     FileName,
     FileTime,
+    /// The container's local time with its offset (Apple keys).
+    Video,
+    /// The container's UTC time (`mvhd`); the local offset is unknown.
+    VideoUtc,
 }
 
 impl DateSource {
@@ -105,11 +119,13 @@ impl DateSource {
             DateSource::ExifOther => "exif-other",
             DateSource::FileName => "file-name",
             DateSource::FileTime => "file-time",
+            DateSource::Video => "video",
+            DateSource::VideoUtc => "video-utc",
         }
     }
     /// Dates not taken from EXIF are marked on the timeline (REQ-META-001).
     pub fn is_weak(s: &str) -> bool {
-        !matches!(s, "exif" | "exif-other")
+        !matches!(s, "exif" | "exif-other" | "video" | "video-utc")
     }
 }
 
@@ -125,6 +141,8 @@ pub struct ImageInfo {
     pub date_source: DateSource,
     pub position: Option<(f64, f64)>,
     pub hash: String,
+    /// Length and codec, for a video.
+    pub video: Option<crate::video::VideoMeta>,
 }
 
 /// Read dimensions, EXIF and hash from the bytes of an image file.
@@ -185,6 +203,7 @@ pub fn inspect(
         date_source,
         position,
         hash: blake3::hash(bytes).to_hex().to_string(),
+        video: None,
     })
 }
 
@@ -430,10 +449,12 @@ mod tests {
 
     #[test]
     fn classify_by_extension() {
-        assert_eq!(classify(Path::new("a/B.JPG")), Class::Image(Format::Jpeg));
-        assert_eq!(classify(Path::new("x.HEIC")), Class::Image(Format::Heic));
+        assert_eq!(classify(Path::new("a/B.JPG")), Class::Media(Format::Jpeg));
+        assert_eq!(classify(Path::new("x.HEIC")), Class::Media(Format::Heic));
+        assert_eq!(classify(Path::new("x.MOV")), Class::Media(Format::Mov));
+        assert_eq!(classify(Path::new("x.mp4")), Class::Media(Format::Mp4));
         assert_eq!(
-            classify(Path::new("x.mov")),
+            classify(Path::new("x.webm")),
             Class::Skip(Skip::NotYetSupported("video".into()))
         );
         assert_eq!(
