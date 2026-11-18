@@ -10,3 +10,4 @@ scan-report*.json
 # Browser screenshots may show real photos
 .playwright-mcp/
 sbom.json
+spikes/stt-bench/target/
