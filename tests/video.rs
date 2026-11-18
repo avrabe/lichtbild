@@ -124,6 +124,15 @@ fn videos_are_indexed_with_poster_length_date_and_place() {
     );
     assert_eq!(r.thumbnails.generated, 2);
     assert_eq!(r.thumbnails.previews, 2);
+    let codecs: Vec<_> = r
+        .videos_by_codec
+        .iter()
+        .map(|(k, v)| (k.as_str(), *v))
+        .collect();
+    assert_eq!(codecs, [("h264", 1), ("hevc", 1), ("mp4v", 1)]);
+    assert!(report
+        .to_text()
+        .contains("  videos: h264 1, hevc 1, mp4v 1\n"));
     assert_eq!(
         r.thumbnails.failed.get("decode-error (mp4v)"),
         Some(&1),
@@ -198,6 +207,8 @@ fn rescan_keeps_videos_and_counts_failed_posters_by_codec() {
     assert_eq!((r.indexed, r.unchanged, r.new, r.updated), (3, 3, 0, 0));
     assert_eq!(r.thumbnails.generated, 0);
     assert_eq!(r.thumbnails.previews, 2);
+    // Unchanged videos are counted too, so every scan has the denominator.
+    assert_eq!(r.videos_by_codec.values().sum::<u64>(), 3);
     assert_eq!(
         r.thumbnails.failed.get("decode-error (mp4v)"),
         Some(&1),

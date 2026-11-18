@@ -83,6 +83,9 @@ pub struct RootReport {
     pub marked_missing: u64,
     pub live_in_index: u64,
     pub thumbnails: ThumbReport,
+    /// Indexed videos by codec: the denominator of the poster kill
+    /// criterion (DD-016).
+    pub videos_by_codec: BTreeMap<String, u64>,
     pub reconciled: bool,
 }
 
@@ -122,6 +125,14 @@ impl Report {
                 s += &format!(", {k} {v}");
             }
             s += "\n";
+            if !r.videos_by_codec.is_empty() {
+                let v: Vec<String> = r
+                    .videos_by_codec
+                    .iter()
+                    .map(|(k, v)| format!("{k} {v}"))
+                    .collect();
+                s += &format!("  videos: {}\n", v.join(", "));
+            }
         }
         s += &format!(
             "total: found {}, indexed {}, skipped {}\n",
@@ -398,6 +409,9 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                             }
                             rr.indexed += 1;
                             rr.unchanged += 1;
+                            if let Some(c) = &k.codec {
+                                *rr.videos_by_codec.entry(c.clone()).or_default() += 1;
+                            }
                             if k.thumb == "ok" {
                                 rr.thumbnails.reused += 1;
                                 if format.needs_preview() {
@@ -479,6 +493,9 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
                         preview,
                     )?;
                     rr.indexed += 1;
+                    if let Some(v) = &info.video {
+                        *rr.videos_by_codec.entry(v.codec.clone()).or_default() += 1;
+                    }
                     if job.known_id.is_some() {
                         rr.updated += 1;
                     } else {

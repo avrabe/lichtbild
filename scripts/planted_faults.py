@@ -223,6 +223,10 @@ FAULTS = [
      "let rgb = run_child(exe, job, max_pixels, CHILD_TIMEOUT).map_err(|_| bad(codec))?;",
      "let rgb = run_child(exe, job, max_pixels, CHILD_TIMEOUT).expect(\"decoded\");",
      ["test", "--test", "video", "a_failing_decoder_costs_only_the_poster"]),
+    ("F51", "REQ-MEDIA-001", "src/scan.rs",
+     "if let Some(c) = &k.codec {",
+     "if let Some(c) = k.codec.as_ref().filter(|_| false) {",
+     ["test", "--test", "video", "rescan_keeps_videos_and_counts_failed_posters_by_codec"]),
 ]
 
 
