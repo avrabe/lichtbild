@@ -11,3 +11,4 @@ scan-report*.json
 .playwright-mcp/
 sbom.json
 spikes/stt-bench/target/
+spikes/stt-bench/target-a76/

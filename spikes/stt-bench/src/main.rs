@@ -9,6 +9,10 @@
 //! counts and the detected language are printed, never what was said.
 //! Threads: RAYON_NUM_THREADS (candle's CPU kernels).
 
+#[cfg(feature = "mimalloc")]
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 mod audio;
 mod multilingual;
 mod whisper;
@@ -40,6 +44,7 @@ fn main() -> Result<()> {
         bail!("usage: stt-bench <model-dir> <media-file> [--language de] [--text]");
     };
     let dir = std::path::Path::new(dir);
+    println!("build: {} {}", if cfg!(feature = "mimalloc") { "mimalloc" } else { "system allocator" }, if cfg!(target_env = "musl") { "musl" } else { "glibc/other" });
     let device = Device::Cpu;
     let total = Instant::now();
 
