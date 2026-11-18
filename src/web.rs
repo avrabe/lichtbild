@@ -48,6 +48,8 @@ pub struct AppState {
     pub nav_html: Arc<String>,
     /// The search index (REQ-SEARCH-001), rebuilt by the scan thread.
     pub search: Arc<crate::search::Search>,
+    /// Duplicate groups (REQ-DUP-001), rebuilt by the scan thread.
+    pub dups: Arc<crate::dups::Dups>,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
 }
@@ -71,6 +73,7 @@ impl AppState {
             auth: None,
             nav_html: Arc::new(cfg.nav_html.clone()),
             search: Arc::new(crate::search::Search::default()),
+            dups: Arc::new(crate::dups::Dups::default()),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -700,6 +703,14 @@ pub fn render_items(
             .video_ms
             .map(|ms| format!("<span class=\"dur\">{}</span>", duration(ms)))
             .unwrap_or_default();
+        let dur = if it.copies > 1 {
+            format!(
+                "{dur}<span class=\"copies\" title=\"{n} copies\">×{n}</span>",
+                n = it.copies
+            )
+        } else {
+            dur
+        };
         s += &format!(
             "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}\" title=\"{t}\">{img}{dur}</a>",
             cls = if weak { " weak" } else { "" },
@@ -747,6 +758,7 @@ async fn timeline(
     };
     let full_page = !headers.contains_key("hx-request");
     let idx = st.index.clone();
+    let dups = st.dups.clone();
     // A continuation carries before/id; a jump carries from (id 0 sorts
     // before every real id, so the bound month is excluded entirely).
     let before = cur
@@ -755,11 +767,16 @@ async fn timeline(
         .zip(cur.id)
         .or_else(|| from_bound.clone().map(|b| (b, 0)));
     let res = tokio::task::spawn_blocking(move || {
-        let items = idx.timeline(
+        // One copy of each duplicate group: the best the viewer may see.
+        let mut items = idx.timeline_where(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
             PAGE_SIZE as usize + 1,
+            |id| dups.shown(id, &labels).shown,
         )?;
+        for it in &mut items {
+            it.copies = dups.shown(it.id, &labels).copies;
+        }
         let months = if full_page {
             idx.months(&labels)?
         } else {
@@ -833,6 +850,7 @@ type ViewerItem = (
     Vec<String>,
     Vec<(&'static str, String)>,
     Option<crate::stt::Transcript>,
+    Vec<(u64, index::Record)>,
 );
 
 #[derive(Deserialize)]
@@ -864,6 +882,39 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
             who = esc(who),
             at = duration((p.start * 1000.0) as u64),
             text = esc(&p.text)
+        );
+    }
+    s += "</ol></div></details>";
+    s
+}
+
+/// The copies of a picture the viewer may see (REQ-DUP-001): which is
+/// shown, and where each one is; a click opens that copy.
+pub fn render_copies(id: u64, who: &str, copies: &[(u64, index::Record)]) -> String {
+    if copies.len() < 2 {
+        return String::new();
+    }
+    let mut s = format!(
+        "<details class=\"copies\"><summary title=\"Copies\" aria-label=\"Copies\">×{n}</summary>\
+         <div class=\"cpanel\"><p class=\"dim\">The same picture {n} times; the timeline shows the first.</p><ol>",
+        n = copies.len()
+    );
+    for (c, r) in copies {
+        let rel = String::from_utf8_lossy(&r.rel);
+        let bytes = if r.size >= 1_048_576 {
+            format!("{:.1} MB", r.size as f64 / 1_048_576.0)
+        } else {
+            format!("{} kB", r.size.div_ceil(1024))
+        };
+        s += &format!(
+            "<li{cur}><a href=\"v/{who}/{c}\">{lib} · {path}</a> <span class=\"dim\">{w} × {h} · {bytes} · date from {src}</span></li>",
+            cur = if *c == id { " class=\"current\"" } else { "" },
+            who = esc(who),
+            lib = esc(&r.label),
+            path = esc(&rel),
+            w = r.width,
+            h = r.height,
+            src = esc(&r.date_source),
         );
     }
     s += "</ol></div></details>";
@@ -1025,6 +1076,7 @@ async fn viewer(
     };
     let idx = st.index.clone();
     let roots = st.roots.clone();
+    let dups = st.dups.clone();
     let max_file_bytes = st.max_file_bytes;
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ViewerItem>> {
         let Some(rec) = idx.locate(id)? else {
@@ -1058,10 +1110,18 @@ async fn viewer(
             Some(_) => idx.transcript(&rec.hash)?,
             None => None,
         };
-        Ok(Some((rec, newer, older, prefetch, exif, transcript)))
+        let mut copies = Vec::new();
+        for c in dups.copies(id, &labels) {
+            if let Some(r) = idx.locate(c)? {
+                copies.push((c, r));
+            }
+        }
+        Ok(Some((
+            rec, newer, older, prefetch, exif, transcript, copies,
+        )))
     })
     .await;
-    let (rec, newer, older, prefetch, exif, transcript) = match res {
+    let (rec, newer, older, prefetch, exif, transcript, copies) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1108,7 +1168,7 @@ async fn viewer(
             .as_ref()
             .map(|t| render_transcript(id, &who, t))
             .unwrap_or_default(),
-        info = render_info(&rec, &exif, st.places.as_deref()),
+        info = render_copies(id, &who, &copies) + &render_info(&rec, &exif, st.places.as_deref()),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
@@ -1141,11 +1201,26 @@ async fn search(
     };
     let idx = st.index.clone();
     let sx = st.search.clone();
+    let dups = st.dups.clone();
     let q2 = q.clone();
     let res = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Vec<(crate::search::Hit, index::Record)>> {
-            let mut out = Vec::new();
-            for h in sx.query(&q2, &labels)?.into_iter().take(200) {
+            let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
+            for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
+                // A hit on a copy shows the copy the timeline shows.
+                if !dups.shown(h.id, &labels).shown {
+                    if let Some(&best) = dups.copies(h.id, &labels).first() {
+                        h.id = best;
+                    }
+                }
+                if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
+                    for s in h.speech {
+                        if prev.speech.len() < 3 && !prev.speech.contains(&s) {
+                            prev.speech.push(s);
+                        }
+                    }
+                    continue;
+                }
                 if let Some(rec) = idx.locate(h.id)? {
                     out.push((h, rec));
                 }

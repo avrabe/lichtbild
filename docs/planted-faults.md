@@ -79,6 +79,11 @@ at nice 0.
 | F65 | REQ-MEDIA-004 | silence counts as voiced | `silence_is_not_voiced` |
 | F66 | REQ-WEB-001 | pages behind login drop the version footer | `pages_show_the_running_version` |
 | F67 | REQ-AUTH-001 | the login notice pages show the version to anyone | `bad_logins_get_no_session` |
+| F68 | REQ-DUP-001 | two camera originals of a burst count as the same picture | `copies_are_grouped_and_bursts_are_not` |
+| F69 | REQ-DUP-001 | a copy without its camera date is not recognised | `copies_are_grouped_and_bursts_are_not` |
+| F70 | REQ-DUP-001 | the shown copy is chosen among all libraries, not the viewer's | `copies_are_grouped_and_bursts_are_not` |
+| F71 | REQ-DUP-001 | the timeline shows every copy | `the_timeline_search_and_viewer_show_one_copy` |
+| F72 | REQ-DUP-001 | flat pictures get a fingerprint and match each other | `copies_are_grouped_and_bursts_are_not` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

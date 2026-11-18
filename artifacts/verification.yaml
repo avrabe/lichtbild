@@ -934,3 +934,30 @@ artifacts:
       - type: verifies
         target: REQ-WEB-001
 
+  - id: VER-067
+    type: verification
+    title: Copies are grouped and bursts are not
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "copies_are_grouped_and_bursts_are_not"
+      test-location: tests/dups.rs
+      steps:
+        - run: "cargo test --test dups copies_are_grouped_and_bursts_are_not"
+    links:
+      - type: verifies
+        target: REQ-DUP-001
+
+  - id: VER-068
+    type: verification
+    title: Timeline, search and viewer show one copy, in scope
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_timeline_search_and_viewer_show_one_copy"
+      test-location: tests/dups.rs
+      steps:
+        - run: "cargo test --test dups the_timeline_search_and_viewer_show_one_copy"
+    links:
+      - type: verifies
+        target: REQ-DUP-001

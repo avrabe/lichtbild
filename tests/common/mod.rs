@@ -53,6 +53,31 @@ pub type Dm = (u32, u32, char);
 
 /// A JPEG with EXIF DateTimeOriginal, OffsetTimeOriginal and optionally GPS.
 pub fn jpeg_with_exif(date: &str, offset: &str, gps: Option<(Dm, Dm)>, seed: u8) -> Vec<u8> {
+    with_exif(jpeg(64, 48, seed), date, offset, gps)
+}
+
+/// A smooth synthetic picture (gradients and a disc) whose look survives
+/// resizing; `shift` moves the disc, as a second shot of a burst would.
+pub fn picture(w: u32, h: u32, seed: u8, shift: f32) -> Vec<u8> {
+    let img = ImageBuffer::from_fn(w, h, |x, y| {
+        let (u, v) = (x as f32 / w as f32, y as f32 / h as f32);
+        let d = ((u - 0.4 - shift).powi(2) + (v - 0.5).powi(2)).sqrt();
+        let disc = if d < 0.25 { 180.0 } else { 0.0 };
+        Rgb([
+            (u * 200.0 + f32::from(seed)) as u8,
+            (v * 160.0 + disc * 0.5) as u8,
+            (disc + (1.0 - u) * 60.0) as u8,
+        ])
+    });
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 85)
+        .encode_image(&img)
+        .unwrap();
+    out
+}
+
+/// Add an EXIF block (date, offset, optional GPS) to a JPEG.
+pub fn with_exif(base: Vec<u8>, date: &str, offset: &str, gps: Option<(Dm, Dm)>) -> Vec<u8> {
     let mut fields = vec![
         ascii(Tag::DateTimeOriginal, date),
         ascii(Tag::OffsetTimeOriginal, offset),
@@ -101,7 +126,6 @@ pub fn jpeg_with_exif(date: &str, offset: &str, gps: Option<(Dm, Dm)>, seed: u8)
     let mut tiff = Cursor::new(Vec::new());
     w.write(&mut tiff, false).unwrap();
     let tiff = tiff.into_inner();
-    let base = jpeg(64, 48, seed);
     let mut out = base[..2].to_vec(); // SOI
     out.extend_from_slice(&[0xFF, 0xE1]);
     out.extend_from_slice(&((2 + 6 + tiff.len()) as u16).to_be_bytes());

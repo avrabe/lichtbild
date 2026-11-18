@@ -584,3 +584,22 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-DUP-001
+    type: requirement
+    title: The same picture is shown once, as its best copy
+    status: implemented
+    release: v0.5.0
+    description: >
+      Exact copies (same content) and the same picture in another file (a
+      messenger copy without its camera date, a resized export, the JPEG
+      twin of a HEIC) are grouped. Timeline, search and map show one copy
+      of each group: the best one the viewer may see (camera date, position,
+      pixels, file size), with the number of copies; the viewer lists them.
+      Shots of a burst are not grouped. Nothing in the libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+

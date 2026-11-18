@@ -506,9 +506,16 @@ pub async fn clusters_json(
     let z = q.z.unwrap_or(0);
     let idx = st.index.clone();
     let map = st.map.clone();
+    let dups = st.dups.clone();
     let res = tokio::task::spawn_blocking(move || {
         let points = map.points(&idx)?;
-        anyhow::Ok(clusters(&points, &labels, z, bbox))
+        // One copy of each duplicate group, as on the timeline.
+        let shown: Vec<Point> = points
+            .iter()
+            .filter(|p| dups.shown(p.id, &labels).shown)
+            .cloned()
+            .collect();
+        anyhow::Ok(clusters(&shown, &labels, z, bbox))
     })
     .await;
     match res {

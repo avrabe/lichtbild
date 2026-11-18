@@ -51,13 +51,12 @@ pub fn dhash(img: &image::DynamicImage) -> Option<u64> {
 /// added.
 pub fn fingerprint_pass(data_dir: &std::path::Path, idx: &Index) -> Result<usize> {
     let mut added = 0;
-    for (hash, rec) in idx.missing_fingerprints()? {
+    for hash in idx.missing_fingerprints()? {
         let path = crate::scan::thumb_path(data_dir, &hash);
         // A thumbnail that cannot be read gets no fingerprint this time.
         let Ok(img) = image::open(&path) else {
             continue;
         };
-        let _ = rec;
         idx.set_fingerprint(&hash, dhash(&img))?;
         added += 1;
     }
@@ -153,6 +152,18 @@ fn rank(r: &Record, id: u64) -> (bool, bool, u64, u64, std::cmp::Reverse<u64>) {
     )
 }
 
+/// Seconds between two capture times (a day apart when either is
+/// unreadable).
+fn seconds_apart(a: &Record, b: &Record) -> i64 {
+    let p = |r: &Record| {
+        chrono::NaiveDateTime::parse_from_str(&r.taken_local, "%Y-%m-%dT%H:%M:%S").ok()
+    };
+    match (p(a), p(b)) {
+        (Some(x), Some(y)) => (x - y).num_seconds().abs(),
+        _ => 86_400,
+    }
+}
+
 fn find(parent: &mut [usize], mut i: usize) -> usize {
     while parent[i] != i {
         parent[i] = parent[parent[i]];
@@ -178,7 +189,7 @@ impl Dups {
         let n = cands.len();
         let mut parent: Vec<usize> = (0..n).collect();
         let mut rep = Report::default();
-        let mut union = |parent: &mut Vec<usize>, a: usize, b: usize| {
+        let union = |parent: &mut Vec<usize>, a: usize, b: usize| {
             let (ra, rb) = (find(parent, a), find(parent, b));
             if ra != rb {
                 parent[ra] = rb;
@@ -200,28 +211,48 @@ impl Dups {
         for (i, c) in cands.iter().enumerate() {
             if let Some(fp) = c.fp {
                 for b in 0..8u8 {
-                    bands
-                        .entry((b, (fp >> (8 * b)) as u8))
-                        .or_default()
-                        .push(i);
+                    bands.entry((b, (fp >> (8 * b)) as u8)).or_default().push(i);
                 }
             }
         }
+        // Each copy (the lower-ranked of a pair) joins only its nearest
+        // match: a messenger copy of the first shot of a burst nearly
+        // matches the second shot too, and linking both would pull the
+        // burst together through the copy.
+        let mut nearest: HashMap<usize, (u32, i64, usize)> = HashMap::new();
         for members in bands.values() {
             for (k, &i) in members.iter().enumerate() {
                 for &j in &members[k + 1..] {
                     let (a, b) = (&cands[i], &cands[j]);
-                    if a.rec.hash == b.rec.hash || find(&mut parent, i) == find(&mut parent, j) {
+                    if a.rec.hash == b.rec.hash {
                         continue;
                     }
                     let (Some(fa), Some(fb)) = (a.fp, b.fp) else {
                         continue;
                     };
-                    if (fa ^ fb).count_ones() <= NEAR_BITS && same_picture(&a.rec, &b.rec) {
-                        union(&mut parent, i, j);
-                        rep.near_pairs += 1;
+                    let dist = (fa ^ fb).count_ones();
+                    if dist > NEAR_BITS || !same_picture(&a.rec, &b.rec) {
+                        continue;
+                    }
+                    let (copy, orig) = if rank(&a.rec, a.id) < rank(&b.rec, b.id) {
+                        (i, j)
+                    } else {
+                        (j, i)
+                    };
+                    let gap = seconds_apart(&cands[copy].rec, &cands[orig].rec);
+                    let better = nearest
+                        .get(&copy)
+                        .is_none_or(|&(d, g, o)| (dist, gap, cands[orig].id) < (d, g, cands[o].id));
+                    if better {
+                        nearest.insert(copy, (dist, gap, orig));
                     }
                 }
+            }
+        }
+        for (copy, (_, _, orig)) in nearest {
+            if find(&mut parent, copy) != find(&mut parent, orig) {
+                union(&mut parent, copy, orig);
+                rep.near_pairs += 1;
             }
         }
         let mut by_root: HashMap<usize, Vec<usize>> = HashMap::new();
@@ -318,7 +349,13 @@ mod tests {
     fn copies_count_but_bursts_do_not() {
         let cam = rec(4000, 3000, "exif", "2024-07-01T10:00:00", "a/IMG_1.jpg");
         let burst = rec(4000, 3000, "exif", "2024-07-01T10:00:01", "a/IMG_2.jpg");
-        let messenger = rec(1600, 1200, "file-name", "2024-07-01T12:00:00", "w/IMG-WA.jpg");
+        let messenger = rec(
+            1600,
+            1200,
+            "file-name",
+            "2024-07-01T12:00:00",
+            "w/IMG-WA.jpg",
+        );
         let export = rec(2000, 1500, "exif", "2024-07-01T10:00:00", "e/IMG_1.jpg");
         let twin = rec(4000, 3000, "exif", "2024-07-01T10:00:00", "a/IMG_1.heic");
         let portrait = rec(1200, 1600, "file-name", "2024-07-01T12:00:00", "w/x.jpg");

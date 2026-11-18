@@ -169,3 +169,19 @@ artifacts:
       - type: satisfies
         target: REQ-SEARCH-001
 
+  - id: FEAT-009
+    type: feature
+    title: Duplicates shown once
+    status: implemented
+    release: v0.5.0
+    description: >
+      Owner request 2026-11-18: detect the same pictures so they need not be
+      seen several times. Per-person hiding and the cleanup list follow.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A photo in both libraries, or saved again from a messenger, appears once in the merged timeline
+    links:
+      - type: satisfies
+        target: REQ-DUP-001
+
