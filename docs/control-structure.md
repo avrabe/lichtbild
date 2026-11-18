@@ -36,6 +36,7 @@ Controllers and their control actions:
 | scan thread | start with one keyframe, kill at the timeout | decode-keyframe child (DD-016) |
 | web handlers | query scoped to the viewer | index |
 | web handlers | open for reading by item id | source roots, derived files |
+| web handlers | open for reading, fixed path or confined to its directory | map files (PMTiles, glyphs, sprites; DD-017) |
 | identity provider | issue session | web handlers |
 | operator (deployment) | set roots, data directory, limits; read-only mount | lichtbild |
 

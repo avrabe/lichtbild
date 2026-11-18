@@ -14,6 +14,8 @@
 use std::collections::HashMap;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use redb::{Database, ReadableDatabase, ReadableTable, ReadableTableMetadata, TableDefinition};
@@ -101,6 +103,9 @@ pub struct Item {
 
 pub struct Index {
     db: Database,
+    /// Counts committed write batches, so caches built from the index
+    /// (the map's positions) know when to rebuild.
+    generation: Arc<AtomicU64>,
 }
 
 fn decode(b: &[u8]) -> Result<Record> {
@@ -137,7 +142,16 @@ impl Index {
             w.open_table(BY_TIME)?;
         }
         w.commit()?;
-        Ok(Index { db })
+        Ok(Index {
+            db,
+            generation: Arc::new(AtomicU64::new(0)),
+        })
+    }
+
+    /// Changes after every committed batch; equal values mean the live
+    /// items have not changed in between.
+    pub fn generation(&self) -> u64 {
+        self.generation.load(Ordering::Acquire)
     }
 
     pub fn known_for_root(&self, label: &str) -> Result<HashMap<Vec<u8>, Known>> {
@@ -173,6 +187,7 @@ impl Index {
     pub fn batch(&self) -> Result<Batch> {
         Ok(Batch {
             w: self.db.begin_write()?,
+            generation: self.generation.clone(),
         })
     }
 
@@ -382,6 +397,7 @@ impl Index {
 /// One write transaction; nothing is visible until `commit`.
 pub struct Batch {
     w: redb::WriteTransaction,
+    generation: Arc<AtomicU64>,
 }
 
 impl Batch {
@@ -490,6 +506,7 @@ impl Batch {
 
     pub fn commit(self) -> Result<()> {
         self.w.commit()?;
+        self.generation.fetch_add(1, Ordering::AcqRel);
         Ok(())
     }
 }

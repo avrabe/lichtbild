@@ -46,6 +46,8 @@ pub struct AppState {
     pub auth: Option<Arc<crate::auth::Auth>>,
     /// The nav v1 switcher's HTML, rendered in every page's header.
     pub nav_html: Arc<String>,
+    /// The world map's files and positions cache (REQ-MAP-001).
+    pub map: Arc<crate::map::MapState>,
 }
 
 impl AppState {
@@ -66,6 +68,7 @@ impl AppState {
             max_file_bytes: cfg.limits.max_file_bytes,
             auth: None,
             nav_html: Arc::new(cfg.nav_html.clone()),
+            map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
 
@@ -91,6 +94,10 @@ pub fn router(state: AppState) -> Router {
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
         .route("/static/{file}", get(static_file))
+        .route("/map", get(crate::map::page))
+        .route("/map/clusters", get(crate::map::clusters_json))
+        .route("/map/tiles.pmtiles", get(crate::map::tiles))
+        .route("/map/assets/{*path}", get(crate::map::assets))
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
         .route("/auth/logout", axum::routing::post(auth_logout))
@@ -410,16 +417,22 @@ pub fn asset_version() -> &'static str {
         let mut h = blake3::Hasher::new();
         h.update(CSS.as_bytes());
         h.update(JS.as_bytes());
+        h.update(crate::map::MAP_JS.as_bytes());
         h.finalize().to_hex()[..10].to_string()
     })
 }
 
 /// A page with this app's header: the name and the nav switcher.
 fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
-    page(&st.base_path, title, body, &st.nav_html)
+    page(&st.base_path, title, body, &st.nav_html, "")
 }
 
-fn page(base: &str, title: &str, body: &str, nav: &str) -> Html<String> {
+/// A page with extra same-origin stylesheets or scripts in its head (the map).
+pub(crate) fn page_with_head(st: &AppState, title: &str, head: &str, body: &str) -> Html<String> {
+    page(&st.base_path, title, body, &st.nav_html, head)
+}
+
+fn page(base: &str, title: &str, body: &str, nav: &str, head: &str) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -429,12 +442,12 @@ fn page(base: &str, title: &str, body: &str, nav: &str) -> Html<String> {
 <base href="{base}/">
 <title>{title}</title>
 <meta name="htmx-config" content='{{"includeIndicatorStyles":false}}'>
-<link rel="stylesheet" href="static/lichtbild.css?v={v}">
+{head}<link rel="stylesheet" href="static/lichtbild.css?v={v}">
 <script src="static/htmx-2.0.4.min.js" defer></script>
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a>{nav}</header>
+<header><a href="./" class="brand">lichtbild</a><a href="map" class="views">Map</a>{nav}</header>
 <main>
 {body}
 </main>
@@ -447,7 +460,7 @@ fn page(base: &str, title: &str, body: &str, nav: &str) -> Html<String> {
     ))
 }
 
-fn internal<E: std::fmt::Display>(e: E) -> Response {
+pub(crate) fn internal<E: std::fmt::Display>(e: E) -> Response {
     tracing::error!("request failed: {e}");
     (StatusCode::INTERNAL_SERVER_ERROR, "internal error").into_response()
 }
@@ -1180,11 +1193,28 @@ async fn original(
         Err(e) => return internal(e),
     };
     let range = headers.get(header::RANGE).and_then(|v| v.to_str().ok());
-    let common = [
+    ranged(f, len, range, ct, "private, max-age=3600", None)
+}
+
+/// A file of `len` bytes as a whole (200), one range (206) or 416, for
+/// originals and the map's PMTiles file.
+pub(crate) fn ranged(
+    f: std::fs::File,
+    len: u64,
+    range: Option<&str>,
+    ct: &str,
+    cache: &'static str,
+    etag: Option<String>,
+) -> Response {
+    let mut common = vec![
         (header::CONTENT_TYPE, ct.to_string()),
-        (header::CACHE_CONTROL, "private, max-age=3600".to_string()),
+        (header::CACHE_CONTROL, cache.to_string()),
         (header::ACCEPT_RANGES, "bytes".to_string()),
     ];
+    if let Some(e) = etag {
+        common.push((header::ETAG, e));
+    }
+    let common = axum::response::AppendHeaders(common);
     match byte_range(range, len) {
         ByteRange::Whole => (
             common,
@@ -1226,7 +1256,10 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
         "htmx-2.0.4.min.js" => (HTMX, "text/javascript; charset=utf-8"),
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
         "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
-        _ => return StatusCode::NOT_FOUND.into_response(),
+        other => match crate::map::static_asset(other) {
+            Some(x) => x,
+            None => return StatusCode::NOT_FOUND.into_response(),
+        },
     };
     (
         [
@@ -1239,10 +1272,12 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
 }
 
 /// All embedded assets, for the no-outside-URL test (REQ-WEB-003).
-pub fn embedded_assets() -> [(&'static str, &'static str); 3] {
+/// The vendored map libraries are listed in `map::vendored`.
+pub fn embedded_assets() -> [(&'static str, &'static str); 4] {
     [
         ("htmx-2.0.4.min.js", HTMX),
         ("lichtbild.css", CSS),
         ("lichtbild.js", JS),
+        ("map.js", crate::map::MAP_JS),
     ]
 }

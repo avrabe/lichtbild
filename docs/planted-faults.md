@@ -63,6 +63,14 @@ at nice 0.
 | F49 | REQ-MEDIA-001 | a hanging keyframe decoder is waited for instead of killed | `a_hanging_decoder_is_killed` |
 | F50 | REQ-MEDIA-001 | a failing keyframe decoder takes the whole video out of the index | `a_failing_decoder_costs_only_the_poster` |
 | F51 | REQ-MEDIA-001 | unchanged videos drop out of the per-codec count on a rescan | `rescan_keeps_videos_and_counts_failed_posters_by_codec` |
+| F52 | REQ-MAP-001 | map clusters ignore the viewer's libraries | `clusters_hold_only_the_libraries_the_viewer_may_see` |
+| F53 | REQ-MAP-001 | the same, seen through a real login session | `the_map_shows_a_person_only_their_own_positions` |
+| F54 | REQ-MAP-001 | glyph and sprite files are read without containment (a symlink out of the directory is served) | `glyphs_and_sprites_are_confined_to_their_directory` |
+| F55 | REQ-MAP-001 | the PMTiles file ignores the Range header | `the_pmtiles_file_is_served_with_byte_ranges` |
+| F56 | REQ-MAP-001 | the map page loads MapLibre without a PMTiles file instead of the notice | `without_a_map_file_the_page_says_so_and_clusters_still_work` |
+| F57 | REQ-MAP-001 | the PMTiles URL is absolute and bypasses the base path | `the_map_works_under_the_base_path` |
+| F58 | REQ-MAP-001 | the map page loads pmtiles.js from a CDN | `the_map_loads_nothing_from_another_host` |
+| F59 | REQ-MAP-001 | a vendored file is not the pinned upstream file | `vendored_map_assets_match_their_pinned_sha256` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

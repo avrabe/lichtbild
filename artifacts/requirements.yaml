@@ -450,17 +450,30 @@ artifacts:
   - id: REQ-MAP-001
     type: requirement
     title: World map from a local PMTiles file, served by lichtbild
-    status: draft
+    status: implemented
     description: >
-      Photos with a position are shown on a map clustered by zoom. Tiles,
-      style, fonts and glyphs come from a Protomaps PMTiles file and assets
-      served by lichtbild.
+      Photos and videos with a position are shown on a map at /map,
+      clustered by zoom on the server and scoped to the viewer exactly like
+      the timeline: a person never sees, counts or locates an item of a
+      library they may not see. Tiles come from one Protomaps PMTiles file
+      the deployment provides (LICHTBILD_MAP_PMTILES), served by lichtbild
+      with byte ranges; glyphs and sprites from a deployment directory
+      (LICHTBILD_MAP_ASSETS) whose requests are confined to it. MapLibre,
+      pmtiles and the Protomaps style are vendored at pinned versions and
+      sha256 and served by lichtbild, so the browser makes no request to
+      another host and the CSP stays 'self' only. Without a PMTiles file the
+      page says so; without the assets directory the map has no labels.
+      The map shows "© OpenStreetMap" and works under the base path.
     fields:
       priority: must
       category: functional
     links:
       - type: satisfies
         target: SSC-003
+      - type: satisfies
+        target: SSC-002
+      - type: satisfies
+        target: SSC-004
 
   - id: REQ-MEDIA-001
     type: requirement

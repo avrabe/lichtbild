@@ -264,3 +264,59 @@ h4.day {
   .item, .rail a.m::after { transition: none; }
   .item:hover { transform: none; }
 }
+
+/* Header: the map, next to the timelines behind the name. */
+header a.views {
+  margin-left: 22px; color: var(--ink-soft); text-decoration: none;
+  font: 500 14px/1 var(--serif); letter-spacing: .12em;
+}
+header a.views:hover { color: var(--shu); }
+
+/* World map (REQ-MAP-001). */
+.lb-map .map {
+  height: calc(100vh - 190px); height: calc(100dvh - 190px); min-height: 360px;
+  margin-top: 24px; border: 1px solid var(--line); border-radius: 6px; background: var(--paper-2);
+}
+.mapnote { color: var(--ink-faint); font-size: 12px; letter-spacing: .06em; }
+/* maplibre-gl.css draws control icons as data: images, which the CSP
+   (img-src 'self') blocks; never load them, draw the two used as text. */
+.lb-map .maplibregl-ctrl-icon,
+.lb-map .maplibregl-ctrl-attrib-button,
+.lb-map .maplibregl-ctrl-logo,
+.lb-map .maplibregl-compact::after { background-image: none !important; }
+.lb-map .maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon::before,
+.lb-map .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon::before {
+  display: grid; place-items: center; height: 100%;
+  font: 400 20px/1 var(--sans); color: #333;
+}
+.lb-map .maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon::before { content: "+"; }
+.lb-map .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon::before { content: "\2212"; }
+/* Cluster markers: a vermilion seal with the count, or the photo itself. */
+.lb-map .mk {
+  display: grid; place-items: center; padding: 0; cursor: pointer;
+  border: 2px solid #fff8ee; border-radius: 50%;
+  background: var(--shu); color: #fff8ee; box-shadow: var(--shadow);
+  font: 600 12px/1 var(--sans); font-variant-numeric: tabular-nums;
+}
+.lb-map .mk.s { width: 30px; height: 30px; }
+.lb-map .mk.m { width: 38px; height: 38px; }
+.lb-map .mk.l { width: 48px; height: 48px; font-size: 13px; }
+.lb-map .mk.one { width: 46px; height: 46px; border-radius: 6px; overflow: hidden; background: var(--tile); }
+.lb-map .mk.one img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lb-map .mk.one.video { border-color: var(--ai); }
+.lb-map .mk:hover { border-color: var(--ink); }
+/* The items of a small cluster: a strip of thumbnails under the map. */
+.mapstrip {
+  display: flex; flex-wrap: wrap; gap: 6px; align-items: center;
+  margin-top: 10px; padding: 10px; background: var(--paper-2);
+  border: 1px solid var(--line); border-radius: 6px;
+}
+.mapstrip[hidden] { display: none; }
+.mapstrip a { display: block; height: 96px; border-radius: 3px; overflow: hidden; background: var(--tile); }
+.mapstrip a img { height: 96px; width: auto; display: block; }
+.mapstrip a.nothumb { display: grid; place-items: center; width: 96px; color: var(--ink-faint); font-size: 12px; text-decoration: none; }
+.mapstrip .more { padding: 0 8px; color: var(--ink-faint); font-size: 12px; letter-spacing: .1em; }
+.mapstrip .close {
+  margin-left: auto; width: 30px; height: 30px; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--line); background: none; color: var(--ink-soft); font-size: 16px;
+}
