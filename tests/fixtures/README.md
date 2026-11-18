@@ -26,3 +26,14 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
     `moov/meta`.
   - `synthetic-mpeg4.mp4`: MPEG-4 Part 2, a codec lichtbild does not decode.
   - `truncated.mp4`: the first 3,000 bytes of the H.264 clip, with no `moov`.
+  - `librivox-kafka-galerie-de.mp4`: 19.5 s of a public-domain LibriVox
+    reading (Franz Kafka, "Auf der Galerie", read by Thorsten Herbold,
+    librivox.org), from the title on, as mono AAC with a still frame. The
+    script downloads the MP3 from archive.org and checks its SHA-256.
+  - `synthetic-tone-silence.mp4`: 3 s of a 440 Hz tone, then 4 s of
+    silence: no speech.
+- The Whisper model for tests is not in the repository:
+  `scripts/fetch-test-model.sh <dir>` downloads Whisper tiny q8_0 (MIT
+  weights, converted by lmz/candle-whisper) at a pinned revision and checks
+  each file's SHA-256; tests read it from `LICHTBILD_TEST_WHISPER_DIR`.
+

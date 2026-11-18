@@ -48,7 +48,13 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --all-targets --locked -- -D warnings
 
+      # Whisper tiny for tests/transcribe.rs, pinned and checked by SHA-256.
+      - name: Fetch the test model
+        run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
+
       - name: cargo test
+        env:
+          LICHTBILD_TEST_WHISPER_DIR: ${{ runner.temp }}/whisper-tiny
         run: cargo test --locked --no-fail-fast
 
   # The release build steps on every PR, so release.yml is not first run at
@@ -109,7 +115,12 @@ jobs:
 
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
+      - name: Fetch the test model
+        run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
+
       - name: Plant each fault and expect its check to fail
+        env:
+          LICHTBILD_TEST_WHISPER_DIR: ${{ runner.temp }}/whisper-tiny
         run: python3 scripts/planted_faults.py
 
   # rivet: verifies REQ-TRACE-001
