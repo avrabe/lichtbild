@@ -11,6 +11,7 @@ pub mod nav;
 pub mod places;
 pub mod scan;
 pub mod source;
+pub mod stt;
 pub mod video;
 pub mod web;
 

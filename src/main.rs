@@ -58,6 +58,12 @@ fn main() -> ExitCode {
         ["scan"] => report(run_scan()),
         // Internal: the scan runs this to decode one video keyframe in a
         // separate, limited process (DD-016).
+        // Internal: transcribe one video in a separate, limited process
+        // (DD-018).
+        ["transcribe", rest @ ..] => match lichtbild::stt::child_main(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
