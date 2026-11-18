@@ -200,9 +200,27 @@ pub fn read_limited(root: &Path, rel: &Path, max: u64) -> io::Result<Vec<u8>> {
         return Err(io::Error::new(io::ErrorKind::FileTooLarge, "over limit"));
     }
     let mut buf = Vec::with_capacity(len as usize);
-    f.take(max + 1).read_to_end(&mut buf)?;
+    (&f).take(max + 1).read_to_end(&mut buf)?;
+    drop_cache(&f);
     if buf.len() as u64 > max {
         return Err(io::Error::new(io::ErrorKind::FileTooLarge, "over limit"));
     }
     Ok(buf)
+}
+
+/// Tell the kernel the pages just read from `f` are not needed again
+/// (Linux; a no-op elsewhere). The scan reads each file once; without this
+/// a scan fills the page cache, which counts against the service's memory
+/// limit: the first 0.3.0 scan of the real library was throttled about
+/// 50,000 times at MemoryHigh while lichtbild itself used 180 MB.
+pub fn drop_cache(f: &File) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::fd::AsRawFd;
+        // SAFETY: posix_fadvise(2) on an open descriptor; advice only, the
+        // file is not changed.
+        unsafe { libc::posix_fadvise(f.as_raw_fd(), 0, 0, libc::POSIX_FADV_DONTNEED) };
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = f;
 }
