@@ -59,7 +59,13 @@ pub fn pcm_decode(src: std::fs::File, max_seconds: f64) -> anyhow::Result<(Vec<f
     };
 
     let mut pcm_data = Vec::new();
-    let cap = (f64::from(sample_rate.max(1)) * max_seconds) as usize;
+    // The cap must not trust the header: a sample rate outside what any
+    // camera records is refused, and the sample count is bounded by the
+    // highest rate allowed whatever the header says.
+    if !(8_000..=192_000).contains(&sample_rate) {
+        anyhow::bail!("sample rate {sample_rate} Hz outside 8-192 kHz");
+    }
+    let cap = (f64::from(sample_rate) * max_seconds).min(192_000.0 * max_seconds) as usize;
     let mut cut = false;
     // The decode loop.
     while let Ok(Some(packet)) = format.next_packet() {
