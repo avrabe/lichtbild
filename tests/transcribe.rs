@@ -166,7 +166,9 @@ fn tone_and_silence_are_no_speech() {
         ("no-speech", 0),
         "{t:?}"
     );
-    assert!(start.elapsed().as_secs() < 8, "{:?}", start.elapsed());
+    // 0.4 s on an M4, 9.9 s on the CI runner; without the loop cut a tone
+    // ran through every temperature (22 s on the M4).
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
 }
 
 // A model whose hash is not pinned is refused when the config is read.

@@ -154,34 +154,52 @@ h4.day {
   .nothumb { width: 104px; height: 104px; }
 }
 
-/* Date scrubber: a rail on the right on wide screens, a menu on phones. */
+/* Date chooser on every screen: a floating button naming the month in
+   view, opening one row per year and a month grid. The rail on the right
+   is for a mouse on a wide screen only (see below). */
 .rail { display: none; }
 .jumpmenu {
   position: fixed; right: 16px; bottom: 16px; z-index: 10;
-  background: var(--paper-2); border: 1px solid var(--line); border-radius: 10px;
-  max-width: calc(100vw - 32px); box-shadow: var(--shadow);
+  background: var(--paper-2); border: 1px solid var(--line); border-radius: 14px;
+  box-shadow: var(--shadow); max-width: calc(100vw - 32px);
 }
-.jumpmenu summary {
-  padding: 10px 16px; cursor: pointer; list-style: none;
-  font: 500 14px/1 var(--serif); letter-spacing: .12em;
-  display: flex; align-items: center; gap: 8px;
+.jumpmenu > summary {
+  min-height: 48px; padding: 0 20px; cursor: pointer; list-style: none;
+  font: 500 16px/1 var(--serif); letter-spacing: .1em;
+  display: flex; align-items: center; gap: 10px;
 }
-.jumpmenu summary::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--shu); }
+.jumpmenu > summary::before { content: ""; width: 9px; height: 9px; border-radius: 50%; background: var(--shu); }
 .jumpmenu summary::-webkit-details-marker { display: none; }
-.jumpmenu .jm { max-height: 60vh; overflow-y: auto; padding: 0 16px 14px; }
-.jumpmenu .jy { margin-top: 12px; }
-.jumpmenu .jy > a.y { font: 400 20px/1 var(--serif); color: var(--ink); text-decoration: none; letter-spacing: .06em; }
-.jumpmenu .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-.jumpmenu .chips a {
-  padding: 5px 10px; border: 1px solid var(--line); border-radius: 999px;
-  color: var(--ink); text-decoration: none; font-size: 13px; background: var(--paper);
+.jumpmenu[open] { width: min(420px, calc(100vw - 32px)); }
+.jumpmenu .jm { max-height: min(70vh, 560px); overflow-y: auto; overscroll-behavior: contain; padding: 0 12px 12px; }
+.jumpmenu .jyear { border-top: 1px solid var(--line); }
+.jumpmenu .jyear > summary {
+  min-height: 48px; padding: 0 8px; cursor: pointer; list-style: none;
+  display: flex; align-items: center; justify-content: space-between;
 }
-.jumpmenu .chips a:hover { border-color: var(--shu); color: var(--shu); }
-.jumpmenu .chips .n { color: var(--ink-faint); font-size: 11px; margin-left: 2px; }
+.jumpmenu .jyear > summary .y { font: 400 22px/1 var(--serif); letter-spacing: .06em; color: var(--ink); }
+.jumpmenu .jyear > summary .n { color: var(--ink-faint); font-size: 13px; font-variant-numeric: tabular-nums; }
+.jumpmenu .jyear[open] > summary .y { color: var(--shu); }
+.jumpmenu .months { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 4px 8px 8px; }
+.jumpmenu .months a, .jumpmenu .months .none {
+  min-height: 48px; border-radius: 10px; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 3px; font-size: 15px;
+}
+.jumpmenu .months a {
+  border: 1px solid var(--line); color: var(--ink); text-decoration: none; background: var(--paper);
+}
+.jumpmenu .months a:hover, .jumpmenu .months a.on { border-color: var(--shu); color: var(--shu); }
+.jumpmenu .months a .n { color: var(--ink-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.jumpmenu .months .none { color: var(--ink-faint); opacity: .45; }
+.jumpmenu a.whole {
+  display: block; padding: 4px 8px 12px; font-size: 13px; letter-spacing: .08em;
+  color: var(--ink-soft); text-decoration: none;
+}
+.jumpmenu a.whole:hover { color: var(--shu); }
 
-@media (min-width: 700px) {
+@media (min-width: 900px) and (hover: hover) and (pointer: fine) {
   main { padding-right: 96px; }
-  .jumpmenu { display: none; }
+  .jumpmenu { right: 96px; }
   .rail {
     display: flex; flex-direction: column;
     position: fixed; top: 64px; right: 10px; bottom: 16px; width: 66px;

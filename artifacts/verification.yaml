@@ -934,3 +934,17 @@ artifacts:
       - type: verifies
         target: REQ-WEB-001
 
+  - id: VER-069
+    type: verification
+    title: Sessions survive a restart but not a removal or a sign-out
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "sessions_survive_a_restart_but_not_a_removal_or_logout"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth sessions_survive_a_restart_but_not_a_removal_or_logout"
+    links:
+      - type: verifies
+        target: REQ-AUTH-001
+
