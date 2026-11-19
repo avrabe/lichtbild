@@ -642,3 +642,46 @@ artifacts:
       - type: satisfies
         target: REQ-PLACE-002
 
+  - id: DD-023
+    type: design-decision
+    title: Text in pictures with PaddleOCR models run by rten, in a child process
+    status: implemented
+    release: v0.7.0
+    description: >
+      Spike spikes/ocr-bench (branch spike/ocr), synthetic German text:
+      ocrs 0.14 reads no umlauts (0 of 146) and 62 % of characters wrong;
+      PaddleOCR PP-OCRv3 mobile detection with PP-OCRv5 Latin recognition
+      read 0.2 % wrong and 235 of 236 umlauts, at 0.20 s per picture on an
+      M4 and 1.02 s on the Pi 5 (median; 0.9 GB peak), faster and better
+      than the PP-OCRv5 server detector (6.7 s on the Pi).
+    fields:
+      decision: >
+        The PaddleOCR ONNX models (Apache-2.0, pinned by SHA-256, from
+        monkt/paddleocr-onnx) run in rten, pure Rust, in a `read-text`
+        child with a CPU and address-space limit and a 90 s wall clock.
+        Detection at up to 960 px; the text's skew from the detected
+        regions' second moments, and a page tilted more than 0.7° is
+        straightened and detected again; line crops padded by 2.5 times
+        the DB unclip distance (1.5 loses the dots of the umlauts);
+        recognition at 48 px high with greedy CTC decoding. A line is kept
+        with at least two letters or digits and a mean character
+        certainty of 0.80 (0.90 under four characters): on the demo set,
+        texture junk scored 0.10 to 0.70 and real lines 0.966 to 1.00.
+        Lines group into blocks (overlapping, at most 1.2 line heights
+        apart) and blocks into documents (within three line heights). Each
+        picture is read once per model name, newest first, after the
+        transcripts, until the next scan.
+      rationale: >
+        The household's text is German. A child process keeps a crash or a
+        hang in decoding or inference away from the server, as for
+        transcripts and video posters; rten keeps the build free of C++ and
+        Python.
+      alternatives: >
+        ocrs (no umlauts); ONNX Runtime (a C++ dependency); Tesseract (C++,
+        weaker on photos). Finding sheets of paper by their edges, and
+        straightening each, is left for later; documents are told apart by
+        how their text is laid out.
+    links:
+      - type: satisfies
+        target: REQ-TEXT-001
+

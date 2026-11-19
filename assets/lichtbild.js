@@ -176,9 +176,42 @@
   if (!img) return;
 
   var scale = 1, tx = 0, ty = 0;
+  // Text in the picture (REQ-TEXT-001): line boxes over the photo, shown
+  // while the text panel is open; they follow the photo's zoom.
+  var layer = viewer.querySelector(".textlayer");
+  var textp = viewer.querySelector("details.textp");
+  function placeLayer() {
+    if (!layer) return;
+    var W = img.offsetWidth, H = img.offsetHeight;
+    layer.style.left = img.offsetLeft + "px";
+    layer.style.top = img.offsetTop + "px";
+    layer.style.width = W + "px";
+    layer.style.height = H + "px";
+    layer.style.transform = img.style.transform;
+    layer.querySelectorAll("a[data-quad]").forEach(function (a) {
+      var q = a.getAttribute("data-quad").split(",").map(Number);
+      // Corners: top left, top right, bottom right, bottom left.
+      var x0 = q[0] * W, y0 = q[1] * H, x1 = q[2] * W, y1 = q[3] * H, x3 = q[6] * W, y3 = q[7] * H;
+      var w = Math.hypot(x1 - x0, y1 - y0), h = Math.hypot(x3 - x0, y3 - y0);
+      a.style.left = x0 + "px";
+      a.style.top = y0 + "px";
+      a.style.width = w + "px";
+      a.style.height = h + "px";
+      a.style.transform = "rotate(" + Math.atan2(y1 - y0, x1 - x0) + "rad)";
+    });
+  }
+  function showLayer() {
+    if (!layer) return;
+    layer.hidden = !(textp && textp.open);
+    placeLayer();
+  }
+  if (textp) textp.addEventListener("toggle", showLayer);
+  if (img.complete) showLayer(); else img.addEventListener("load", showLayer);
+  window.addEventListener("resize", placeLayer);
   function apply() {
     img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
     viewer.classList.toggle("zoomed", scale > 1.001);
+    if (layer && !layer.hidden) layer.style.transform = img.style.transform;
   }
   function maxScale() {
     // At least 4x, and enough to show every pixel of the original.

@@ -33,6 +33,8 @@ const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_tim
 /// Content hash -> transcript JSON (crate::stt::Transcript), so a moved or
 /// renamed video keeps its transcript (REQ-MEDIA-004).
 const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
+/// Text read from pictures (REQ-TEXT-001): content hash -> JSON `ocr::Text`.
+const TEXTS: TableDefinition<&str, &[u8]> = TableDefinition::new("texts");
 /// Content hash -> (difference hash of the thumbnail, has one): the
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
@@ -163,6 +165,7 @@ impl Index {
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
             w.open_table(PLACED)?;
+            w.open_table(TEXTS)?;
         }
         w.commit()?;
         Ok(Index {
@@ -657,6 +660,90 @@ impl Index {
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// The text read from a picture, by content hash.
+    pub fn text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXTS)?;
+        match t.get(hash)? {
+            Some(v) => Ok(Some(
+                serde_json::from_slice(v.value()).context("corrupt text")?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_text(&self, hash: &str, text: &crate::ocr::Text) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(TEXTS)?;
+            t.insert(hash, serde_json::to_vec(text)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Live photos (not videos) with a thumbnail whose content has no
+    /// text from `model` yet, newest first: (id, record).
+    pub fn photos_to_read(&self, model: &str) -> Result<Vec<(u64, Record)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let t = r.open_table(TEXTS)?;
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in items.iter()? {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            if rec.missing
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            let done = match t.get(rec.hash.as_str())? {
+                Some(v) => serde_json::from_slice::<crate::ocr::Text>(v.value())
+                    .is_ok_and(|x| x.model == model),
+                None => false,
+            };
+            if !done {
+                out.push((k.value(), rec));
+            }
+        }
+        out.sort_by(|a, b| b.1.taken_local.cmp(&a.1.taken_local));
+        Ok(out)
+    }
+
+    /// Live photos (by content), how many have been read by `model`, and
+    /// how many of those hold text, in `labels`.
+    pub fn text_counts(&self, labels: &[String], model: &str) -> Result<(u64, u64, u64)> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let t = r.open_table(TEXTS)?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut photos, mut done, mut with) = (0, 0, 0);
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.missing
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !labels.contains(&rec.label)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            photos += 1;
+            if let Some(v) = t.get(rec.hash.as_str())? {
+                if let Ok(x) = serde_json::from_slice::<crate::ocr::Text>(v.value()) {
+                    if x.model == model {
+                        done += 1;
+                        with += u64::from(x.state == "ok");
+                    }
+                }
+            }
+        }
+        Ok((photos, done, with))
     }
 
     /// Live videos whose content has no transcript from `model` yet,

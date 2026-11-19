@@ -65,6 +65,8 @@ pub struct Config {
     /// Transcripts of videos (REQ-MEDIA-004); None when no model is
     /// configured.
     pub transcribe: Option<Transcribe>,
+    /// The OCR model directory, checked (REQ-TEXT-001); None: no reading.
+    pub ocr_dir: Option<PathBuf>,
     /// The world map's PMTiles file and glyph/sprite directory
     /// (REQ-MAP-001); canonical paths, each optional.
     pub map: MapFiles,
@@ -150,6 +152,7 @@ struct FileConfig {
     places: PlacesFiles,
     #[serde(default)]
     transcribe: TranscribeFiles,
+    ocr_dir: Option<PathBuf>,
     #[serde(default)]
     map: MapFiles,
     public_url: Option<String>,
@@ -177,6 +180,7 @@ pub struct Settings {
     pub allowed_hosts: Vec<String>,
     pub places: PlacesFiles,
     pub transcribe: TranscribeFiles,
+    pub ocr_dir: Option<PathBuf>,
     pub map: MapFiles,
     pub public_url: Option<String>,
     pub oidc: OidcFile,
@@ -270,6 +274,9 @@ impl Settings {
                 .filter(|l| !l.is_empty())
                 .collect();
         }
+        if let Some(v) = get("LICHTBILD_OCR_DIR") {
+            s.ocr_dir = Some(PathBuf::from(v));
+        }
         if let Some(v) = get("LICHTBILD_PLACES") {
             s.places.cities = Some(PathBuf::from(v));
         }
@@ -313,6 +320,7 @@ impl Settings {
         if f.transcribe != TranscribeFiles::default() {
             self.transcribe = f.transcribe;
         }
+        self.ocr_dir = f.ocr_dir.or(self.ocr_dir.take());
         if f.places != PlacesFiles::default() {
             self.places = f.places;
         }
@@ -461,6 +469,14 @@ impl Settings {
                     model_dir: dir,
                     languages: self.transcribe.languages,
                 }),
+                None => None,
+            },
+            // Checked at startup too: a wrong file stops the server.
+            ocr_dir: match self.ocr_dir {
+                Some(dir) => {
+                    crate::ocr::check_model(&dir)?;
+                    Some(dir)
+                }
                 None => None,
             },
             oidc,

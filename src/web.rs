@@ -56,6 +56,8 @@ pub struct AppState {
     pub positions: Arc<crate::place::Cache>,
     /// The speech model's name, when transcripts are on.
     pub transcribe_model: Option<String>,
+    /// Text in pictures is read (REQ-TEXT-001).
+    pub ocr_on: bool,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
 }
@@ -83,6 +85,7 @@ impl AppState {
             status: Arc::new(crate::status::Status::default()),
             transcribe_model: cfg.transcribe.as_ref().map(|t| t.model.to_string()),
             positions: Arc::new(crate::place::Cache::default()),
+            ocr_on: cfg.ocr_dir.is_some(),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -585,6 +588,20 @@ pub fn kind_filter(kind: Option<&str>) -> (Option<bool>, &'static str) {
         Some("photo") => (Some(false), "&amp;kind=photo"),
         _ => (None, ""),
     }
+}
+
+/// Percent-encode a query value (RFC 3986 unreserved characters stay).
+pub fn urlencode(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
+            _ => o += &format!("%{b:02X}"),
+        }
+    }
+    o
 }
 
 /// The filter's suffix ("&amp;kind=video") as the query of a viewer link
@@ -1129,6 +1146,8 @@ pub struct ViewerQuery {
     t: Option<f32>,
     /// The timeline's photo/video filter (REQ-WEB-010).
     kind: Option<String>,
+    /// A search: lines of read text holding its words are marked.
+    q: Option<String>,
 }
 
 /// A video's transcript as a panel of timed lines; a click on a time seeks
@@ -1158,6 +1177,76 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
     }
     s += "</ol></div></details>";
     s
+}
+
+/// The text read in a picture (REQ-TEXT-001): a panel with the text by
+/// document and block, to read and copy, and a layer of line boxes over
+/// the picture (placed by assets/lichtbild.js from the corners in
+/// `data-quad`; a tap searches for the line). Lines holding a word of `q`
+/// are marked, and then the layer shows from the start.
+pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String) {
+    if text.state != "ok" || text.lines.is_empty() {
+        return (String::new(), String::new());
+    }
+    let words: Vec<String> = q
+        .unwrap_or("")
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| w.chars().count() >= 2)
+        .collect();
+    let hit = |t: &str| {
+        let t = t.to_lowercase();
+        !words.is_empty() && words.iter().any(|w| t.contains(w.as_str()))
+    };
+    let any_hit = text.lines.iter().any(|l| hit(&l.text));
+    let docs = text.documents();
+    let mut panel = format!(
+        "<details class=\"textp\"{open}><summary title=\"Text in the picture\" aria-label=\"Text in the picture\">Aa</summary>\
+         <div class=\"xpanel\"><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
+        open = if any_hit { " open" } else { "" },
+        many = if docs > 1 { format!("; {docs} separate documents") } else { String::new() },
+    );
+    let mut layer = String::from("<div class=\"textlayer\" hidden aria-hidden=\"true\">");
+    let mut cur_doc = None;
+    let mut cur_block = None;
+    for l in &text.lines {
+        let doc = text.docs.get(l.block as usize).copied().unwrap_or(0);
+        if cur_block != Some(l.block) {
+            if cur_block.is_some() {
+                panel += "</p>";
+            }
+            if docs > 1 && cur_doc != Some(doc) {
+                if cur_doc.is_some() {
+                    panel += "</section>";
+                }
+                panel += &format!("<section class=\"doc\"><h3>Document {}</h3>", doc + 1);
+                cur_doc = Some(doc);
+            }
+            panel += "<p>";
+            cur_block = Some(l.block);
+        } else {
+            panel += "<br>";
+        }
+        let cls = if hit(&l.text) { " class=\"hit\"" } else { "" };
+        panel += &format!("<span{cls}>{}</span>", esc(&l.text));
+        let quad: Vec<String> = l.quad.iter().map(|v| format!("{v:.4}")).collect();
+        layer += &format!(
+            "<a{cls} href=\"search?q={q}\" data-quad=\"{quad}\" title=\"{t}\"></a>",
+            q = esc(&urlencode(&l.text)),
+            quad = quad.join(","),
+            t = esc(&l.text),
+        );
+    }
+    panel += "</p>";
+    if docs > 1 {
+        panel += "</section>";
+    }
+    panel += "</div></details>";
+    layer += "</div>";
+    (panel, layer)
 }
 
 /// The copies of a picture the viewer may see (REQ-DUP-001): which is
@@ -1462,6 +1551,21 @@ async fn viewer(
         .ok()
         .and_then(|r| r.ok())
         .flatten();
+    // Text read in the picture, if any.
+    let (idx3, hash) = (st.index.clone(), rec.hash.clone());
+    let read = if rec.video.is_none() {
+        tokio::task::spawn_blocking(move || idx3.text(&hash))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten()
+    } else {
+        None
+    };
+    let (textp, layer) = read
+        .as_ref()
+        .map(|t| render_text(t, vq.q.as_deref()))
+        .unwrap_or_default();
     let mine = owned(st.auth.is_some(), &viewer).contains(&rec.label) && rec.lat.is_none();
     let act = mine.then_some((id, st.map.pmtiles.is_some(), true));
     let w = esc(&who);
@@ -1502,8 +1606,8 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
-         <div class=\"stage\">{prev}{photo}{next}</div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"stage\">{prev}{photo}{layer}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
@@ -1661,8 +1765,18 @@ pub fn render_search(
         if !lines.is_empty() {
             lines = format!("<ul class=\"said\">{lines}</ul>");
         }
+        // Text read in the picture: the matching lines, and the picture
+        // opens with them marked.
+        let mut href = format!("v/{who}/{id}");
+        if let Some(r) = &h.read {
+            lines += &format!(
+                "<p class=\"readhit\"><span class=\"dim\">in the picture:</span> {}</p>",
+                esc(r)
+            );
+            href += &format!("?q={}", esc(&urlencode(q)));
+        }
         s += &format!(
-            "<div class=\"result\"><a class=\"item{vid}\" href=\"v/{who}/{id}\">{img}</a>\
+            "<div class=\"result\"><a class=\"item{vid}\" href=\"{href}\">{img}</a>\
              <div class=\"rmeta\"><span class=\"when\">{when}</span>{place}{lines}</div></div>",
             vid = if rec.video.is_some() { " video" } else { "" },
             when = esc(&rec.taken_local.replace('T', " ")),
@@ -2047,6 +2161,17 @@ async fn status_page(
         }
         None => None,
     };
+    let read_counts = if st.ocr_on {
+        let (idx, labels) = (st.index.clone(), viewer.labels.clone());
+        match tokio::task::spawn_blocking(move || idx.text_counts(&labels, crate::ocr::MODEL)).await
+        {
+            Ok(Ok(c)) => Some(c),
+            Ok(Err(e)) => return internal(e),
+            Err(e) => return internal(e),
+        }
+    } else {
+        None
+    };
     let positions = {
         let (pc, idx, labels) = (
             st.positions.clone(),
@@ -2088,11 +2213,27 @@ async fn status_page(
             ),
             "busy",
         ),
+        Phase::Reading {
+            since,
+            done,
+            total,
+            report,
+        } => (
+            format!(
+                "Reading text in photos: {done} of {total} done ({} with text, {} failed), since {}",
+                report.with_text,
+                report.failed,
+                relative(*since, now)
+            ),
+            "busy",
+        ),
         Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
         Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
     };
     let progress = match &s.phase {
-        Phase::Transcribing { done, total, .. } if *total > 0 => {
+        Phase::Transcribing { done, total, .. } | Phase::Reading { done, total, .. }
+            if *total > 0 =>
+        {
             format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
         }
         _ => String::new(),
@@ -2142,6 +2283,23 @@ async fn status_page(
                 }
             ),
             _ => "off (no speech model configured)".into(),
+        },
+    ));
+    rows.push((
+        "Text in photos",
+        match read_counts {
+            Some((photos, done, with)) => format!(
+                "{done} of {photos} photos read, {with} with text <span class=\"dim\">(model {})</span>{}",
+                crate::ocr::MODEL,
+                match s.last_read {
+                    Some(t) => format!(
+                        "<br><span class=\"dim\">last pass ended {}</span>",
+                        relative(t, now)
+                    ),
+                    None => String::new(),
+                }
+            ),
+            None => "off (no text model configured)".into(),
         },
     ));
     let c = positions;

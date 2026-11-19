@@ -36,4 +36,13 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
   `scripts/fetch-test-model.sh <dir>` downloads Whisper tiny q8_0 (MIT
   weights, converted by lmz/candle-whisper) at a pinned revision and checks
   each file's SHA-256; tests read it from `LICHTBILD_TEST_WHISPER_DIR`.
-
+- `text/two-letters.png`: two sheets of paper on a table, one with a
+  heading and three lines, one with two lines, in German with ä ö ü ß and
+  €. The sentences were written for lichtbild. They are drawn with Atkinson
+  Hyperlegible Next (SIL Open Font License 1.1) by a one-off program, for
+  tests/ocr.rs.
+- The OCR models for tests are not in the repository either:
+  `scripts/fetch-ocr-model.sh <dir>` downloads PaddleOCR's PP-OCRv3
+  detection and PP-OCRv5 Latin recognition (Apache-2.0, ONNX from
+  monkt/paddleocr-onnx) at a pinned revision and checks each file's
+  SHA-256. Tests read it from `LICHTBILD_TEST_OCR_DIR`.

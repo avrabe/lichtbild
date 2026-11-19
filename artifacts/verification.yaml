@@ -1171,3 +1171,44 @@ artifacts:
       - type: verifies
         target: REQ-WEB-010
 
+  - id: VER-084
+    type: verification
+    title: The reader finds lines, blocks and documents
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_reader_finds_lines_blocks_and_documents"
+      test-location: tests/ocr.rs
+      steps:
+        - run: "cargo test --test ocr the_reader_finds_lines_blocks_and_documents"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001
+
+  - id: VER-085
+    type: verification
+    title: Read text is stored, searched and shown
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "read_text_is_stored_searched_and_shown"
+      test-location: tests/ocr.rs
+      steps:
+        - run: "cargo test --test ocr read_text_is_stored_searched_and_shown"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001
+
+  - id: VER-086
+    type: verification
+    title: No model reads nothing and a wrong one is refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "no_model_reads_nothing_and_a_wrong_one_is_refused"
+      test-location: tests/ocr.rs
+      steps:
+        - run: "cargo test --test ocr no_model_reads_nothing_and_a_wrong_one_is_refused"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001

@@ -395,6 +395,32 @@ artifacts:
       - type: satisfies
         target: SC-001
 
+  - id: REQ-TEXT-001
+    type: requirement
+    title: Text in pictures is read in the house, searched and shown where it is
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19. lichtbild reads the text in photos (signs,
+      letters, receipts, menus) in German and other Latin-script languages,
+      umlauts and ß included, without sending anything out of the house. It
+      keeps each line with its place on the picture, groups lines into
+      blocks and blocks into separate documents (one photo can hold
+      several), and drops what textures make look like text. Search finds
+      pictures by their text and shows the matching lines; the viewer
+      lists the text by document to read and copy, and marks each line on
+      the picture, the matching ones first; a line searches for itself.
+      Reading runs in a separate, limited process after the scan, each
+      picture once per model, and the model files are pinned by hash.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-003
+      - type: satisfies
+        target: SC-001
+
   - id: REQ-WEB-009
     type: requirement
     title: A status page says what the server is doing

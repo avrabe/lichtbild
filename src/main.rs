@@ -68,6 +68,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
+        // Internal: read the text in one picture in a separate, limited
+        // process (DD-023).
+        ["read-text", rest @ ..] => match lichtbild::ocr::child_main(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
@@ -283,6 +289,32 @@ fn spawn_scanner(
                     Err(e) => tracing::error!("transcription pass failed: {e:#}"),
                 }
                 rebuild("after transcription");
+            }
+            // Text in pictures, after the transcripts, until the next scan
+            // (REQ-TEXT-001).
+            if cfg.ocr_dir.is_some() {
+                let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+                let since = SystemTime::now();
+                let progress = |done: u64, total: u64, rep: &lichtbild::ocr::PassReport| {
+                    status.set_phase(Phase::Reading {
+                        since,
+                        done,
+                        total,
+                        report: rep.clone(),
+                    })
+                };
+                progress(0, 0, &Default::default());
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| lichtbild::ocr::run_pass(&cfg, &idx, &exe, deadline, &progress))
+                {
+                    Ok(rep) => {
+                        tracing::info!("{}", rep.to_text());
+                        status.read_done(rep);
+                    }
+                    Err(e) => tracing::error!("reading pass failed: {e:#}"),
+                }
+                rebuild("after reading");
             }
             if cfg.scan_interval_hours == 0 {
                 status.set_phase(Phase::Idle { next: None });
