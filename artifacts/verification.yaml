@@ -1030,3 +1030,87 @@ artifacts:
     links:
       - type: verifies
         target: REQ-DUP-003
+
+  - id: VER-074
+    type: verification
+    title: Every page has the app menu
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "every_page_has_the_app_menu"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui every_page_has_the_app_menu"
+    links:
+      - type: verifies
+        target: REQ-WEB-011
+
+  - id: VER-075
+    type: verification
+    title: The status page shows scan and transcription
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_status_page_shows_scan_and_transcription"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_status_page_shows_scan_and_transcription"
+    links:
+      - type: verifies
+        target: REQ-WEB-009
+
+  - id: VER-076
+    type: verification
+    title: Words come from the viewer's videos without common words
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "words_come_from_the_viewers_videos_without_common_words"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui words_come_from_the_viewers_videos_without_common_words"
+    links:
+      - type: verifies
+        target: REQ-WORDS-001
+
+  - id: VER-077
+    type: verification
+    title: Photos or videos only
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "photos_or_videos_only"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui photos_or_videos_only"
+    links:
+      - type: verifies
+        target: REQ-WEB-010
+
+  - id: VER-078
+    type: verification
+    title: Home shows this day in earlier years
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "home_shows_this_day_in_earlier_years"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui home_shows_this_day_in_earlier_years"
+    links:
+      - type: verifies
+        target: REQ-WEB-011
+
+  - id: VER-079
+    type: verification
+    title: Status totals only for whoever sees every library
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "status_totals_only_for_whoever_sees_every_library"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth status_totals_only_for_whoever_sees_every_library"
+    links:
+      - type: verifies
+        target: REQ-WEB-009

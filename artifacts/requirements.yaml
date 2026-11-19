@@ -372,6 +372,69 @@ artifacts:
       priority: should
       category: functional
 
+  - id: REQ-WEB-009
+    type: requirement
+    title: A status page says what the server is doing
+    status: implemented
+    release: v0.6.0
+    description: >
+      Owner request 2026-11-19: the scan's state should be visible. A status
+      page shows whether a scan or the transcription pass runs now (with
+      its progress), when the last scan ended, how long it took and what it
+      found, how many videos have a transcript, the duplicate groups, the
+      search documents, whether a map file and place names are configured,
+      and the version and uptime. It refreshes itself and shows counts and
+      times only, never paths, file names or error text; transcript counts
+      cover the viewer's libraries, and totals over all libraries are shown
+      only to someone who may see all of them.
+    fields:
+      priority: should
+      category: functional
+
+  - id: REQ-WEB-010
+    type: requirement
+    title: Timelines, search and the map can show only photos or only videos
+    status: implemented
+    release: v0.6.0
+    description: >
+      Owner request 2026-11-19. An All / Photos / Videos switch on the
+      timelines, the search results and the map. The choice stays when the
+      timeline loads more, when the date chooser jumps and when the map
+      changes library.
+    fields:
+      priority: should
+      category: functional
+
+  - id: REQ-WEB-011
+    type: requirement
+    title: One menu reaches every page, and the home page shows the libraries
+    status: implemented
+    release: v0.6.0
+    description: >
+      Owner request 2026-11-19. Every signed-in page carries the same menu
+      button beside the name, listing home, map, words, hidden, duplicate
+      files, status and sign-out, so no page is a dead end. The home page
+      shows a card per library (and one for everyone) with its newest
+      pictures, count and years, the pictures taken on this day in earlier
+      years, and tiles for the map, words and status.
+    fields:
+      priority: should
+      category: functional
+
+  - id: REQ-WORDS-001
+    type: requirement
+    title: The words said in videos, as a cloud that searches
+    status: implemented
+    release: v0.6.0
+    description: >
+      Owner request 2026-11-19. A page shows the words most of the viewer's
+      videos share, read from their transcripts, sized by how many videos
+      say them, without common German and English words; a word opens the
+      search for it. Only libraries the viewer may see count.
+    fields:
+      priority: could
+      category: functional
+
   - id: REQ-PLACE-001
     type: requirement
     title: Positions are named offline, never by an outside service

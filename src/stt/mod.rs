@@ -558,6 +558,18 @@ pub fn run_pass(
     exe: &Path,
     deadline: Option<Instant>,
 ) -> Result<PassReport> {
+    run_pass_with(cfg, idx, exe, deadline, &|_, _, _| {})
+}
+
+/// As run_pass, telling `progress` (done, total, counts so far) after each
+/// video, for the status page.
+pub fn run_pass_with(
+    cfg: &crate::config::Config,
+    idx: &crate::index::Index,
+    exe: &Path,
+    deadline: Option<Instant>,
+    progress: &dyn Fn(u64, u64, &PassReport),
+) -> Result<PassReport> {
     let mut rep = PassReport::default();
     let Some(t) = &cfg.transcribe else {
         return Ok(rep);
@@ -611,6 +623,7 @@ pub fn run_pass(
             _ => rep.failed += 1,
         }
         idx.set_transcript(&rec.hash, &tr)?;
+        progress(n as u64 + 1, total, &rep);
     }
     Ok(rep)
 }

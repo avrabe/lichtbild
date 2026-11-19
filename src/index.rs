@@ -325,7 +325,7 @@ impl Index {
         before: Option<(&str, u64)>,
         limit: usize,
     ) -> Result<Vec<Item>> {
-        self.timeline_where(labels, before, limit, |_| true)
+        self.timeline_where(labels, before, limit, |_, _| true)
     }
 
     /// The timeline with only the items `keep` accepts; the limit counts
@@ -335,11 +335,33 @@ impl Index {
         labels: &[String],
         before: Option<(&str, u64)>,
         limit: usize,
-        keep: impl Fn(u64) -> bool,
+        keep: impl Fn(u64, &Record) -> bool,
     ) -> Result<Vec<Item>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
-        let mut ids = Vec::new();
+        let mut out = Vec::new();
+        // Each candidate's record is read once and decides with `keep`.
+        let mut take = |id: u64| -> Result<bool> {
+            let Some(raw) = items.get(id)? else {
+                return Ok(false);
+            };
+            let rec = decode(raw.value())?;
+            if keep(id, &rec) {
+                out.push(Item {
+                    id,
+                    label: rec.label,
+                    taken_local: rec.taken_local,
+                    date_source: rec.date_source,
+                    thumb_ok: rec.thumb == "ok",
+                    hash: rec.hash,
+                    width: rec.width,
+                    height: rec.height,
+                    video_ms: rec.video.map(|v| v.duration_ms),
+                    copies: 1,
+                });
+            }
+            Ok(out.len() >= limit)
+        };
         match labels {
             [] => {}
             [one] => {
@@ -349,12 +371,7 @@ impl Index {
                     .range((one.as_str(), "", 0)..(one.as_str(), bt, bid))?
                     .rev()
                 {
-                    let id = e?.0.value().2;
-                    if !keep(id) {
-                        continue;
-                    }
-                    ids.push(id);
-                    if ids.len() >= limit {
+                    if take(e?.0.value().2)? {
                         break;
                     }
                 }
@@ -364,31 +381,43 @@ impl Index {
                 let (bt, bid) = before.unwrap_or((TAKEN_MAX, 0));
                 for e in t.range(("", 0)..(bt, bid))?.rev() {
                     let (k, v) = e?;
-                    if many.iter().any(|l| l == v.value()) && keep(k.value().1) {
-                        ids.push(k.value().1);
-                        if ids.len() >= limit {
-                            break;
-                        }
+                    if many.iter().any(|l| l == v.value()) && take(k.value().1)? {
+                        break;
                     }
                 }
             }
         }
-        let mut out = Vec::with_capacity(ids.len());
-        for id in ids {
-            let Some(raw) = items.get(id)? else { continue };
-            let rec = decode(raw.value())?;
-            out.push(Item {
-                id,
-                label: rec.label,
-                taken_local: rec.taken_local,
-                date_source: rec.date_source,
-                thumb_ok: rec.thumb == "ok",
-                hash: rec.hash,
-                width: rec.width,
-                height: rec.height,
-                video_ms: rec.video.map(|v| v.duration_ms),
-                copies: 1,
-            });
+        Ok(out)
+    }
+
+    /// Items taken on `month_day` ("MM-DD") in earlier years than `year`,
+    /// in the libraries `labels`, newest first: (id, record).
+    pub fn on_this_day(
+        &self,
+        labels: &[String],
+        month_day: &str,
+        year: &str,
+        limit: usize,
+    ) -> Result<Vec<(u64, Record)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(BY_TIME)?;
+        let items = r.open_table(ITEMS)?;
+        let mut out = Vec::new();
+        for e in t.iter()?.rev() {
+            let (k, v) = e?;
+            let (taken, id) = k.value();
+            if taken.get(5..10) != Some(month_day)
+                || taken.get(..4).is_none_or(|y| y >= year)
+                || !labels.iter().any(|l| l == v.value())
+            {
+                continue;
+            }
+            if let Some(raw) = items.get(id)? {
+                out.push((id, decode(raw.value())?));
+                if out.len() >= limit {
+                    break;
+                }
+            }
         }
         Ok(out)
     }
@@ -484,6 +513,36 @@ impl Index {
             out.insert(e?.0.value().1);
         }
         Ok(out)
+    }
+
+    /// Live videos (by content), how many have a transcript from `model`,
+    /// and how many of those have speech.
+    pub fn transcript_counts(&self, labels: &[String], model: &str) -> Result<(u64, u64, u64)> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let t = r.open_table(TRANSCRIPTS)?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut videos, mut done, mut speech) = (0, 0, 0);
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.missing
+                || rec.video.is_none()
+                || !labels.contains(&rec.label)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            videos += 1;
+            if let Some(v) = t.get(rec.hash.as_str())? {
+                if let Ok(tr) = serde_json::from_slice::<crate::stt::Transcript>(v.value()) {
+                    if tr.model == model {
+                        done += 1;
+                        speech += u64::from(!tr.pieces.is_empty());
+                    }
+                }
+            }
+        }
+        Ok((videos, done, speech))
     }
 
     /// The stored transcript for a content hash.

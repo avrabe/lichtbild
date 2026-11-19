@@ -191,3 +191,27 @@ artifacts:
       - type: satisfies
         target: REQ-DUP-003
 
+  - id: FEAT-010
+    type: feature
+    title: Finding one's way, the server's status, and words
+    status: implemented
+    release: v0.6.0
+    description: >
+      Owner request 2026-11-19: show the scan's status, make the home page
+      more appealing, replace the scattered links with one menu, a cloud of
+      the words said in videos, a better map page, and a photo/video filter.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - From any page the menu reaches every other page
+        - The status page shows a running transcription pass with its progress
+        - A word in the cloud opens the videos that say it
+    links:
+      - type: satisfies
+        target: REQ-WEB-009
+      - type: satisfies
+        target: REQ-WEB-010
+      - type: satisfies
+        target: REQ-WEB-011
+      - type: satisfies
+        target: REQ-WORDS-001

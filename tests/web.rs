@@ -459,18 +459,21 @@ async fn home_shows_counts_including_merged() {
     let app = app(&cfg, &idx);
     let (_, _, body) = get(&app, "/", false).await;
     let html = String::from_utf8(body).unwrap();
-    assert!(
-        html.contains(r#"<a href="t/p1">p1</a> <span class="n">5</span>"#),
-        "{html}"
-    );
-    assert!(
-        html.contains(r#"<a href="t/p2">p2</a> <span class="n">1</span>"#),
-        "{html}"
-    );
-    assert!(
-        html.contains(r#"<a href="t/all">merged</a> <span class="n">6</span>"#),
-        "{html}"
-    );
+    // A card per library and one for everyone, with the counts.
+    let card = |who: &str, title: &str, n: u64| {
+        let start = html
+            .find(&format!(r#"<a class="card" href="t/{who}">"#))
+            .unwrap_or_else(|| panic!("no card for {who}: {html}"));
+        let end = start + html[start..].find("</a>").unwrap();
+        let c = &html[start..end];
+        assert!(
+            c.contains(&format!(r#"<b>{title}</b><span class="n">{n}</span>"#)),
+            "{c}"
+        );
+    };
+    card("p1", "p1", 5);
+    card("p2", "p2", 1);
+    card("all", "Everyone", 6);
 }
 
 fn item_ids(html: &str, who: &str) -> Vec<u64> {

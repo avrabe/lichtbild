@@ -407,6 +407,7 @@ fn map_scope(viewer: &Viewer, who: Option<&str>) -> Option<Vec<String>> {
 #[derive(Deserialize)]
 pub struct PageQuery {
     who: Option<String>,
+    kind: Option<String>,
 }
 
 /// GET /map: the map, or a notice when no PMTiles file is configured.
@@ -434,9 +435,14 @@ pub async fn page(
         1 => "1 photo or video has a position.".to_string(),
         n => format!("{n} photos and videos have a position."),
     };
+    let bar = toolbar(
+        &viewer,
+        q.who.as_deref(),
+        crate::web::kind_filter(q.kind.as_deref()).0,
+    );
     if st.map.pmtiles.is_none() {
         let body = format!(
-            "<h1>Map</h1>\n<p class=\"mapnote\">No map file configured. The operator sets \
+            "{bar}<p class=\"mapnote\">No map file configured. The operator sets \
              <code>LICHTBILD_MAP_PMTILES</code> to a Protomaps PMTiles file.</p>\n<p>{count}</p>\n"
         );
         return crate::web::page_with_head(&st, "Map", "", &body).into_response();
@@ -466,15 +472,71 @@ pub async fn page(
     if let Some(w) = &q.who {
         attrs += &format!(" data-who=\"{}\"", esc(w));
     }
+    let (kind, _) = crate::web::kind_filter(q.kind.as_deref());
+    match kind {
+        Some(true) => attrs += " data-kind=\"video\"",
+        Some(false) => attrs += " data-kind=\"photo\"",
+        None => {}
+    }
     if let Some([w, s, e, n]) = summary.bounds {
         attrs += &format!(" data-bounds=\"{w:.6},{s:.6},{e:.6},{n:.6}\"");
     }
     let body = format!(
-        "<div class=\"lb-map\">\n<div id=\"map\" class=\"map\"{attrs}></div>\n\
+        "<div class=\"lb-map\">\n{bar}<div id=\"map\" class=\"map\"{attrs}></div>\n\
          <div class=\"mapstrip\" id=\"mapstrip\" hidden></div>\n\
          <p class=\"mapnote\">{count} Map data © OpenStreetMap contributors.</p>\n</div>\n"
     );
     crate::web::page_with_head(&st, "Map", &head, &body).into_response()
+}
+
+/// The map's toolbar: whose pictures (a chip per library the viewer may
+/// see, and all of them), and photos, videos or both.
+fn toolbar(viewer: &Viewer, who: Option<&str>, kind: Option<bool>) -> String {
+    let kq = match kind {
+        Some(true) => "&amp;kind=video",
+        Some(false) => "&amp;kind=photo",
+        None => "",
+    };
+    let mut libs = String::new();
+    if viewer.labels.len() > 1 {
+        let chip = |label: &str, href: String, on: bool| {
+            format!(
+                "<a href=\"{href}\"{}>{}</a>",
+                if on {
+                    " class=\"on\" aria-current=\"true\""
+                } else {
+                    ""
+                },
+                esc(label)
+            )
+        };
+        libs += "<nav class=\"kinds libs\" aria-label=\"Whose\">";
+        libs += &chip(
+            "Everyone",
+            if kq.is_empty() {
+                "map".to_string()
+            } else {
+                format!("map?{}", kq.trim_start_matches("&amp;"))
+            },
+            who.is_none(),
+        );
+        for l in &viewer.labels {
+            libs += &chip(
+                l,
+                format!("map?who={}{kq}", esc(l)),
+                who == Some(l.as_str()),
+            );
+        }
+        libs += "</nav>";
+    }
+    let base = match who {
+        Some(w) => format!("map?who={}", esc(w)),
+        None => "map".to_string(),
+    };
+    format!(
+        "<div class=\"mapbar\"><h1>Map</h1>{libs}{}</div>\n",
+        crate::web::kind_switch(&base, kind)
+    )
 }
 
 #[derive(Deserialize)]
@@ -482,6 +544,7 @@ pub struct ClusterQuery {
     z: Option<u8>,
     bbox: Option<String>,
     who: Option<String>,
+    kind: Option<String>,
 }
 
 /// GET /map/clusters?z=&bbox=w,s,e,n[&who=]: the viewer's clusters as JSON.
@@ -508,6 +571,7 @@ pub async fn clusters_json(
     let map = st.map.clone();
     let dups = st.dups.clone();
     let me = crate::web::person(&viewer);
+    let (kind, _) = crate::web::kind_filter(q.kind.as_deref());
     let res = tokio::task::spawn_blocking(move || {
         let points = map.points(&idx)?;
         // One copy of each duplicate group, and nothing this person hid,
@@ -515,6 +579,7 @@ pub async fn clusters_json(
         let hidden = idx.hidden(&me)?;
         let shown: Vec<Point> = points
             .iter()
+            .filter(|p| kind.is_none_or(|v| p.video == v))
             .filter(|p| dups.shown(p.id, &labels, &hidden).shown)
             .cloned()
             .collect();

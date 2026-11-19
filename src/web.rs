@@ -50,6 +50,10 @@ pub struct AppState {
     pub search: Arc<crate::search::Search>,
     /// Duplicate groups (REQ-DUP-001), rebuilt by the scan thread.
     pub dups: Arc<crate::dups::Dups>,
+    /// What the scan thread is doing (REQ-WEB-009).
+    pub status: Arc<crate::status::Status>,
+    /// The speech model's name, when transcripts are on.
+    pub transcribe_model: Option<String>,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
 }
@@ -74,6 +78,8 @@ impl AppState {
             nav_html: Arc::new(cfg.nav_html.clone()),
             search: Arc::new(crate::search::Search::default()),
             dups: Arc::new(crate::dups::Dups::default()),
+            status: Arc::new(crate::status::Status::default()),
+            transcribe_model: cfg.transcribe.as_ref().map(|t| t.model.to_string()),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -101,6 +107,8 @@ pub fn router(state: AppState) -> Router {
         .route("/unhide/{id}", axum::routing::post(unhide))
         .route("/keep/{id}", axum::routing::post(keep))
         .route("/hidden", get(hidden_page))
+        .route("/status", get(status_page))
+        .route("/words", get(words_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -396,7 +404,7 @@ fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Respons
     let body = format!("<h1>{}</h1>\n<p>{html}</p>", esc(title));
     (
         status,
-        page(&st.base_path, title, &body, &st.nav_html, "", ""),
+        page(&st.base_path, title, &body, &st.nav_html, "", "", ""),
     )
         .into_response()
 }
@@ -472,7 +480,28 @@ fn version_footer() -> String {
     )
 }
 
-/// A page with this app's header: the name and the nav switcher.
+/// The app's menu (one button, every page behind login): where to go in
+/// lichtbild. The house's other apps stay in the nav switcher beside it.
+fn app_menu(st: &AppState) -> String {
+    let signout = if st.auth.is_some() {
+        "<li class=\"sep\"><form method=\"post\" action=\"auth/logout\"><button type=\"submit\">Sign out</button></form></li>"
+    } else {
+        ""
+    };
+    format!(
+        "<details class=\"appmenu\"><summary aria-label=\"Menu\" title=\"Menu\"><span class=\"burger\" aria-hidden=\"true\"></span></summary>\
+         <ul>\
+         <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
+         <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
+         <li><a href=\"words\"><b>Words</b><span>What was said in videos</span></a></li>\
+         <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
+         <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
+         <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
+         {signout}</ul></details>"
+    )
+}
+
+/// A page with this app's header: the name, the menu and the nav switcher.
 fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
     page(
         &st.base_path,
@@ -481,6 +510,7 @@ fn page_for(st: &AppState, title: &str, body: &str) -> Html<String> {
         &st.nav_html,
         "",
         &version_footer(),
+        &app_menu(st),
     )
 }
 
@@ -493,10 +523,19 @@ pub(crate) fn page_with_head(st: &AppState, title: &str, head: &str, body: &str)
         &st.nav_html,
         head,
         &version_footer(),
+        &app_menu(st),
     )
 }
 
-fn page(base: &str, title: &str, body: &str, nav: &str, head: &str, footer: &str) -> Html<String> {
+fn page(
+    base: &str,
+    title: &str,
+    body: &str,
+    nav: &str,
+    head: &str,
+    footer: &str,
+    menu: &str,
+) -> Html<String> {
     Html(format!(
         r#"<!doctype html>
 <html lang="en">
@@ -511,7 +550,7 @@ fn page(base: &str, title: &str, body: &str, nav: &str, head: &str, footer: &str
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a><a href="map" class="views">Map</a><form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200"></form>{nav}</header>
+<header><a href="./" class="brand">lichtbild</a>{menu}<form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200"></form>{nav}</header>
 <main>
 {body}
 </main>
@@ -533,6 +572,45 @@ pub(crate) fn internal<E: std::fmt::Display>(e: E) -> Response {
 /// The libraries a timeline shows for this viewer: "all" is every library
 /// they may see (the merged view, only when that is more than one), a
 /// label only when they may see it.
+/// The photo/video filter (REQ-WEB-010): Some(true) for videos only,
+/// Some(false) for photos only, None for both; and its query suffix.
+pub fn kind_filter(kind: Option<&str>) -> (Option<bool>, &'static str) {
+    match kind {
+        Some("video") => (Some(true), "&amp;kind=video"),
+        Some("photo") => (Some(false), "&amp;kind=photo"),
+        _ => (None, ""),
+    }
+}
+
+/// The All / Photos / Videos switch for `base` ("t/p1", "search?q=x").
+pub fn kind_switch(base: &str, kind: Option<bool>) -> String {
+    let sep = if base.contains('?') { "&amp;" } else { "?" };
+    let item = |label: &str, href: String, on: bool| {
+        format!(
+            "<a href=\"{href}\"{}>{label}</a>",
+            if on {
+                " class=\"on\" aria-current=\"true\""
+            } else {
+                ""
+            }
+        )
+    };
+    format!(
+        "<nav class=\"kinds\" aria-label=\"Show\">{}{}{}</nav>",
+        item("All", base.to_string(), kind.is_none()),
+        item(
+            "Photos",
+            format!("{base}{sep}kind=photo"),
+            kind == Some(false)
+        ),
+        item(
+            "Videos",
+            format!("{base}{sep}kind=video"),
+            kind == Some(true)
+        ),
+    )
+}
+
 /// Whose choices (hidden items) apply: the signed-in person, or the
 /// operator when there is no login.
 pub fn person(viewer: &Viewer) -> String {
@@ -550,36 +628,130 @@ pub fn scope(viewer: &Viewer, who: &str) -> Option<Vec<String>> {
     }
 }
 
+/// The home page's cards and its "on this day" pictures.
+type Home = (Vec<Card>, Vec<(u64, index::Record)>);
+
+/// One card on the home page: a library (or the merged view), its newest
+/// pictures, how many it holds and which years.
+struct Card {
+    who: String,
+    title: String,
+    count: u64,
+    years: Option<(String, String)>,
+    latest: Vec<index::Item>,
+}
+
 async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let idx = st.index.clone();
-    let counts = match tokio::task::spawn_blocking(move || idx.counts()).await {
-        Ok(Ok(c)) => c,
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Home> {
+        let counts = idx.counts()?;
+        let hidden = idx.hidden(&me)?;
+        let mut scopes: Vec<(String, String, Vec<String>)> = labels
+            .iter()
+            .map(|l| (l.clone(), l.clone(), vec![l.clone()]))
+            .collect();
+        if labels.len() > 1 {
+            scopes.push(("all".into(), "Everyone".into(), labels.clone()));
+        }
+        let mut cards = Vec::new();
+        for (who, title, scope) in scopes {
+            let months = idx.months(&scope)?;
+            let latest = idx.timeline_where(&scope, None, 4, |id, rec| {
+                rec.thumb == "ok" && dups.shown(id, &scope, &hidden).shown
+            })?;
+            cards.push(Card {
+                who,
+                title,
+                count: scope
+                    .iter()
+                    .map(|l| counts.get(l).copied().unwrap_or(0))
+                    .sum(),
+                years: match (months.last(), months.first()) {
+                    (Some(old), Some(new)) => Some((
+                        old.0.get(..4).unwrap_or("").to_string(),
+                        new.0.get(..4).unwrap_or("").to_string(),
+                    )),
+                    _ => None,
+                },
+                latest,
+            });
+        }
+        // On this day, in earlier years: one copy, nothing hidden.
+        let otd = idx
+            .on_this_day(
+                &labels,
+                today.get(5..10).unwrap_or(""),
+                today.get(..4).unwrap_or(""),
+                60,
+            )?
+            .into_iter()
+            .filter(|(id, r)| r.thumb == "ok" && dups.shown(*id, &labels, &hidden).shown)
+            .take(14)
+            .collect();
+        Ok((cards, otd))
+    })
+    .await;
+    let (cards, otd) = match res {
+        Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
-    let mut body = String::from("<h1>Timelines</h1>\n<ul class=\"people\">\n");
-    for l in viewer.labels.iter() {
-        let n = counts.get(l).copied().unwrap_or(0);
+    let thumb = |id: u64, hash: &str| {
+        format!(
+            "<img src=\"thumb/{id}?h={}\" loading=\"lazy\" alt=\"\">",
+            esc(hash.get(..12).unwrap_or(""))
+        )
+    };
+    let mut body = String::from("<section class=\"cards\">");
+    for c in &cards {
+        let mut mosaic = String::new();
+        for it in &c.latest {
+            mosaic += &thumb(it.id, &it.hash);
+        }
+        for _ in c.latest.len()..4 {
+            mosaic += "<span></span>";
+        }
+        let years = match &c.years {
+            Some((a, b)) if a == b => a.clone(),
+            Some((a, b)) => format!("{a}–{b}"),
+            None => String::new(),
+        };
         body += &format!(
-            "<li><a href=\"t/{l}\">{l}</a> <span class=\"n\">{n}</span></li>\n",
-            l = esc(l)
+            "<a class=\"card\" href=\"t/{who}\"><div class=\"mosaic\">{mosaic}</div>\
+             <div class=\"cmeta\"><b>{title}</b><span class=\"n\">{n}</span><span class=\"years\">{years}</span></div></a>",
+            who = esc(&c.who),
+            title = esc(&c.title),
+            n = c.count,
+            years = esc(&years),
         );
     }
-    // The merged view counts the libraries this person may see.
-    let total: u64 = viewer
-        .labels
-        .iter()
-        .map(|l| counts.get(l).copied().unwrap_or(0))
-        .sum();
-    if viewer.labels.len() > 1 {
-        body +=
-            &format!("<li><a href=\"t/all\">merged</a> <span class=\"n\">{total}</span></li>\n");
+    body += "</section>";
+    if !otd.is_empty() {
+        let who = if viewer.labels.len() > 1 {
+            "all".to_string()
+        } else {
+            viewer.labels[0].clone()
+        };
+        body += "<section class=\"otd\"><h2>On this day</h2><div class=\"strip\">";
+        for (id, r) in &otd {
+            body += &format!(
+                "<a class=\"item\" href=\"v/{who}/{id}\" title=\"{t}\">{img}<span class=\"year\">{y}</span></a>",
+                who = esc(&who),
+                t = esc(&r.taken_local.replace('T', " ")),
+                img = thumb(*id, &r.hash),
+                y = esc(r.taken_local.get(..4).unwrap_or("")),
+            );
+        }
+        body += "</div></section>";
     }
-    body += "</ul>\n";
-    body += "<p class=\"more-links\"><a href=\"hidden\">Hidden</a> · <a href=\"duplicates\">Duplicate files</a></p>\n";
-    if st.auth.is_some() {
-        body += "<form class=\"signout\" method=\"post\" action=\"auth/logout\"><button type=\"submit\">Sign out</button></form>\n";
-    }
+    body += "<nav class=\"tiles\">\
+             <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
+             <a href=\"words\"><b>Words</b><span>What was said in videos</span></a>\
+             <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
     page_for(&st, "lichtbild", &body).into_response()
 }
 
@@ -588,6 +760,8 @@ struct Cursor {
     before: Option<String>,
     id: Option<u64>,
     day: Option<String>,
+    /// "photo" or "video": only those (REQ-WEB-010).
+    kind: Option<String>,
     /// Start at this year ("2023") or month ("2023-05") and go back in time.
     from: Option<String>,
 }
@@ -619,7 +793,7 @@ pub fn parse_from(v: &str) -> Option<String> {
 /// The date scrubber: a rail along the right edge on wide screens (ticks
 /// sized by item count, see assets/lichtbild.js) and a "Jump to date" menu
 /// on phones. Both are plain links, so they work without JavaScript.
-pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
+pub fn render_jump(who: &str, months: &[(String, u64)], kq: &str) -> String {
     if months.is_empty() {
         return String::new();
     }
@@ -637,13 +811,13 @@ pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
         if y != year {
             year = y;
             rail += &format!(
-                "<a class=\"y\" href=\"t/{who}?from={y}\">{y}</a>",
+                "<a class=\"y\" href=\"t/{who}?from={y}{kq}\">{y}</a>",
                 y = esc(y)
             );
         }
         let short = name(ym).get(..3).unwrap_or("");
         rail += &format!(
-            "<a class=\"m\" data-n=\"{n}\" data-ym=\"{ym}\" href=\"t/{who}?from={ym}\" title=\"{full} {y} · {n}\"><span>{short}</span></a>",
+            "<a class=\"m\" data-n=\"{n}\" data-ym=\"{ym}\" href=\"t/{who}?from={ym}{kq}\" title=\"{full} {y} · {n}\"><span>{short}</span></a>",
             ym = esc(ym),
             full = name(ym),
             y = esc(y),
@@ -680,7 +854,7 @@ pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
             let short = MONTHS[mi].get(..3).unwrap_or("");
             if *n > 0 {
                 menu += &format!(
-                    "<a href=\"t/{who}?from={y}-{m:02}\" data-ym=\"{y}-{m:02}\">{short}<span class=\"n\">{n}</span></a>",
+                    "<a href=\"t/{who}?from={y}-{m:02}{kq}\" data-ym=\"{y}-{m:02}\">{short}<span class=\"n\">{n}</span></a>",
                     y = esc(y),
                     m = mi + 1,
                 );
@@ -689,7 +863,7 @@ pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
             }
         }
         menu += &format!(
-            "</div><a class=\"whole\" href=\"t/{who}?from={y}\">All of {y}</a></details>",
+            "</div><a class=\"whole\" href=\"t/{who}?from={y}{kq}\">All of {y}</a></details>",
             y = esc(y)
         );
     }
@@ -719,6 +893,7 @@ pub fn render_items(
     items: &[index::Item],
     prev_day: Option<&str>,
     more: bool,
+    kq: &str,
 ) -> String {
     let mut s = String::new();
     let mut prev = prev_day.map(str::to_string);
@@ -795,7 +970,7 @@ pub fn render_items(
     if more {
         if let (Some(last), Some(day)) = (items.last(), prev.as_deref()) {
             s += &format!(
-                "<div class=\"more\" hx-get=\"t/{who}?before={b}&amp;id={id}&amp;day={d}\" hx-trigger=\"revealed\" hx-swap=\"outerHTML\">loading…</div>\n",
+                "<div class=\"more\" hx-get=\"t/{who}?before={b}&amp;id={id}&amp;day={d}{kq}\" hx-trigger=\"revealed\" hx-swap=\"outerHTML\">loading…</div>\n",
                 who = esc(who),
                 b = esc(&last.taken_local),
                 id = last.id,
@@ -829,6 +1004,7 @@ async fn timeline(
     let idx = st.index.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
+    let (kind, kq) = kind_filter(cur.kind.as_deref());
     // A continuation carries before/id; a jump carries from (id 0 sorts
     // before every real id, so the bound month is excluded entirely).
     let before = cur
@@ -844,7 +1020,10 @@ async fn timeline(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
             PAGE_SIZE as usize + 1,
-            |id| dups.shown(id, &labels, &hidden).shown,
+            |id, rec| {
+                kind.is_none_or(|v| rec.video.is_some() == v)
+                    && dups.shown(id, &labels, &hidden).shown
+            },
         )?;
         for it in &mut items {
             it.copies = dups.shown(it.id, &labels, &hidden).copies;
@@ -864,12 +1043,12 @@ async fn timeline(
     };
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
-    let fragment = render_items(&who, &items, cur.day.as_deref(), more);
+    let fragment = render_items(&who, &items, cur.day.as_deref(), more, kq);
     if !full_page {
         return Html(fragment).into_response();
     }
     let title = if who == "all" {
-        "merged".to_string()
+        "Everyone".to_string()
     } else {
         who.clone()
     };
@@ -892,16 +1071,18 @@ async fn timeline(
                 .find(|(ym, _)| ym.as_str() > f && !ym.starts_with(f))
                 .map(|(ym, _)| ym.clone());
             let href = match up {
-                Some(ym) => format!("t/{}?from={}", esc(&who), esc(&ym)),
-                None => format!("t/{}", esc(&who)),
+                Some(ym) => format!("t/{}?from={}{kq}", esc(&who), esc(&ym)),
+                None if kq.is_empty() => format!("t/{}", esc(&who)),
+                None => format!("t/{}?{}", esc(&who), kq.trim_start_matches("&amp;")),
             };
             format!("<p class=\"newer\"><a href=\"{href}\">↑ Newer photos</a></p>\n")
         }
     };
     let body = format!(
-        "<h1>{}</h1>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
+        "<div class=\"thead\"><h1>{}</h1>{}</div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
         esc(&title),
-        render_jump(&who, &months),
+        kind_switch(&format!("t/{}", esc(&who)), kind),
+        render_jump(&who, &months, kq),
         newer,
         fragment,
         if items.is_empty() {
@@ -1224,9 +1405,24 @@ async fn viewer(
     } else {
         esc(&rec.taken_local.replace('T', " "))
     };
+    let hide = {
+        // Back to the timeline where this item was; showing it again
+        // stays in the viewer.
+        let back = format!("t/{who}?before={}&id={}#i{id}", rec.taken_local, id + 1);
+        if is_hidden {
+            format!(
+                "<form class=\"hidef\" method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}\"><button type=\"submit\" title=\"Hidden for you\">Hidden for you · show again</button></form>"
+            )
+        } else {
+            format!(
+                "<form class=\"hidef\" method=\"post\" action=\"hide/{id}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" title=\"Only your view changes\">Hide this for me</button></form>",
+                b = esc(&back)
+            )
+        }
+    };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}{hide}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
@@ -1244,22 +1440,13 @@ async fn viewer(
             .as_ref()
             .map(|t| render_transcript(id, &who, t))
             .unwrap_or_default(),
-        info = render_copies(id, &who, &copies) + &render_info(&rec, &exif, st.places.as_deref()),
-        hide = {
-            // Back to the timeline where this item was; showing it again
-            // stays in the viewer.
-            let back = format!("t/{who}?before={}&id={}#i{id}", rec.taken_local, id + 1);
-            if is_hidden {
-                format!(
-                    "<form class=\"hidef\" method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}\"><button type=\"submit\" title=\"Hidden for you\">Show again</button></form>"
-                )
-            } else {
-                format!(
-                    "<form class=\"hidef\" method=\"post\" action=\"hide/{id}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" title=\"Hide for you\">Hide</button></form>",
-                    b = esc(&back)
-                )
-            }
-        },
+        // Hide is an action on this picture, inside its info panel.
+        info = render_copies(id, &who, &copies)
+            + &render_info(&rec, &exif, st.places.as_deref())
+                .replace(
+                    "</dl></details>",
+                    &format!("<div class=\"hiderow\">{hide}</div></dl></details>"),
+                ),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
@@ -1270,6 +1457,7 @@ async fn viewer(
 pub struct SearchQuery {
     q: Option<String>,
     who: Option<String>,
+    kind: Option<String>,
 }
 
 /// GET /search?q=: one search box over transcripts, places, dates and
@@ -1294,6 +1482,7 @@ async fn search(
     let sx = st.search.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
+    let (kind, _) = kind_filter(sq.kind.as_deref());
     let q2 = q.clone();
     let res = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Vec<(crate::search::Hit, index::Record)>> {
@@ -1320,7 +1509,10 @@ async fn search(
                     }
                     continue;
                 }
-                if let Some(rec) = idx.locate(h.id)? {
+                if let Some(rec) = idx
+                    .locate(h.id)?
+                    .filter(|r| kind.is_none_or(|v| r.video.is_some() == v))
+                {
                     out.push((h, rec));
                 }
             }
@@ -1333,7 +1525,11 @@ async fn search(
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
-    let body = render_search(&who, &q, &hits, st.places.as_deref());
+    let body = format!(
+        "{}{}",
+        kind_switch(&format!("search?q={}", esc(&q)), kind),
+        render_search(&who, &q, &hits, st.places.as_deref())
+    );
     page_for(&st, "lichtbild search", &body).into_response()
 }
 
@@ -1665,6 +1861,200 @@ async fn duplicates_csv(
         csv,
     )
         .into_response()
+}
+
+/// GET /status: what the server is doing (REQ-WEB-009): scan,
+/// transcription, duplicates, search, version. Counts and times only.
+async fn status_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    use crate::status::{relative, span, Phase};
+    let s = st.status.snapshot();
+    let counts = match st.transcribe_model.clone() {
+        Some(m) => {
+            let idx = st.index.clone();
+            let labels = viewer.labels.clone();
+            match tokio::task::spawn_blocking(move || idx.transcript_counts(&labels, &m)).await {
+                Ok(Ok(c)) => Some(c),
+                Ok(Err(e)) => return internal(e),
+                Err(e) => return internal(e),
+            }
+        }
+        None => None,
+    };
+    let now = std::time::SystemTime::now();
+    let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    let (state, cls) = match &s.phase {
+        Phase::Starting => ("Starting".to_string(), "busy"),
+        Phase::Scanning { since } => (
+            format!("Scanning the libraries, since {}", relative(*since, now)),
+            "busy",
+        ),
+        Phase::Transcribing {
+            since,
+            done,
+            total,
+            report,
+        } => (
+            format!(
+                "Transcribing videos: {done} of {total} done ({} with speech, {} without, {} failed), since {}",
+                report.transcribed,
+                report.no_speech,
+                report.failed,
+                relative(*since, now)
+            ),
+            "busy",
+        ),
+        Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
+        Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
+    };
+    let progress = match &s.phase {
+        Phase::Transcribing { done, total, .. } if *total > 0 => {
+            format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
+        }
+        _ => String::new(),
+    };
+    rows.push((
+        "Now",
+        format!("<span class=\"dot {cls}\"></span>{}{progress}", esc(&state)),
+    ));
+    rows.push((
+        "Last scan",
+        match &s.last_scan {
+            None => "not yet".into(),
+            Some(d) => match () {
+                _ if d.failed => format!(
+                    "failed {}; the server's log says why",
+                    relative(d.ended, now)
+                ),
+                _ if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
+                _ => format!(
+                    "{}, took {}: {} files found, {} indexed, {} skipped{}",
+                    relative(d.ended, now),
+                    span(d.took),
+                    d.found,
+                    d.indexed,
+                    d.skipped,
+                    if d.reconciled {
+                        ""
+                    } else {
+                        " (did not reconcile)"
+                    }
+                ),
+            },
+        },
+    ));
+    rows.push((
+        "Transcripts",
+        match (st.transcribe_model.as_deref(), counts) {
+            (Some(m), Some((videos, done, speech))) => format!(
+                "{done} of {videos} videos transcribed, {speech} with speech <span class=\"dim\">(model {})</span>{}",
+                esc(m),
+                match &s.last_pass {
+                    Some(p) => format!(
+                        "<br><span class=\"dim\">last pass ended {}</span>",
+                        relative(p.ended, now)
+                    ),
+                    None => String::new(),
+                }
+            ),
+            _ => "off (no speech model configured)".into(),
+        },
+    ));
+    // Totals over all libraries only for whoever sees all of them.
+    if everything {
+        rows.push((
+            "Duplicates",
+            match s.duplicates {
+                Some((g, n)) => format!("{g} groups with {n} items, each shown once"),
+                None => "not grouped yet".into(),
+            },
+        ));
+        rows.push(("Search", format!("{} documents", s.search_docs)));
+    }
+    rows.push((
+        "Map",
+        if st.map.pmtiles.is_some() {
+            "map file configured".into()
+        } else {
+            "no map file configured".into()
+        },
+    ));
+    rows.push((
+        "Place names",
+        if st.places.is_some() { "on" } else { "off" }.into(),
+    ));
+    rows.push((
+        "Running",
+        format!(
+            "lichtbild {}, started {}",
+            esc(crate::VERSION),
+            relative(s.started, now)
+        ),
+    ));
+    // The list refreshes itself every 10 s (htmx); without JavaScript a
+    // reload does the same.
+    let mut list = String::from(
+        "<dl class=\"status\" id=\"status\" hx-get=\"status\" hx-trigger=\"every 10s\" hx-select=\"#status\" hx-swap=\"outerHTML\">",
+    );
+    for (k, v) in rows {
+        list += &format!("<dt>{k}</dt><dd>{v}</dd>");
+    }
+    list += "</dl>";
+    if headers.contains_key("hx-request") {
+        return Html(list).into_response();
+    }
+    page_for(&st, "lichtbild status", &format!("<h1>Status</h1>{list}")).into_response()
+}
+
+/// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);
+/// a word searches for it.
+async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let idx = st.index.clone();
+    let labels = viewer.labels.clone();
+    let res = tokio::task::spawn_blocking(move || crate::words::cloud(&idx, &labels, 80)).await;
+    let words = match res {
+        Ok(Ok(w)) => w,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<h1>Words</h1><p class=\"dim\">What was said in your videos: the larger a word, the more videos say it. Common words are left out. A word searches for it.</p>",
+    );
+    if words.is_empty() {
+        body += "<p>No transcripts yet. They are made in the background after each scan.</p>";
+        return page_for(&st, "lichtbild words", &body).into_response();
+    }
+    let top_v = words.iter().map(|w| w.videos).max().unwrap_or(1).max(1) as f64;
+    let top_t = words.iter().map(|w| w.times).max().unwrap_or(1).max(1) as f64;
+    // Sizes 1 to 6 on a log scale: mostly how many videos say a word, partly
+    // how often (so a cloud of few videos still varies). The order mixes big
+    // and small words, so the cloud does not read as a ranked list.
+    let mut cloud: Vec<(u8, &crate::words::Word)> = words
+        .iter()
+        .map(|w| {
+            let v = (w.videos as f64).ln_1p() / top_v.ln_1p();
+            let t = (w.times as f64).ln_1p() / top_t.ln_1p();
+            let r = if top_v > 1.0 { 0.7 * v + 0.3 * t } else { t };
+            (1 + (r * 5.0).round() as u8, w)
+        })
+        .collect();
+    cloud.sort_by_key(|(_, w)| blake3::hash(w.word.as_bytes()).as_bytes()[0]);
+    body += "<div class=\"cloud\">";
+    for (size, w) in cloud {
+        body += &format!(
+            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"{v} videos, {t} times\">{word}</a>",
+            q = esc(&w.word),
+            v = w.videos,
+            t = w.times,
+            word = esc(&w.word)
+        );
+    }
+    body += "</div>";
+    page_for(&st, "lichtbild words", &body).into_response()
 }
 
 /// GET /preview/{id}: the JPEG preview of a HEIC original.

@@ -160,6 +160,7 @@ fn run_serve() -> Result<ExitCode> {
         state.search.clone(),
         state.dups.clone(),
         state.places.clone(),
+        state.status.clone(),
     );
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
@@ -185,10 +186,16 @@ fn spawn_scanner(
     search: Arc<lichtbild::search::Search>,
     dups: Arc<lichtbild::dups::Dups>,
     places: Option<Arc<lichtbild::places::Places>>,
+    status: Arc<lichtbild::status::Status>,
 ) {
+    use lichtbild::status::{Phase, ScanDone};
+    use std::time::SystemTime;
     std::thread::spawn(move || {
         let rebuild = |when: &str| match search.rebuild(&idx, places.as_deref()) {
-            Ok(n) => tracing::info!("search index {when}: {n} documents"),
+            Ok(n) => {
+                status.set_search_docs(n);
+                tracing::info!("search index {when}: {n} documents")
+            }
             Err(e) => tracing::error!("search index {when} failed: {e:#}"),
         };
         // What the index already holds is searchable before the scan ends.
@@ -200,23 +207,46 @@ fn spawn_scanner(
                 Err(e) => tracing::error!("fingerprints {when} failed: {e:#}"),
             }
             match dups.rebuild(&idx) {
-                Ok(r) => tracing::info!(
-                    "duplicates {when}: {} groups, {} items ({} exact pairs, {} same picture)",
-                    r.groups,
-                    r.items,
-                    r.exact_pairs,
-                    r.near_pairs
-                ),
+                Ok(r) => {
+                    status.set_duplicates(r.groups, r.items);
+                    tracing::info!(
+                        "duplicates {when}: {} groups, {} items ({} exact pairs, {} same picture)",
+                        r.groups,
+                        r.items,
+                        r.exact_pairs,
+                        r.near_pairs
+                    )
+                }
                 Err(e) => tracing::error!("duplicates {when} failed: {e:#}"),
             }
         };
         regroup("at start");
         rebuild("at start");
         loop {
+            let since = SystemTime::now();
+            status.set_phase(Phase::Scanning { since });
+            let done = |rep: Option<&scan::Report>, failed: bool| ScanDone {
+                ended: SystemTime::now(),
+                took: since.elapsed().unwrap_or_default(),
+                found: rep.map_or(0, |r| r.total_found),
+                indexed: rep.map_or(0, |r| r.total_indexed),
+                skipped: rep.map_or(0, |r| r.total_skipped),
+                reconciled: rep.is_some_and(|r| r.reconciled),
+                failed,
+            };
             match scan::run(&cfg, &idx, &scan::Options::default()) {
-                Ok(rep) if rep.reconciled => tracing::info!("scan finished\n{}", rep.to_text()),
-                Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
-                Err(e) => tracing::error!("scan failed: {e:#}"),
+                Ok(rep) => {
+                    status.scan_done(done(Some(&rep), false));
+                    if rep.reconciled {
+                        tracing::info!("scan finished\n{}", rep.to_text())
+                    } else {
+                        tracing::error!("scan NOT reconciled\n{}", rep.to_text())
+                    }
+                }
+                Err(e) => {
+                    status.scan_done(done(None, true));
+                    tracing::error!("scan failed: {e:#}")
+                }
             }
             regroup("after the scan");
             rebuild("after the scan");
@@ -226,19 +256,43 @@ fn spawn_scanner(
             let started = std::time::Instant::now();
             if cfg.transcribe.is_some() {
                 let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+                let since = SystemTime::now();
+                status.set_phase(Phase::Transcribing {
+                    since,
+                    done: 0,
+                    total: 0,
+                    report: Default::default(),
+                });
+                let progress = |done: u64, total: u64, rep: &lichtbild::stt::PassReport| {
+                    status.set_phase(Phase::Transcribing {
+                        since,
+                        done,
+                        total,
+                        report: rep.clone(),
+                    })
+                };
                 match std::env::current_exe()
                     .map_err(anyhow::Error::from)
-                    .and_then(|exe| lichtbild::stt::run_pass(&cfg, &idx, &exe, deadline))
-                {
-                    Ok(rep) => tracing::info!("{}", rep.to_text()),
+                    .and_then(|exe| {
+                        lichtbild::stt::run_pass_with(&cfg, &idx, &exe, deadline, &progress)
+                    }) {
+                    Ok(rep) => {
+                        tracing::info!("{}", rep.to_text());
+                        status.pass_done(rep);
+                    }
                     Err(e) => tracing::error!("transcription pass failed: {e:#}"),
                 }
                 rebuild("after transcription");
             }
             if cfg.scan_interval_hours == 0 {
+                status.set_phase(Phase::Idle { next: None });
                 break;
             }
-            std::thread::sleep(interval.saturating_sub(started.elapsed()));
+            let wait = interval.saturating_sub(started.elapsed());
+            status.set_phase(Phase::Idle {
+                next: Some(SystemTime::now() + wait),
+            });
+            std::thread::sleep(wait);
         }
     });
 }

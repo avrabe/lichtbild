@@ -63,6 +63,7 @@
   map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-right");
 
   var who = attr("data-who");
+  var kind = attr("data-kind");
   var strip = document.getElementById("mapstrip");
   var markers = [];
   var pending = null;
@@ -153,6 +154,7 @@
       [bb.getWest(), bb.getSouth(), bb.getEast(), bb.getNorth()]
         .map(function (v) { return v.toFixed(5); }).join(",");
     if (who) q += "&who=" + encodeURIComponent(who);
+    if (kind) q += "&kind=" + encodeURIComponent(kind);
     fetch(q, { signal: pending.signal, headers: { accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("clusters: " + r.status);

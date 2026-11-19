@@ -992,3 +992,24 @@ async fn hiding_is_per_person() {
         "not hidden for p2"
     );
 }
+
+// The status page shows totals over all libraries only to whoever sees
+// all of them (REQ-WEB-009).
+// rivet: verifies REQ-WEB-009
+#[tokio::test]
+async fn status_totals_only_for_whoever_sees_every_library() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let page = req_with(&e.app, "GET", "/status", Some(&c1), false, &[]).await;
+    assert!(page.status.is_success(), "{}", page.status);
+    assert!(page.body.contains("<dt>Now</dt>"), "{}", page.body);
+    assert!(!page.body.contains("<dt>Duplicates</dt>"), "{}", page.body);
+    assert!(!page.body.contains("<dt>Search</dt>"), "{}", page.body);
+}
