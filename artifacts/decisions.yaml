@@ -539,6 +539,41 @@ artifacts:
       - type: satisfies
         target: REQ-SEARCH-001
 
+  - id: DD-020
+    type: design-decision
+    title: Duplicates by content hash and a thumbnail difference hash
+    status: implemented
+    release: v0.5.0
+    description: >
+      Owner request 2026-11-18: detect the same pictures and stop showing
+      them more than once; similar pictures (bursts, angles) come later.
+    fields:
+      decision: >
+        Exact copies share the blake3 content hash the index already holds.
+        The same picture in another file: a 64-bit difference hash (9x8
+        grey) of the thumbnail in the data directory, computed once per
+        content after each scan and stored in redb; flat pictures get none.
+        Two pictures are the same when at most 6 bits differ, the aspect
+        ratio agrees within 3 %, both are photos or both videos, and one of
+        these holds: one has no camera date, the sizes differ by more than
+        10 %, or the same second in two formats. Each copy joins only its
+        nearest match, so a burst is not pulled together through a copy.
+        Candidates come from eight 8-bit bands of the hash. Groups live in
+        memory, rebuilt after each scan; which copy shows is decided per
+        request among the libraries the viewer may see.
+      rationale: >
+        No original is read again and no new dependency is needed. The
+        evidence rule keeps two camera originals apart, which is the line
+        between a duplicate and a similar picture.
+      alternatives: >
+        Image embeddings (v0.6, also for similar pictures); a perceptual
+        hash over the original (reads every file again).
+      kill-criterion: >
+        Revisit if the owner finds two different photos shown as one, or
+        copies of a messenger photo still shown twice.
+    links:
+      - type: satisfies
+        target: REQ-DUP-001
   - id: DD-021
     type: design-decision
     title: Sessions are stored by hash, so an upgrade does not sign anyone out

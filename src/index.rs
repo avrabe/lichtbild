@@ -33,9 +33,17 @@ const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_tim
 /// Content hash -> transcript JSON (crate::stt::Transcript), so a moved or
 /// renamed video keeps its transcript (REQ-MEDIA-004).
 const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
+/// Content hash -> (difference hash of the thumbnail, has one): the
+/// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
+/// stores (0, false).
+const FINGERPRINTS: TableDefinition<&str, (u64, bool)> = TableDefinition::new("fingerprints");
 /// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
 /// restart does not sign anyone out (crate::auth::SessionStore).
 const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
+/// (person, item id) -> (): what each person chose not to see
+/// (REQ-DUP-002). Per person: one person's choice never changes another's
+/// view; nothing in the libraries changes.
+const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -105,6 +113,8 @@ pub struct Item {
     pub height: u32,
     /// Length of a video, in milliseconds.
     pub video_ms: Option<u64>,
+    /// Copies of this picture the viewer may see, this one included.
+    pub copies: usize,
 }
 
 pub struct Index {
@@ -147,7 +157,9 @@ impl Index {
             w.open_table(BY_ROOT)?;
             w.open_table(BY_TIME)?;
             w.open_table(TRANSCRIPTS)?;
+            w.open_table(FINGERPRINTS)?;
             w.open_table(SESSIONS)?;
+            w.open_table(HIDDEN)?;
         }
         w.commit()?;
         Ok(Index {
@@ -313,6 +325,18 @@ impl Index {
         before: Option<(&str, u64)>,
         limit: usize,
     ) -> Result<Vec<Item>> {
+        self.timeline_where(labels, before, limit, |_| true)
+    }
+
+    /// The timeline with only the items `keep` accepts; the limit counts
+    /// kept items, so a page is full however many are left out.
+    pub fn timeline_where(
+        &self,
+        labels: &[String],
+        before: Option<(&str, u64)>,
+        limit: usize,
+        keep: impl Fn(u64) -> bool,
+    ) -> Result<Vec<Item>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
         let mut ids = Vec::new();
@@ -325,7 +349,11 @@ impl Index {
                     .range((one.as_str(), "", 0)..(one.as_str(), bt, bid))?
                     .rev()
                 {
-                    ids.push(e?.0.value().2);
+                    let id = e?.0.value().2;
+                    if !keep(id) {
+                        continue;
+                    }
+                    ids.push(id);
                     if ids.len() >= limit {
                         break;
                     }
@@ -336,7 +364,7 @@ impl Index {
                 let (bt, bid) = before.unwrap_or((TAKEN_MAX, 0));
                 for e in t.range(("", 0)..(bt, bid))?.rev() {
                     let (k, v) = e?;
-                    if many.iter().any(|l| l == v.value()) {
+                    if many.iter().any(|l| l == v.value()) && keep(k.value().1) {
                         ids.push(k.value().1);
                         if ids.len() >= limit {
                             break;
@@ -359,6 +387,7 @@ impl Index {
                 width: rec.width,
                 height: rec.height,
                 video_ms: rec.video.map(|v| v.duration_ms),
+                copies: 1,
             });
         }
         Ok(out)
@@ -383,6 +412,76 @@ impl Index {
         for e in items.iter()? {
             let (k, v) = e?;
             out.push((k.value(), decode(v.value())?));
+        }
+        Ok(out)
+    }
+
+    /// Live items with a thumbnail whose content has no fingerprint yet:
+    /// their content hashes, one per hash.
+    pub fn missing_fingerprints(&self) -> Result<Vec<String>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let fp = r.open_table(FINGERPRINTS)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for e in items.iter()? {
+            let (_, v) = e?;
+            let rec = decode(v.value())?;
+            if rec.missing || rec.thumb != "ok" || !seen.insert(rec.hash.clone()) {
+                continue;
+            }
+            if fp.get(rec.hash.as_str())?.is_none() {
+                out.push(rec.hash);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn set_fingerprint(&self, hash: &str, fp: Option<u64>) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(FINGERPRINTS)?;
+            t.insert(hash, (fp.unwrap_or(0), fp.is_some()))?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Every stored fingerprint by content hash (None: a flat picture).
+    pub fn fingerprints(&self) -> Result<HashMap<String, Option<u64>>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(FINGERPRINTS)?;
+        let mut out = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            let (h, some) = v.value();
+            out.insert(k.value().to_string(), some.then_some(h));
+        }
+        Ok(out)
+    }
+
+    /// Hide or show again an item for one person.
+    pub fn set_hidden(&self, person: &str, id: u64, hidden: bool) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(HIDDEN)?;
+            if hidden {
+                t.insert((person, id), ())?;
+            } else {
+                t.remove((person, id))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The items one person has hidden.
+    pub fn hidden(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(HIDDEN)?;
+        let mut out = std::collections::HashSet::new();
+        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
+            out.insert(e?.0.value().1);
         }
         Ok(out)
     }

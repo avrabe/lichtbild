@@ -154,7 +154,13 @@ fn run_serve() -> Result<ExitCode> {
     let state = web::AppState::new(&cfg, idx.clone())
         .with_places(places)
         .with_auth(auth);
-    spawn_scanner(cfg.clone(), idx, state.search.clone(), state.places.clone());
+    spawn_scanner(
+        cfg.clone(),
+        idx,
+        state.search.clone(),
+        state.dups.clone(),
+        state.places.clone(),
+    );
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let app = web::router(state);
@@ -177,6 +183,7 @@ fn spawn_scanner(
     cfg: Config,
     idx: Arc<Index>,
     search: Arc<lichtbild::search::Search>,
+    dups: Arc<lichtbild::dups::Dups>,
     places: Option<Arc<lichtbild::places::Places>>,
 ) {
     std::thread::spawn(move || {
@@ -185,6 +192,25 @@ fn spawn_scanner(
             Err(e) => tracing::error!("search index {when} failed: {e:#}"),
         };
         // What the index already holds is searchable before the scan ends.
+        // Duplicates from the thumbnails' fingerprints (REQ-DUP-001).
+        let regroup = |when: &str| {
+            match lichtbild::dups::fingerprint_pass(&cfg.data_dir, &idx) {
+                Ok(n) if n > 0 => tracing::info!("fingerprints {when}: {n} new"),
+                Ok(_) => {}
+                Err(e) => tracing::error!("fingerprints {when} failed: {e:#}"),
+            }
+            match dups.rebuild(&idx) {
+                Ok(r) => tracing::info!(
+                    "duplicates {when}: {} groups, {} items ({} exact pairs, {} same picture)",
+                    r.groups,
+                    r.items,
+                    r.exact_pairs,
+                    r.near_pairs
+                ),
+                Err(e) => tracing::error!("duplicates {when} failed: {e:#}"),
+            }
+        };
+        regroup("at start");
         rebuild("at start");
         loop {
             match scan::run(&cfg, &idx, &scan::Options::default()) {
@@ -192,6 +218,7 @@ fn spawn_scanner(
                 Ok(rep) => tracing::error!("scan NOT reconciled\n{}", rep.to_text()),
                 Err(e) => tracing::error!("scan failed: {e:#}"),
             }
+            regroup("after the scan");
             rebuild("after the scan");
             // Transcripts after the scan, not beside it (memory), until
             // the next scan is due; an unfinished pass continues after it.

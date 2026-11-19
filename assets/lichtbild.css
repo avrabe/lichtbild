@@ -397,3 +397,40 @@ body:has(.viewer) footer.version { display: none; }
 .viewer button.fs:hover { color: var(--kaki); }
 .viewer:fullscreen { padding: 0; }
 
+/* Duplicates (REQ-DUP-001): a count on the tile shown for a group, and
+   the copies in the viewer bar. */
+.item .copies {
+  position: absolute; right: 6px; bottom: 6px; padding: 2px 6px;
+  font: 600 11px/1.3 var(--sans); font-variant-numeric: tabular-nums;
+  color: #fff; background: rgba(20, 18, 16, .62); border-radius: 9px;
+}
+.viewer details.copies { position: relative; }
+.viewer details.copies > summary {
+  list-style: none; cursor: pointer; font: 600 13px/1 var(--sans); padding: 0 8px; color: inherit;
+}
+.viewer details.copies > summary::-webkit-details-marker { display: none; }
+.viewer .cpanel {
+  position: absolute; right: 0; top: 30px; z-index: 5; width: min(520px, 90vw);
+  max-height: 60vh; overflow-y: auto; padding: 12px 16px;
+  background: rgba(20, 18, 16, .92); border-radius: 6px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5);
+  font-size: 13px; line-height: 1.5;
+}
+.viewer .cpanel ol { margin: 0; padding-left: 18px; }
+.viewer .cpanel li { margin: 0 0 6px; overflow-wrap: anywhere; }
+.viewer .cpanel li.current > a { color: var(--kaki); }
+
+/* Hide and keep (REQ-DUP-002): small buttons; the hidden list. */
+.viewer form.hidef { display: inline; margin: 0 4px; }
+.viewer form.hidef button, .viewer .cpanel form button, .hiddenlist form button {
+  font: 500 12px/1 var(--sans); letter-spacing: .06em; padding: 6px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; background: none; color: inherit;
+}
+.viewer form.hidef button:hover, .viewer .cpanel form button:hover, .hiddenlist form button:hover {
+  border-color: var(--shu); color: var(--shu);
+}
+.viewer .cpanel form { display: inline; margin-left: 6px; }
+.hiddenlist .hid { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.duplist { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.duplist .keep { font-weight: 500; }
+.more-links { margin-top: 18px; font-size: 14px; letter-spacing: .06em; }
+

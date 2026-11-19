@@ -911,3 +911,84 @@ async fn sessions_survive_a_restart_but_not_a_removal_or_logout() {
         make_auth(&issuer, &secret, "https://photos.example", true).with_store(e.idx.clone());
     assert!(after.session(&sid).is_none());
 }
+
+// One person's hiding never changes another's view (REQ-DUP-002).
+// rivet: verifies REQ-DUP-002
+#[tokio::test]
+async fn hiding_is_per_person() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let id = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.label == "p1" && r.rel == b"a/IMG_exif.jpg")
+        .map(|(id, _)| id)
+        .unwrap();
+    let c1 = format!("lichtbild_session={p1}");
+    let r = req_with(
+        &e.app,
+        "POST",
+        &format!("/hide/{id}"),
+        Some(&c1),
+        false,
+        &[
+            ("sec-fetch-site", "same-origin"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let mine = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert!(
+        !mine.body.contains(&format!("id=\"i{id}\"")),
+        "hidden for p1"
+    );
+    // p1 may not see p2's library, so cannot hide in it either.
+    let other = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.label == "p2")
+        .map(|(id, _)| id)
+        .unwrap();
+    let r = req_with(
+        &e.app,
+        "POST",
+        &format!("/hide/{other}"),
+        Some(&c1),
+        false,
+        &[
+            ("sec-fetch-site", "same-origin"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(e.idx.hidden("p1").unwrap().len(), 1);
+
+    // p2 may see p1's library, and still sees the photo.
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((p2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    let c2 = format!("lichtbild_session={p2}");
+    let theirs = req_with(&e.app, "GET", "/t/p1", Some(&c2), false, &[]).await;
+    assert_eq!(theirs.status, StatusCode::OK);
+    assert!(
+        theirs.body.contains(&format!("id=\"i{id}\"")),
+        "not hidden for p2"
+    );
+}
