@@ -700,8 +700,9 @@ artifacts:
     fields:
       decision: >
         One `look` child per photo decodes it once and runs the OCR,
-        RT-DETRv2-R18 (80 COCO kinds, kept from score 0.70; noise patterns
-        reached 0.63) and the SigLIP image encoder (768-d, stored as signed
+        RT-DETRv2-R18 (80 COCO kinds, kept from score 0.70, and a box over
+        97 % of the picture both ways only from 0.95: noise patterns gave
+        whole-picture "trains" at 0.71 to 0.92) and the SigLIP image encoder (768-d, stored as signed
         bytes). All seven model files sit in LICHTBILD_VISION_DIR, pinned by
         SHA-256 (Apache-2.0). Each photo is looked at once per VERSION,
         newest first, after the transcripts. Things go into search with

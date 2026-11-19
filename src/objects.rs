@@ -13,6 +13,18 @@ use serde::{Deserialize, Serialize};
 const SIDE: u32 = 640;
 /// Kept from this score on (DD-024: noise patterns reached 0.63).
 pub const MIN_SCORE: f32 = 0.7;
+/// A box this close to the whole picture is a texture, not a thing, unless
+/// the detector is very sure (DD-024: noise patterns gave whole-picture
+/// "trains" at 0.71–0.92).
+const WHOLE: f32 = 0.97;
+const WHOLE_SURE: f32 = 0.95;
+
+/// Whether a find is kept.
+fn plausible(score: f32, bbox: [f32; 4]) -> bool {
+    let whole = bbox[2] - bbox[0] >= WHOLE && bbox[3] - bbox[1] >= WHOLE;
+    score >= MIN_SCORE && (!whole || score >= WHOLE_SURE)
+}
+
 /// At most this many things per picture.
 const MAX: usize = 40;
 
@@ -182,12 +194,18 @@ impl Detector {
                 }
             }
             let score = 1.0 / (1.0 + (-best).exp());
-            if score < MIN_SCORE {
-                continue;
-            }
             // Centre and size, as fractions of the picture.
             let (cx, cy, w, h) = (boxes[[q, 0]], boxes[[q, 1]], boxes[[q, 2]], boxes[[q, 3]]);
             let c = |v: f32| v.clamp(0.0, 1.0);
+            let bbox = [
+                c(cx - w / 2.0),
+                c(cy - h / 2.0),
+                c(cx + w / 2.0),
+                c(cy + h / 2.0),
+            ];
+            if !plausible(score, bbox) {
+                continue;
+            }
             found.push(Object {
                 kind: kind as u8,
                 score,
@@ -208,6 +226,14 @@ impl Detector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn whole_picture_boxes_need_a_sure_find() {
+        assert!(!plausible(0.92, [0.0, 0.0, 1.0, 1.0]), "a texture");
+        assert!(plausible(0.97, [0.0, 0.0, 1.0, 1.0]), "a sure close-up");
+        assert!(plausible(0.72, [0.1, 0.2, 0.6, 0.9]));
+        assert!(!plausible(0.65, [0.1, 0.2, 0.6, 0.9]), "unsure");
+    }
 
     #[test]
     fn search_words_name_each_kind_once_in_both_languages() {

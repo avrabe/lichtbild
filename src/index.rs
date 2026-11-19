@@ -734,6 +734,58 @@ impl Index {
         }
     }
 
+    /// The things found in the live photos of `labels` that `keep` lets
+    /// through, by kind: (kind, photos, the id of the photo with the
+    /// surest find), most photos first. Each content counts once.
+    pub fn things(
+        &self,
+        labels: &[String],
+        keep: impl Fn(u64) -> bool,
+    ) -> Result<Vec<(u8, u64, u64)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let objects = r.open_table(OBJECTS)?;
+        let mut seen = std::collections::HashSet::new();
+        // kind -> (photos, best score, its id)
+        let mut by: HashMap<u8, (u64, f32, u64)> = HashMap::new();
+        for e in items.iter()? {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            let id = k.value();
+            if rec.missing
+                || rec.video.is_some()
+                || !labels.contains(&rec.label)
+                || !keep(id)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            let Some(raw) = objects.get(rec.hash.as_str())? else {
+                continue;
+            };
+            let found: Vec<crate::objects::Object> =
+                serde_json::from_slice(raw.value()).unwrap_or_default();
+            let mut kinds: Vec<(u8, f32)> = Vec::new();
+            for o in found {
+                match kinds.iter_mut().find(|(k, _)| *k == o.kind) {
+                    Some((_, s)) => *s = s.max(o.score),
+                    None => kinds.push((o.kind, o.score)),
+                }
+            }
+            for (kind, score) in kinds {
+                let t = by.entry(kind).or_insert((0, 0.0, id));
+                t.0 += 1;
+                if score > t.1 {
+                    (t.1, t.2) = (score, id);
+                }
+            }
+        }
+        let mut out: Vec<(u8, u64, u64)> =
+            by.into_iter().map(|(k, (n, _, id))| (k, n, id)).collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(out)
+    }
+
     /// Every stored picture vector: (content hash, signed bytes).
     pub fn embeddings(&self) -> Result<Vec<(String, Vec<i8>)>> {
         let r = self.db.begin_read()?;

@@ -302,6 +302,16 @@ async fn what_was_seen_is_stored_searched_and_shown() {
         "{hits}"
     );
 
+    // The Things page: a tile per kind, its count, a search.
+    let things = get(&app, "/things").await;
+    assert!(
+        things.contains(&format!(
+            r#"<a class="thing" href="search?q=Katze"><img src="thumb/{cat}?h="#
+        )),
+        "{things}"
+    );
+    assert!(things.contains("<b>Katzen</b><i>1</i>"), "{things}");
+
     let status = get(&app, "/status").await;
     assert!(
         status.contains("3 of 3 photos looked at: 1 with text, 1 with things"),

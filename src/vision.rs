@@ -53,7 +53,7 @@ pub const FILES: &[(&str, &str)] = &[
 ];
 
 /// The version of this set of models and rules; a new one looks again.
-pub const VERSION: &str = "look-2";
+pub const VERSION: &str = "look-3";
 
 /// Pictures are looked at at most this large (longer side, in pixels).
 pub const WORK_SIDE: u32 = 2400;

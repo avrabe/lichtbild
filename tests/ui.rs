@@ -112,6 +112,7 @@ async fn every_page_has_the_app_menu() {
         "/search?q=x",
         "/status",
         "/words",
+        "/things",
         "/map",
         "/hidden",
         "/duplicates",
@@ -129,7 +130,15 @@ async fn every_page_has_the_app_menu() {
             header.contains(r#"<details class="appmenu">"#),
             "{uri}: {header}"
         );
-        for href in ["./", "map", "words", "hidden", "duplicates", "status"] {
+        for href in [
+            "./",
+            "map",
+            "things",
+            "words",
+            "hidden",
+            "duplicates",
+            "status",
+        ] {
             assert!(
                 header.contains(&format!(r#"<a href="{href}">"#)),
                 "{uri}: {href}"

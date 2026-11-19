@@ -120,6 +120,7 @@ pub fn router(state: AppState) -> Router {
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
+        .route("/things", get(things_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -504,7 +505,8 @@ fn app_menu(st: &AppState) -> String {
          <ul>\
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
-         <li><a href=\"words\"><b>Words</b><span>What was said in videos</span></a></li>\
+         <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
+         <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
          <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
@@ -784,7 +786,8 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
-             <a href=\"words\"><b>Words</b><span>What was said in videos</span></a>\
+             <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
+             <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
     page_for(&st, "lichtbild", &body).into_response()
 }
@@ -1859,7 +1862,12 @@ async fn search(
     let body = format!(
         "{}{}{}",
         kind_switch(&format!("search?q={}", esc(&q)), kind),
-        render_search(&who, &q, &hits, st.places.as_deref()),
+        // No exact hit but look-alikes: their heading says enough.
+        if hits.is_empty() && !looks.is_empty() {
+            String::new()
+        } else {
+            render_search(&who, &q, &hits, st.places.as_deref())
+        },
         render_looks(&who, &q, &looks)
     );
     page_for(&st, "lichtbild search", &body).into_response()
@@ -1903,7 +1911,7 @@ pub fn render_search(
         q = esc(q)
     );
     if q.trim().is_empty() {
-        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, places, dates (2021, Juli, July) and file names.</p></section>".into();
+        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, the text in pictures, things (Katze, Fahrrad), places, dates (2021, Juli, July) and file names, or describe a picture in your own words (\u{201c}Kinder am Strand\u{201d}).</p></section>".into();
     }
     for (h, rec) in hits {
         let id = h.id;
@@ -2531,6 +2539,58 @@ async fn status_page(
         return Html(list).into_response();
     }
     page_for(&st, "lichtbild status", &format!("<h1>Status</h1>{list}")).into_response()
+}
+
+/// GET /things: the kinds of thing found in the viewer's photos, each with
+/// how many photos show it and the photo with the surest find; a tile
+/// searches for it (REQ-SEE-001).
+async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let hidden = idx.hidden(&me)?;
+        let things = idx.things(&labels, |id| dups.shown(id, &labels, &hidden).shown)?;
+        let mut out = Vec::new();
+        for (kind, n, id) in things {
+            if let Some(rec) = idx.locate(id)? {
+                out.push((kind, n, id, rec));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    let things = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<h1>Things</h1><p class=\"dim\">What is in your photos, found in the house. A thing shows the photos with it.</p>",
+    );
+    if things.is_empty() {
+        body += if st.vision_on {
+            "<p>Nothing found yet. Photos are looked at in the background after each scan.</p>"
+        } else {
+            "<p>Off: the operator sets <code>LICHTBILD_VISION_DIR</code> to the vision models.</p>"
+        };
+        return page_for(&st, "lichtbild things", &body).into_response();
+    }
+    body += "<section class=\"thingtiles\">";
+    for (kind, n, id, rec) in &things {
+        let (_, one, many) = crate::objects::KINDS[*kind as usize];
+        body += &format!(
+            "<a class=\"thing\" href=\"search?q={q}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{name}</b><i>{n}</i></span></a>",
+            q = esc(&urlencode(one)),
+            h = esc(rec.hash.get(..12).unwrap_or("")),
+            name = esc(many),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild things", &body).into_response()
 }
 
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);
