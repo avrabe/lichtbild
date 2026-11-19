@@ -434,3 +434,127 @@ body:has(.viewer) footer.version { display: none; }
 .duplist .keep { font-weight: 500; }
 .more-links { margin-top: 18px; font-size: 14px; letter-spacing: .06em; }
 
+/* ---- UI round (v0.6): menu, home, status, words, filter, map bar ---- */
+
+/* The app menu: one button beside the name, a panel of places. */
+details.appmenu { position: relative; margin-left: 14px; }
+details.appmenu > summary {
+  list-style: none; cursor: pointer; width: 40px; height: 40px; border-radius: 10px;
+  display: grid; place-items: center; border: 1px solid transparent;
+}
+details.appmenu > summary::-webkit-details-marker { display: none; }
+details.appmenu > summary:hover, details.appmenu[open] > summary { border-color: var(--line); background: var(--paper-2); }
+details.appmenu .burger, details.appmenu .burger::before, details.appmenu .burger::after {
+  display: block; width: 18px; height: 2px; border-radius: 2px; background: var(--ink); position: relative;
+}
+details.appmenu .burger::before, details.appmenu .burger::after { content: ""; position: absolute; left: 0; }
+details.appmenu .burger::before { top: -6px; }
+details.appmenu .burger::after { top: 6px; }
+details.appmenu > ul {
+  position: absolute; left: 0; top: 48px; z-index: 30; margin: 0; padding: 8px; list-style: none;
+  width: min(300px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow);
+}
+details.appmenu li.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
+details.appmenu li a, details.appmenu li button {
+  display: flex; flex-direction: column; gap: 2px; width: 100%; text-align: left;
+  padding: 10px 12px; border-radius: 10px; color: var(--ink); text-decoration: none;
+  background: none; border: 0; font: inherit; cursor: pointer;
+}
+details.appmenu li a:hover, details.appmenu li button:hover { background: var(--paper-2); }
+details.appmenu li b { font: 500 16px/1.2 var(--serif); letter-spacing: .06em; }
+details.appmenu li span { font-size: 12px; color: var(--ink-faint); }
+header form.search { margin-left: 12px; }
+
+/* Home: a card per library with its newest pictures. */
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 18px; margin: 26px 0 8px; }
+.card {
+  display: block; border-radius: 14px; overflow: hidden; text-decoration: none; color: var(--ink);
+  background: var(--paper-2); border: 1px solid var(--line); box-shadow: var(--shadow);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+.card:hover { transform: translateY(-3px); }
+.card .mosaic { display: grid; grid-template-columns: 2fr 1fr; grid-template-rows: 1fr 1fr 1fr; gap: 2px; aspect-ratio: 4 / 3; background: var(--tile); }
+.card .mosaic > :first-child { grid-row: 1 / 4; }
+.card .mosaic img, .card .mosaic span { width: 100%; height: 100%; object-fit: cover; display: block; background: var(--tile); }
+.card .cmeta { display: flex; align-items: baseline; gap: 10px; padding: 14px 16px; }
+.card .cmeta b { font: 500 20px/1.2 var(--serif); letter-spacing: .06em; }
+.card .cmeta .n { color: var(--ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+.card .cmeta .years { margin-left: auto; color: var(--ink-faint); font-size: 12px; letter-spacing: .08em; }
+.otd h2, .status-h { font: 400 18px/1.2 var(--serif); letter-spacing: .1em; margin: 34px 0 12px; }
+.otd .strip { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; scroll-snap-type: x proximity; }
+.otd .strip .item { flex: none; scroll-snap-align: start; }
+.otd .strip .year {
+  position: absolute; left: 6px; bottom: 6px; padding: 2px 7px; border-radius: 9px;
+  font: 600 11px/1.3 var(--sans); color: #fff; background: rgba(20, 18, 16, .62);
+}
+nav.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; margin: 30px 0; }
+nav.tiles a {
+  display: flex; flex-direction: column; gap: 4px; padding: 16px 18px; border-radius: 12px;
+  border: 1px solid var(--line); text-decoration: none; color: var(--ink); background: var(--paper);
+}
+nav.tiles a:hover { border-color: var(--shu); }
+nav.tiles b { font: 500 17px/1.2 var(--serif); letter-spacing: .08em; }
+nav.tiles span { font-size: 12px; color: var(--ink-faint); }
+
+/* All / Photos / Videos, and the map's libraries: a segmented switch. */
+.thead, .mapbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 18px; }
+.thead h1, .mapbar h1 { margin-right: auto; }
+nav.kinds { display: inline-flex; border: 1px solid var(--line); border-radius: 999px; padding: 3px; background: var(--paper-2); }
+nav.kinds a {
+  padding: 7px 14px; border-radius: 999px; font-size: 13px; letter-spacing: .06em;
+  color: var(--ink-soft); text-decoration: none;
+}
+nav.kinds a.on { background: var(--paper); color: var(--ink); box-shadow: var(--shadow); }
+nav.kinds a:hover { color: var(--shu); }
+
+/* Status: what runs now and what ran last. */
+dl.status { display: grid; grid-template-columns: max-content 1fr; gap: 12px 24px; margin: 24px 0; }
+dl.status dt { color: var(--ink-faint); font-size: 13px; letter-spacing: .08em; }
+dl.status dd { margin: 0; }
+dl.status .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 8px; background: var(--ink-faint); }
+dl.status .dot.busy { background: var(--kaki); }
+dl.status .dot.ok { background: #4a8a5b; }
+dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; accent-color: var(--shu); }
+
+/* Words: bubbles sized by how many videos say them. */
+.cloud { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center; margin: 28px 0; }
+.cloud a.w {
+  text-decoration: none; color: var(--ink); background: var(--paper-2); border: 1px solid var(--line);
+  border-radius: 999px; padding: .35em .9em; line-height: 1.1; font-family: var(--serif); letter-spacing: .03em;
+  transition: transform .15s ease, border-color .15s ease;
+}
+.cloud a.w:hover { border-color: var(--shu); color: var(--shu); transform: scale(1.05); }
+.cloud .s1 { font-size: 13px; color: var(--ink-soft); }
+.cloud .s2 { font-size: 15px; }
+.cloud .s3 { font-size: 19px; }
+.cloud .s4 { font-size: 24px; }
+.cloud .s5 { font-size: 30px; background: var(--paper); }
+.cloud .s6 { font-size: 38px; background: var(--paper); border-color: var(--shu); }
+
+/* Map: its bar, and MapLibre's controls in the house style. */
+.mapbar { margin-bottom: 10px; }
+.lb-map .maplibregl-ctrl-group {
+  border-radius: 12px; overflow: hidden; box-shadow: var(--shadow) !important; border: 1px solid var(--line);
+  background: var(--paper);
+}
+.lb-map .maplibregl-ctrl-group button { width: 40px; height: 40px; background: var(--paper); }
+.lb-map .maplibregl-ctrl-group button + button { border-top: 1px solid var(--line); }
+.lb-map .maplibregl-ctrl-group button:hover { background: var(--paper-2); }
+.lb-map .maplibregl-ctrl-zoom-in .maplibregl-ctrl-icon::before,
+.lb-map .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon::before { color: var(--ink); }
+
+/* Hide, inside the info panel: a quiet text action, not a pill. */
+.viewer details.info .hiderow { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(233, 225, 209, .15); }
+.viewer details.info form.hidef { display: block; margin: 0; }
+.viewer details.info form.hidef button {
+  border: 0; padding: 0; background: none; color: var(--ink-faint); font: 400 13px/1.4 var(--sans);
+  letter-spacing: .04em; cursor: pointer;
+}
+.viewer details.info form.hidef button:hover { color: var(--kaki); }
+@media (max-width: 600px) {
+  .card .cmeta .years { display: none; }
+  dl.status { grid-template-columns: 1fr; gap: 4px; }
+  dl.status dd { margin-bottom: 10px; }
+}
+

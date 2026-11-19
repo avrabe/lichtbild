@@ -96,6 +96,12 @@ at nice 0.
 | F83 | REQ-DUP-002 | a hidden copy is still the one shown | `hide_and_keep_choose_what_is_shown` |
 | F84 | REQ-DUP-003 | the cleanup list counts the same picture in another file as a duplicate file | `the_cleanup_list_names_exact_duplicate_files` |
 | F85 | REQ-DUP-002 | "back" after hiding may lead to another site | `hide_and_keep_choose_what_is_shown` |
+| F86 | REQ-WEB-011 | the app menu loses its link to the status page | `every_page_has_the_app_menu` |
+| F87 | REQ-WEB-009 | the status page's refresh gets the whole page, not the list | `the_status_page_shows_scan_and_transcription` |
+| F88 | REQ-WEB-010 | the timeline's photo/video filter is inverted | `photos_or_videos_only` |
+| F89 | REQ-WEB-010 | search ignores the photo/video filter | `photos_or_videos_only` |
+| F90 | REQ-WORDS-001 | common words are not left out of the cloud | `words_come_from_the_viewers_videos_without_common_words` |
+| F91 | REQ-WORDS-001 | the cloud counts videos of libraries the viewer may not see | `words_come_from_the_viewers_videos_without_common_words` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

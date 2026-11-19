@@ -552,7 +552,7 @@ async fn the_map_works_under_the_base_path() {
             .next()
             .unwrap();
         assert!(
-            header.contains(r#"<a href="map" class="views">Map</a>"#),
+            header.contains(r#"<a href="map"><b>Map</b>"#),
             "{uri}: {header}"
         );
     }
