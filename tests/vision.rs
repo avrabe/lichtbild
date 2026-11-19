@@ -335,7 +335,7 @@ fn no_model_reads_nothing_and_a_wrong_one_is_refused() {
 
     let fake = e.base.join("fake-model");
     std::fs::create_dir_all(&fake).unwrap();
-    for (f, _) in vision::FILES {
+    for (f, _, _) in vision::FILES {
         std::fs::write(fake.join(f), b"not a model").unwrap();
     }
     let err = vision::check(&fake).unwrap_err().to_string();

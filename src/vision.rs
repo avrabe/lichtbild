@@ -17,43 +17,92 @@ use anyhow::{bail, Context, Result};
 use image::RgbImage;
 use serde::{Deserialize, Serialize};
 
-/// The model files: PaddleOCR (monkt/paddleocr-onnx 7b02d0a3), RT-DETRv2-R18
-/// int8 (onnx-community/rtdetr_v2_r18vd-ONNX 936f90b6) and SigLIP
-/// base-patch16-256 multilingual int8 (pulsejet/siglip-base-patch16-256-
-/// multilingual-onnx 443f7a60); all Apache-2.0.
-pub const FILES: &[(&str, &str)] = &[
+/// Which set of the object and SigLIP models a directory holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Precision {
+    /// int8 (dynamic quantization): half the time, a quarter of the size.
+    Int8,
+    /// float32: for x86-64 without VNNI, where rten's int8 kernels can
+    /// saturate on models not quantized with reduced range (DD-024).
+    Float,
+}
+
+/// The model files and the hashes they are accepted with: PaddleOCR
+/// (monkt/paddleocr-onnx 7b02d0a3), RT-DETRv2-R18
+/// (onnx-community/rtdetr_v2_r18vd-ONNX 936f90b6) and SigLIP
+/// base-patch16-256 multilingual (pulsejet/siglip-base-patch16-256-
+/// multilingual-onnx 443f7a60), each in int8 or float32; all Apache-2.0.
+pub const FILES: &[(&str, &str, Option<Precision>)] = &[
     (
         "ocr-det.onnx",
         "ee40e80071ba3a320d4efda75f3e22047a7d049e9bf7bcaaf9daea23fc21b935",
+        None,
     ),
     (
         "ocr-rec.onnx",
         "614ffc2d6d3902d360fad7f1b0dd455ee45e877069d14c4e51a99dc4ef144409",
+        None,
     ),
     (
         "ocr-dict.txt",
         "3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff",
+        None,
     ),
     (
         "objects.onnx",
         "4b839c46187b77fc620c770de0be6790637b98afde9b386232b0fcf74382eb3c",
+        Some(Precision::Int8),
+    ),
+    (
+        "objects.onnx",
+        "583a236ac21c95a7fd94f284fc21485e42355bfef82c27011ba78fbc09ee87e2",
+        Some(Precision::Float),
     ),
     (
         "siglip-vision.onnx",
         "9dd7c669514965a47cd1013c8069f2cb144b3e45786c0cf5ec363f283780bc7c",
+        Some(Precision::Int8),
+    ),
+    (
+        "siglip-vision.onnx",
+        "abe14f53c63107e6363006bbae3f6038d15d6d4a7ce233347fc0382ef09230ba",
+        Some(Precision::Float),
     ),
     (
         "siglip-text.onnx",
         "dbcd59207739cc2a222a881b766d32f37a7297e981f5f9594d36d52b741b0164",
+        Some(Precision::Int8),
+    ),
+    (
+        "siglip-text.onnx",
+        "8bd9cdc7038468810ae7c3bcf79f4d91927e513a5f217f1c2566862ed2558110",
+        Some(Precision::Float),
     ),
     (
         "siglip-tokenizer.json",
         "0d188aadabecdaec164a39e0d2307204a0ac9878093d17595dd3351fa0e42ca6",
+        None,
     ),
 ];
 
-/// The version of this set of models and rules; a new one looks again.
+/// The version of this set of models and rules, without the precision
+/// (see `version`); a new one looks again.
 pub const VERSION: &str = "look-3";
+
+/// The stored version for a model set: a picture looked at with int8
+/// models is looked at again with float32 ones, so vectors never mix.
+pub fn version(p: Precision) -> String {
+    match p {
+        Precision::Int8 => format!("{VERSION}-int8"),
+        Precision::Float => format!("{VERSION}-f32"),
+    }
+}
+
+/// Whether rten's int8 matrix kernels are exact on this CPU: on x86-64
+/// without VNNI they may saturate.
+pub fn int8_safe() -> bool {
+    !rten_gemm::GemmExecutor::<u8, i8, i32>::default().may_saturate()
+}
 
 /// Pictures are looked at at most this large (longer side, in pixels).
 pub const WORK_SIDE: u32 = 2400;
@@ -65,26 +114,51 @@ fn sha256_hex(data: &[u8]) -> String {
     format!("{:x}", sha2::Sha256::digest(data))
 }
 
-/// Read one model file and check it against its pinned hash.
-pub fn read_pinned(dir: &Path, name: &str) -> Result<Vec<u8>> {
-    let Some((_, sum)) = FILES.iter().find(|(n, _)| *n == name) else {
+/// Read one model file and check it against its pinned hashes; returns
+/// the bytes and the precision the hash stands for.
+fn read_with(dir: &Path, name: &str) -> Result<(Vec<u8>, Option<Precision>)> {
+    if !FILES.iter().any(|(n, _, _)| *n == name) {
         bail!("{name}: not a model file");
-    };
+    }
     let p = dir.join(name);
     let data = std::fs::read(&p).with_context(|| format!("vision model: {}", p.display()))?;
     let h = sha256_hex(&data);
-    if h != *sum {
-        bail!("{}: unknown model file (sha256 {h})", p.display());
+    match FILES.iter().find(|(n, sum, _)| *n == name && *sum == h) {
+        Some((_, _, precision)) => Ok((data, *precision)),
+        None => bail!("{}: unknown model file (sha256 {h})", p.display()),
     }
-    Ok(data)
 }
 
-/// Check the model directory: every file present with its pinned hash.
-pub fn check(dir: &Path) -> Result<()> {
-    for (name, _) in FILES {
-        read_pinned(dir, name)?;
+/// Read one model file and check it against its pinned hashes.
+pub fn read_pinned(dir: &Path, name: &str) -> Result<Vec<u8>> {
+    Ok(read_with(dir, name)?.0)
+}
+
+/// Check the model directory: every file present with a pinned hash, the
+/// object and SigLIP models of one precision, and int8 only where its
+/// kernels are exact. Returns the precision.
+pub fn check(dir: &Path) -> Result<Precision> {
+    let mut names: Vec<&str> = FILES.iter().map(|(n, _, _)| *n).collect();
+    names.dedup();
+    let mut set = None;
+    for name in names {
+        if let (_, Some(p)) = read_with(dir, name)? {
+            match set {
+                None => set = Some(p),
+                Some(q) if q != p => bail!("{}: int8 and float32 model files mixed", dir.display()),
+                Some(_) => {}
+            }
+        }
     }
-    Ok(())
+    let set = set.context("no object or SigLIP models")?;
+    if set == Precision::Int8 && !int8_safe() {
+        bail!(
+            "{}: the int8 vision models give wrong answers on this CPU (x86-64 without VNNI); \
+             use the float32 set (scripts/fetch-vision-models.sh picks it on such a machine)",
+            dir.display()
+        );
+    }
+    Ok(set)
 }
 
 /// What the child returns for one picture.
@@ -235,7 +309,7 @@ fn short_reason(e: &anyhow::Error) -> String {
     s.trim().to_string()
 }
 
-/// Look at the photos not yet looked at with VERSION, newest first, one
+/// Look at the photos not yet looked at with this version, newest first, one
 /// child at a time, until `deadline`. Every result, failures included, is
 /// stored under the photo's content hash, so the pass resumes.
 pub fn run_pass(
@@ -249,7 +323,8 @@ pub fn run_pass(
     let Some(dir) = &cfg.vision_dir else {
         return Ok(rep);
     };
-    let todo = idx.photos_to_look(VERSION)?;
+    let version = cfg.vision_version.as_str();
+    let todo = idx.photos_to_look(version)?;
     let total = todo.len() as u64;
     if total > 0 {
         tracing::info!("looking at {total} photos");
@@ -284,11 +359,11 @@ pub fn run_pass(
                 rep.looked += 1;
                 rep.with_text += u64::from(look.text.state == "ok");
                 rep.with_things += u64::from(!look.objects.is_empty());
-                idx.set_look(&rec.hash, VERSION, &look)?;
+                idx.set_look(&rec.hash, version, &look)?;
             }
             Err(e) => {
                 rep.failed += 1;
-                idx.set_look_failed(&rec.hash, VERSION, &short_reason(&e))?;
+                idx.set_look_failed(&rec.hash, version, &short_reason(&e))?;
             }
         }
         progress(n as u64 + 1, total, &rep);

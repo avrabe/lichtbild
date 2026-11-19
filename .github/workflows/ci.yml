@@ -52,16 +52,19 @@ jobs:
       - name: Fetch the test model
         run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
 
-      # OCR, object and embedding models for tests/vision.rs (~410 MB),
-      # pinned; cached across runs by the script's content (it holds every
-      # revision and hash).
+      # OCR, object and embedding models for tests/vision.rs, pinned and
+      # cached by the script's content (it holds every revision and hash).
+      # The script picks int8 or float32 by the CPU (DD-024: int8 needs VNNI
+      # on x86-64) and fetches again what does not match.
       - name: Cache the vision models
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vision
-          key: vision-${{ hashFiles('scripts/fetch-vision-models.sh') }}
+          key: vision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-vision-models.sh') }}
       - name: Fetch the vision models
-        run: scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
+        run: |
+          grep -oE 'avx512_vnni|avx_vnni' /proc/cpuinfo 2>/dev/null | sort -u | tr '\n' ' ' || true
+          scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
 
       - name: cargo test
         env:
@@ -132,16 +135,19 @@ jobs:
       - name: Fetch the test model
         run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
 
-      # OCR, object and embedding models for tests/vision.rs (~410 MB),
-      # pinned; cached across runs by the script's content (it holds every
-      # revision and hash).
+      # OCR, object and embedding models for tests/vision.rs, pinned and
+      # cached by the script's content (it holds every revision and hash).
+      # The script picks int8 or float32 by the CPU (DD-024: int8 needs VNNI
+      # on x86-64) and fetches again what does not match.
       - name: Cache the vision models
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/vision
-          key: vision-${{ hashFiles('scripts/fetch-vision-models.sh') }}
+          key: vision-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/fetch-vision-models.sh') }}
       - name: Fetch the vision models
-        run: scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
+        run: |
+          grep -oE 'avx512_vnni|avx_vnni' /proc/cpuinfo 2>/dev/null | sort -u | tr '\n' ' ' || true
+          scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
 
       - name: Plant each fault and expect its check to fail
         env:

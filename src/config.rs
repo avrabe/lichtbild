@@ -68,6 +68,9 @@ pub struct Config {
     /// The vision model directory, checked (DD-023, DD-024); None: photos
     /// are not looked at.
     pub vision_dir: Option<PathBuf>,
+    /// The version results are stored with (vision::version); empty when
+    /// photos are not looked at.
+    pub vision_version: String,
     /// The world map's PMTiles file and glyph/sprite directory
     /// (REQ-MAP-001); canonical paths, each optional.
     pub map: MapFiles,
@@ -473,13 +476,11 @@ impl Settings {
                 None => None,
             },
             // Checked at startup too: a wrong file stops the server.
-            vision_dir: match self.vision_dir {
-                Some(dir) => {
-                    crate::vision::check(&dir)?;
-                    Some(dir)
-                }
-                None => None,
+            vision_version: match &self.vision_dir {
+                Some(dir) => crate::vision::version(crate::vision::check(dir)?),
+                None => String::new(),
             },
+            vision_dir: self.vision_dir,
             oidc,
             people: self.people,
             nav_html: nav_html(self.nav_file.as_deref(), self.nav_self.as_deref())?,

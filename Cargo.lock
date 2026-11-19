@@ -1938,6 +1938,7 @@ dependencies = [
  "redb",
  "rsa",
  "rten",
+ "rten-gemm",
  "rten-tensor",
  "rubato",
  "rust_h264",

@@ -58,6 +58,8 @@ pub struct AppState {
     pub transcribe_model: Option<String>,
     /// Photos are looked at: text, things, what they show (DD-023, DD-024).
     pub vision_on: bool,
+    /// The version results are stored with.
+    pub vision_version: String,
     /// Picture vectors and the query encoder (REQ-SEE-002).
     pub space: Arc<crate::embed::Space>,
     /// The world map's files and positions cache (REQ-MAP-001).
@@ -88,6 +90,7 @@ impl AppState {
             transcribe_model: cfg.transcribe.as_ref().map(|t| t.model.to_string()),
             positions: Arc::new(crate::place::Cache::default()),
             vision_on: cfg.vision_dir.is_some(),
+            vision_version: cfg.vision_version.clone(),
             space: Arc::new(crate::embed::Space::with_dir(cfg.vision_dir.as_deref())),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
@@ -2340,10 +2343,12 @@ async fn status_page(
         None => None,
     };
     let read_counts = if st.vision_on {
-        let (idx, labels) = (st.index.clone(), viewer.labels.clone());
-        match tokio::task::spawn_blocking(move || idx.look_counts(&labels, crate::vision::VERSION))
-            .await
-        {
+        let (idx, labels, version) = (
+            st.index.clone(),
+            viewer.labels.clone(),
+            st.vision_version.clone(),
+        );
+        match tokio::task::spawn_blocking(move || idx.look_counts(&labels, &version)).await {
             Ok(Ok(c)) => Some(c),
             Ok(Err(e)) => return internal(e),
             Err(e) => return internal(e),
@@ -2470,7 +2475,7 @@ async fn status_page(
         match read_counts {
             Some((photos, done, with, things)) => format!(
                 "{done} of {photos} photos looked at: {with} with text, {things} with things <span class=\"dim\">({})</span>{}",
-                crate::vision::VERSION,
+                esc(&st.vision_version),
                 match s.last_read {
                     Some(t) => format!(
                         "<br><span class=\"dim\">last pass ended {}</span>",

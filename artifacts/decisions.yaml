@@ -713,6 +713,11 @@ artifacts:
         M4), and keeps the picture vectors in memory (768 bytes each); a query matches from a
         cosine of 0.05 and from 60 % of the best match's (single words on
         noise pictures reached 0.032), and pictures look alike from 0.80.
+        The int8 models are used where rten's int8 kernels are exact (ARM,
+        x86-64 with VNNI); on x86-64 without VNNI they saturate (on a CI
+        runner the detector found nothing in the cat photo), so there the
+        float32 set is used, lichtbild refuses int8 at start, and the
+        precision is part of the stored version so vectors never mix.
       rationale: >
         One decode and one process per photo instead of three keeps the
         Pi's I/O and memory down (about 2 s per photo with OCR, 18 h of

@@ -1,39 +1,67 @@
 #!/bin/sh
 # Download the vision models for tests/vision.rs (and for a deployment,
 # LICHTBILD_VISION_DIR) into $1, pinned to Hugging Face revisions and
-# checked by SHA-256 (the same hashes are pinned in src/vision.rs). About
-# 410 MB. All Apache-2.0:
+# checked by SHA-256 (the same hashes are pinned in src/vision.rs). All
+# Apache-2.0:
 #   PaddleOCR PP-OCRv3 detection, PP-OCRv5 Latin recognition and its
 #     dictionary (ONNX by monkt/paddleocr-onnx);
-#   RT-DETRv2-R18, int8 (onnx-community/rtdetr_v2_r18vd-ONNX);
-#   SigLIP base-patch16-256 multilingual, int8 image and text halves and
+#   RT-DETRv2-R18 (onnx-community/rtdetr_v2_r18vd-ONNX);
+#   SigLIP base-patch16-256 multilingual, image and text halves and
 #     tokenizer (pulsejet/siglip-base-patch16-256-multilingual-onnx).
+#
+# The object and SigLIP models come as int8 (~410 MB in all) or float32
+# (~1.9 GB). int8 is the default; float32 on x86-64 without VNNI, where
+# rten's int8 kernels can saturate (lichtbild refuses int8 there). Set
+# LICHTBILD_VISION_SET=int8 or float to choose. A file whose hash does not
+# match the chosen set is fetched again, so a directory can switch sets.
 set -eu
 dir=${1:?usage: fetch-vision-models.sh <dir>}
+set=${LICHTBILD_VISION_SET:-}
+if [ -z "$set" ]; then
+  set=int8
+  if [ "$(uname -m)" = x86_64 ]; then
+    if [ -r /proc/cpuinfo ] && grep -qE 'avx512_vnni|avx_vnni' /proc/cpuinfo; then
+      set=int8
+    else
+      set=float
+    fi
+  fi
+fi
+case "$set" in int8|float) ;; *) echo "LICHTBILD_VISION_SET: int8 or float" >&2; exit 2 ;; esac
+echo "vision models: $set set"
 mkdir -p "$dir"
 cd "$dir"
-fetch() {
-  [ -f "$3" ] || curl -sfL --retry 3 -A lichtbild-ci -o "$3" "https://huggingface.co/$1/resolve/$2"
+sum() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
 }
-ocr=monkt/paddleocr-onnx
-ocr_rev=7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65
-fetch $ocr $ocr_rev/detection/v3/det.onnx ocr-det.onnx
-fetch $ocr $ocr_rev/languages/latin/rec.onnx ocr-rec.onnx
-fetch $ocr $ocr_rev/languages/latin/dict.txt ocr-dict.txt
+# fetch <repo> <rev/path> <file> <sha256>
+fetch() {
+  if [ -f "$3" ] && [ "$(sum "$3")" = "$4" ]; then return; fi
+  curl -sfL --retry 3 -A lichtbild-ci -o "$3.part" "https://huggingface.co/$1/resolve/$2"
+  got=$(sum "$3.part")
+  if [ "$got" != "$4" ]; then
+    echo "$3: sha256 $got, expected $4" >&2
+    rm -f "$3.part"
+    exit 1
+  fi
+  mv "$3.part" "$3"
+  echo "$3: OK"
+}
+o=7b02d0a30a07ba2b92ad1ff5a8941ae2c633de65
+fetch monkt/paddleocr-onnx $o/detection/v3/det.onnx ocr-det.onnx ee40e80071ba3a320d4efda75f3e22047a7d049e9bf7bcaaf9daea23fc21b935
+fetch monkt/paddleocr-onnx $o/languages/latin/rec.onnx ocr-rec.onnx 614ffc2d6d3902d360fad7f1b0dd455ee45e877069d14c4e51a99dc4ef144409
+fetch monkt/paddleocr-onnx $o/languages/latin/dict.txt ocr-dict.txt 3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff
 det=onnx-community/rtdetr_v2_r18vd-ONNX
-fetch $det 936f90b6a476c6da4dfe053fc521af55285976ba/onnx/model_quantized.onnx objects.onnx
+d=936f90b6a476c6da4dfe053fc521af55285976ba
 sig=pulsejet/siglip-base-patch16-256-multilingual-onnx
-sig_rev=443f7a60fb4cd33e220fcf9e6a9a1fdc948e8d82
-fetch $sig $sig_rev/onnx/vision_model_quantized.onnx siglip-vision.onnx
-fetch $sig $sig_rev/onnx/text_model_quantized.onnx siglip-text.onnx
-fetch $sig $sig_rev/tokenizer.json siglip-tokenizer.json
-cat > SHA256SUMS <<'SUMS'
-ee40e80071ba3a320d4efda75f3e22047a7d049e9bf7bcaaf9daea23fc21b935  ocr-det.onnx
-614ffc2d6d3902d360fad7f1b0dd455ee45e877069d14c4e51a99dc4ef144409  ocr-rec.onnx
-3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff  ocr-dict.txt
-4b839c46187b77fc620c770de0be6790637b98afde9b386232b0fcf74382eb3c  objects.onnx
-9dd7c669514965a47cd1013c8069f2cb144b3e45786c0cf5ec363f283780bc7c  siglip-vision.onnx
-dbcd59207739cc2a222a881b766d32f37a7297e981f5f9594d36d52b741b0164  siglip-text.onnx
-0d188aadabecdaec164a39e0d2307204a0ac9878093d17595dd3351fa0e42ca6  siglip-tokenizer.json
-SUMS
-if command -v sha256sum >/dev/null; then sha256sum -c SHA256SUMS; else shasum -a 256 -c SHA256SUMS; fi
+s=443f7a60fb4cd33e220fcf9e6a9a1fdc948e8d82
+fetch $sig $s/tokenizer.json siglip-tokenizer.json 0d188aadabecdaec164a39e0d2307204a0ac9878093d17595dd3351fa0e42ca6
+if [ "$set" = int8 ]; then
+  fetch $det $d/onnx/model_quantized.onnx objects.onnx 4b839c46187b77fc620c770de0be6790637b98afde9b386232b0fcf74382eb3c
+  fetch $sig $s/onnx/vision_model_quantized.onnx siglip-vision.onnx 9dd7c669514965a47cd1013c8069f2cb144b3e45786c0cf5ec363f283780bc7c
+  fetch $sig $s/onnx/text_model_quantized.onnx siglip-text.onnx dbcd59207739cc2a222a881b766d32f37a7297e981f5f9594d36d52b741b0164
+else
+  fetch $det $d/onnx/model.onnx objects.onnx 583a236ac21c95a7fd94f284fc21485e42355bfef82c27011ba78fbc09ee87e2
+  fetch $sig $s/onnx/vision_model.onnx siglip-vision.onnx abe14f53c63107e6363006bbae3f6038d15d6d4a7ce233347fc0382ef09230ba
+  fetch $sig $s/onnx/text_model.onnx siglip-text.onnx 8bd9cdc7038468810ae7c3bcf79f4d91927e513a5f217f1c2566862ed2558110
+fi
