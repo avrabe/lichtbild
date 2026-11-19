@@ -306,4 +306,9 @@ async fn spoken_words_are_found_in_scope_and_open_the_video_there() {
     );
     assert!(viewer.contains("class=\"transcript\""), "{viewer}");
     assert!(viewer.contains("whisper-tiny-q80"), "{viewer}");
+    // A video's transcript panel speaks of the video, not a picture.
+    assert!(
+        viewer.contains(r#"class="place">Show below the video</button>"#),
+        "{viewer}"
+    );
 }

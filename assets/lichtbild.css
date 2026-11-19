@@ -616,4 +616,7 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .ublock .tpanel, .viewer .ublock .xpanel {
   position: static; width: auto; max-height: none; box-shadow: none; background: rgba(233, 225, 209, .05);
 }
+.viewer .tpanel li { transition: background-color .2s ease; border-radius: 4px; padding: 2px 6px; margin-left: -6px; }
+.viewer .tpanel li.now { background: rgba(200, 69, 45, .28); }
+.viewer .tpanel li.now a.ts { color: #fff; }
 

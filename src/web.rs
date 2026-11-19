@@ -1161,7 +1161,7 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
     langs.dedup();
     let mut s = format!(
         "<details class=\"transcript\"><summary title=\"Transcript (t)\" aria-label=\"Transcript\">≡</summary>\
-         <div class=\"tpanel\" data-title=\"What is said\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
+         <div class=\"tpanel\" data-title=\"What is said\" data-below=\"Show below the video\" data-over=\"Show over the video\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the video</button></div><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
         esc(&langs.join(", ")),
         if tr.partial { ", first 30 minutes" } else { "" },
         esc(&tr.model)
@@ -1205,7 +1205,7 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String)
     let docs = text.documents();
     let mut panel = format!(
         "<details class=\"textp\"{open}><summary title=\"Text in the picture\" aria-label=\"Text in the picture\">Aa</summary>\
-         <div class=\"xpanel\" data-title=\"Text in the picture\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
+         <div class=\"xpanel\" data-title=\"Text in the picture\" data-below=\"Show below the picture\" data-over=\"Show over the picture\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
         open = if any_hit { " open" } else { "" },
         many = if docs > 1 { format!("; {docs} separate documents") } else { String::new() },
     );

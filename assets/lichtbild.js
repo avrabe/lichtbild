@@ -373,10 +373,10 @@
         box.appendChild(h);
         box.appendChild(p);
         under.appendChild(box);
-        if (label) label.textContent = "Show over the picture";
+        if (label) label.textContent = p.getAttribute("data-over") || "Show over";
       } else {
         homes[i].appendChild(p);
-        if (label) label.textContent = "Show below the picture";
+        if (label) label.textContent = p.getAttribute("data-below") || "Show below";
       }
     });
     if (!below) under.textContent = "";
@@ -396,5 +396,36 @@
     });
   });
   if (stored()) setBelow(true);
+})();
+
+// Transcript: while the video plays, mark the line being said; in the
+// floating panel, keep it in view (below the video the page is not moved).
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  var video = viewer && viewer.querySelector("video");
+  var panel = viewer && viewer.querySelector(".tpanel");
+  if (!video || !panel) return;
+  var stamps = Array.prototype.map.call(panel.querySelectorAll("a.ts[data-t]"), function (a) {
+    return { t: parseFloat(a.getAttribute("data-t")) || 0, li: a.closest("li") };
+  });
+  if (!stamps.length) return;
+  var current = null;
+  function mark() {
+    var now = video.currentTime, found = null;
+    for (var i = 0; i < stamps.length && stamps[i].t <= now + 0.25; i++) found = stamps[i].li;
+    if (found === current) return;
+    if (current) current.classList.remove("now");
+    current = found;
+    if (!current) return;
+    current.classList.add("now");
+    var floating = !viewer.classList.contains("below") && panel.scrollHeight > panel.clientHeight;
+    if (floating) {
+      var top = current.offsetTop - panel.clientHeight / 3;
+      panel.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+  }
+  video.addEventListener("timeupdate", mark);
+  video.addEventListener("seeked", mark);
 })();
 
