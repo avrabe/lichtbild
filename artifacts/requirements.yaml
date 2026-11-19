@@ -372,6 +372,29 @@ artifacts:
       priority: should
       category: functional
 
+  - id: REQ-PLACE-002
+    type: requirement
+    title: Pictures without a recorded position are placed, as estimates or by hand
+    status: implemented
+    release: v0.6.1
+    description: >
+      A picture whose file records no position takes one from the pictures
+      of the same library taken shortly before and after it, and is shown
+      as estimated, with how far off it may be, on the map, in the viewer
+      and in search. The owner of a library can set a picture's position
+      on the map by hand, which then places its neighbours in time too,
+      and can forget it again. A position never comes from another
+      library, estimates never place other pictures, a recorded position
+      always wins, and nothing is written to the source files.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+      - type: satisfies
+        target: SC-001
+
   - id: REQ-WEB-009
     type: requirement
     title: A status page says what the server is doing

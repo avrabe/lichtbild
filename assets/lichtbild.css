@@ -558,3 +558,19 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
   dl.status dd { margin-bottom: 10px; }
 }
 
+/* Estimated positions (REQ-PLACE-002): a dashed frame says "about here". */
+.lb-map .mk.one.est { border-style: dashed; opacity: .9; }
+.mapstrip a.est img { outline: 2px dashed var(--kaki); outline-offset: -2px; }
+.placebar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 0 0 10px;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--paper-2);
+}
+.placebar img { width: 56px; height: 56px; object-fit: cover; border-radius: 8px; }
+.placebar p { margin: 0; flex: 1 1 200px; }
+.placebar button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--shu); background: var(--shu); color: #fff; cursor: pointer; }
+.placebar button:disabled { opacity: .45; cursor: default; }
+.placebar a { color: var(--ink-soft); }
+.viewer details.info .placeact { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--ink-faint); }
+.viewer details.info .placeact form { display: inline; }
+.viewer details.info .placeact button { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+

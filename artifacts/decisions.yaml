@@ -605,3 +605,40 @@ artifacts:
       - type: satisfies
         target: REQ-AUTH-001
 
+  - id: DD-022
+    type: design-decision
+    title: Positions are estimated from neighbours in time, per library, and never chained
+    status: implemented
+    release: v0.6.1
+    description: >
+      Roadmap item agreed with the owner on 2026-11-18: place photos without
+      GPS, shown as estimated, never written to the sources.
+    fields:
+      decision: >
+        Anchors are the pictures of one library with a recorded position or
+        one set by hand, with a camera time (not a file time, not a video's
+        UTC time). For a picture without a position, the nearest anchors
+        before and after it give two candidates: between them, by time,
+        when both are at most 2 h away (uncertainty 100 m plus half their
+        distance); or the nearer one when it is at most 30 min away
+        (uncertainty 100 m plus 1 m per second, a walking pace). The more
+        certain candidate wins; none is made beyond 2 km. Estimates are
+        computed from the index whenever it changes (cached per
+        generation), not stored; only hand-set positions are stored, in
+        the redb table "placed", by the library's owner.
+      rationale: >
+        A phone records most positions; a camera or a messenger copy of the
+        same day usually does not, and was taken minutes away. Per library
+        keeps one person's positions from placing another's pictures, and
+        no chaining keeps an error from spreading along a day. Computing
+        rather than storing means a better rule or a new anchor applies at
+        once, and nothing goes stale.
+      alternatives: >
+        Learning a camera's clock offset from bursts shared with a phone,
+        and matching the look of known places, are later steps (the second
+        needs image embeddings, v0.8). Writing estimates into EXIF is ruled
+        out: lichtbild never writes inside a source root.
+    links:
+      - type: satisfies
+        target: REQ-PLACE-002
+

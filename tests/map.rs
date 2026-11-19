@@ -206,6 +206,7 @@ fn pt(id: u64, label: &str, lat: f64, lon: f64) -> Point {
         taken: format!("2024-01-01T00:00:{:02}", id % 60),
         thumb: Some(format!("thumb/{id}?h=0")),
         video: false,
+        est_m: 0,
     }
 }
 

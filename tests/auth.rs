@@ -259,6 +259,22 @@ async fn req_with(
     htmx: bool,
     extra: &[(&str, &str)],
 ) -> Resp {
+    let mut x = extra.to_vec();
+    if htmx {
+        x.push(("hx-request", "true"));
+    }
+    req_with_body(app, method, uri, raw_cookie, "", &x).await
+}
+
+/// A request with a form body.
+async fn req_with_body(
+    app: &axum::Router,
+    method: &str,
+    uri: &str,
+    raw_cookie: Option<&str>,
+    body: &str,
+    extra: &[(&str, &str)],
+) -> Resp {
     let mut r = Request::builder()
         .method(method)
         .uri(uri)
@@ -266,15 +282,12 @@ async fn req_with(
     if let Some(c) = raw_cookie {
         r = r.header(header::COOKIE, c);
     }
-    if htmx {
-        r = r.header("hx-request", "true");
-    }
     for (k, v) in extra {
         r = r.header(*k, *v);
     }
     let res = app
         .clone()
-        .oneshot(r.body(Body::empty()).unwrap())
+        .oneshot(r.body(Body::from(body.to_string())).unwrap())
         .await
         .unwrap();
     let status = res.status();
@@ -1012,4 +1025,59 @@ async fn status_totals_only_for_whoever_sees_every_library() {
     assert!(page.body.contains("<dt>Now</dt>"), "{}", page.body);
     assert!(!page.body.contains("<dt>Duplicates</dt>"), "{}", page.body);
     assert!(!page.body.contains("<dt>Search</dt>"), "{}", page.body);
+}
+
+// Only the library's owner places its pictures by hand (REQ-PLACE-002):
+// p2 may see p1's pictures but not set where they were taken.
+// rivet: verifies REQ-PLACE-002
+#[tokio::test]
+async fn only_the_owner_places_a_picture_by_hand() {
+    let e = env("http://localhost").await;
+    let unplaced = |label: &str| {
+        e.idx
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|(_, r)| r.label == label && r.lat.is_none() && !r.missing)
+            .unwrap()
+            .0
+    };
+    let (in_p1, in_p2) = (unplaced("p1"), unplaced("p2"));
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (sid, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c = format!("lichtbild_session={sid}");
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let post = |uri: String| {
+        let (app, c) = (e.app.clone(), c.clone());
+        async move {
+            req_with_body(&app, "POST", &uri, Some(&c), "lat=10.4&lon=19.9", &form)
+                .await
+                .status
+        }
+    };
+    assert_eq!(post(format!("/place/{in_p1}")).await, StatusCode::NOT_FOUND);
+    assert!(e.idx.placed().unwrap().is_empty(), "nothing placed in p1");
+    assert!(post(format!("/place/{in_p2}")).await.is_redirection());
+    assert_eq!(e.idx.placed().unwrap()[&in_p2].by, "p2");
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{in_p1}"),
+        Some(&c),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        !page.body.contains("map?place="),
+        "no placing in p1: {}",
+        page.body
+    );
 }

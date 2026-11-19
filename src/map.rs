@@ -141,6 +141,9 @@ pub struct Point {
     pub taken: String,
     pub thumb: Option<String>,
     pub video: bool,
+    /// An estimated position (REQ-PLACE-002): how far off it may be, in
+    /// metres; 0 for a recorded or hand-set one.
+    pub est_m: u32,
 }
 
 /// Latitude limit of the Web Mercator square.
@@ -155,37 +158,43 @@ pub fn mercator(lat: f64, lon: f64) -> (f64, f64) {
 
 /// Every live item with a valid position, from the index.
 pub fn points_from(idx: &Index) -> Result<Vec<Point>> {
+    let items = idx.all()?;
+    let pos = crate::place::positions(&items, &idx.placed()?);
+    Ok(points_with(items, &pos))
+}
+
+/// The positioned items: recorded, set by hand, or estimated (DD-022).
+pub fn points_with(
+    items: Vec<(u64, crate::index::Record)>,
+    pos: &HashMap<u64, crate::place::Position>,
+) -> Vec<Point> {
     let mut labels: HashMap<String, Arc<str>> = HashMap::new();
     let mut out = Vec::new();
-    for (id, rec) in idx.all()? {
+    for (id, rec) in items {
         if rec.missing {
             continue;
         }
-        let (Some(lat), Some(lon)) = (rec.lat, rec.lon) else {
-            continue;
-        };
-        if !(lat.is_finite() && lon.is_finite() && lat.abs() <= 90.0 && lon.abs() <= 180.0) {
-            continue;
-        }
+        let Some(p) = pos.get(&id) else { continue };
         let label = labels
             .entry(rec.label.clone())
             .or_insert_with(|| Arc::from(rec.label.as_str()))
             .clone();
-        let (x, y) = mercator(lat, lon);
+        let (x, y) = mercator(p.lat, p.lon);
         out.push(Point {
             id,
             label,
-            lat,
-            lon,
+            lat: p.lat,
+            lon: p.lon,
             x,
             y,
             taken: rec.taken_local,
             thumb: (rec.thumb == "ok")
                 .then(|| format!("thumb/{id}?h={}", rec.hash.get(..12).unwrap_or(""))),
             video: rec.video.is_some(),
+            est_m: if p.how.estimated() { p.radius_m } else { 0 },
         });
     }
-    Ok(out)
+    out
 }
 
 /// The map's files and the positions cache, shared by all requests.
@@ -300,6 +309,9 @@ pub struct MapItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thumb: Option<String>,
     pub video: bool,
+    /// Estimated, and how far off it may be in metres.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_m: Option<u32>,
 }
 
 #[derive(Debug, Serialize)]
@@ -368,6 +380,7 @@ pub fn clusters(points: &[Point], labels: &[String], z: u8, bbox: Option<Bbox>) 
                             taken: p.taken.clone(),
                             thumb: p.thumb.clone(),
                             video: p.video,
+                            est_m: (p.est_m > 0).then_some(p.est_m),
                         }
                     })
                     .collect()
@@ -408,6 +421,8 @@ fn map_scope(viewer: &Viewer, who: Option<&str>) -> Option<Vec<String>> {
 pub struct PageQuery {
     who: Option<String>,
     kind: Option<String>,
+    /// Place this item by hand (REQ-PLACE-002).
+    place: Option<u64>,
 }
 
 /// GET /map: the map, or a notice when no PMTiles file is configured.
@@ -440,7 +455,51 @@ pub async fn page(
         q.who.as_deref(),
         crate::web::kind_filter(q.kind.as_deref()).0,
     );
+    // Place mode: only for an item of one's own library without a
+    // recorded position.
+    let placing = match q.place {
+        None => None,
+        Some(id) => {
+            let idx = st.index.clone();
+            let own = crate::web::owned(st.auth.is_some(), &viewer);
+            let places = st.positions.clone();
+            match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+                let Some(rec) = idx.locate(id)? else {
+                    return Ok(None);
+                };
+                if !own.contains(&rec.label) || rec.lat.is_some() {
+                    return Ok(None);
+                }
+                let at = places.get(&idx)?.get(&id).copied();
+                Ok(Some((rec, at)))
+            })
+            .await
+            {
+                Ok(Ok(Some(x))) => Some((id, x.0, x.1)),
+                Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "nothing to place").into_response(),
+                Ok(Err(e)) => return crate::web::internal(e),
+                Err(e) => return crate::web::internal(e),
+            }
+        }
+    };
+    let placebar = match &placing {
+        None => String::new(),
+        Some((id, rec, _)) => format!(
+            "<form class=\"placebar\" id=\"placeform\" method=\"post\" action=\"place/{id}\">\
+             <img src=\"thumb/{id}?h={h}\" alt=\"\"><p>Tap the map where this was taken, then save. \
+             Only lichtbild keeps the position; the file is not changed.</p>\
+             <input type=\"hidden\" name=\"lat\"><input type=\"hidden\" name=\"lon\">\
+             <button type=\"submit\" name=\"save\" disabled>Save the place</button>\
+             <a href=\"v/{who}/{id}\">Cancel</a></form>\n",
+            h = esc(rec.hash.get(..12).unwrap_or("")),
+            who = esc(&rec.label),
+        ),
+    };
     if st.map.pmtiles.is_none() {
+        if placing.is_some() {
+            let body = "<h1>Map</h1><p class=\"mapnote\">Placing a picture needs the map; no map file is configured.</p>";
+            return crate::web::page_with_head(&st, "Map", "", body).into_response();
+        }
         let body = format!(
             "{bar}<p class=\"mapnote\">No map file configured. The operator sets \
              <code>LICHTBILD_MAP_PMTILES</code> to a Protomaps PMTiles file.</p>\n<p>{count}</p>\n"
@@ -478,11 +537,19 @@ pub async fn page(
         Some(false) => attrs += " data-kind=\"photo\"",
         None => {}
     }
-    if let Some([w, s, e, n]) = summary.bounds {
+    // In place mode, start where the picture probably is.
+    let bounds = match &placing {
+        Some((_, _, Some(p))) => {
+            let d = (f64::from(p.radius_m) / 111_000.0).max(0.002);
+            Some([p.lon - d, p.lat - d, p.lon + d, p.lat + d])
+        }
+        _ => summary.bounds,
+    };
+    if let Some([w, s, e, n]) = bounds {
         attrs += &format!(" data-bounds=\"{w:.6},{s:.6},{e:.6},{n:.6}\"");
     }
     let body = format!(
-        "<div class=\"lb-map\">\n{bar}<div id=\"map\" class=\"map\"{attrs}></div>\n\
+        "<div class=\"lb-map\">\n{bar}{placebar}<div id=\"map\" class=\"map\"{attrs}></div>\n\
          <div class=\"mapstrip\" id=\"mapstrip\" hidden></div>\n\
          <p class=\"mapnote\">{count} Map data © OpenStreetMap contributors.</p>\n</div>\n"
     );

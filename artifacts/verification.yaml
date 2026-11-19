@@ -1114,3 +1114,60 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-009
+
+  - id: VER-080
+    type: verification
+    title: Neighbours in time place a picture as estimated
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "neighbours_in_time_place_a_picture_as_estimated"
+      test-location: tests/place.rs
+      steps:
+        - run: "cargo test --test place neighbours_in_time_place_a_picture_as_estimated"
+    links:
+      - type: verifies
+        target: REQ-PLACE-002
+
+  - id: VER-081
+    type: verification
+    title: A picture placed by hand places its neighbours
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_picture_placed_by_hand_places_its_neighbours"
+      test-location: tests/place.rs
+      steps:
+        - run: "cargo test --test place a_picture_placed_by_hand_places_its_neighbours"
+    links:
+      - type: verifies
+        target: REQ-PLACE-002
+
+  - id: VER-082
+    type: verification
+    title: Only the owner places a picture by hand
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "only_the_owner_places_a_picture_by_hand"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth only_the_owner_places_a_picture_by_hand"
+    links:
+      - type: verifies
+        target: REQ-PLACE-002
+
+  - id: VER-083
+    type: verification
+    title: The filter holds in the chooser and the viewer
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_filter_holds_in_the_chooser_and_the_viewer"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_filter_holds_in_the_chooser_and_the_viewer"
+    links:
+      - type: verifies
+        target: REQ-WEB-010
+

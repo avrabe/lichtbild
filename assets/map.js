@@ -65,8 +65,26 @@
   var who = attr("data-who");
   var kind = attr("data-kind");
   var strip = document.getElementById("mapstrip");
+  // Place mode (REQ-PLACE-002): a tap sets the picture's position through
+  // the page's form, so the server's same-origin check applies.
+  var placeForm = document.getElementById("placeform");
+  if (placeForm) {
+    var pin = null;
+    map.getCanvas().style.cursor = "crosshair";
+    map.on("click", function (e) {
+      placeForm.elements.lat.value = e.lngLat.lat.toFixed(6);
+      placeForm.elements.lon.value = e.lngLat.lng.toFixed(6);
+      if (pin) pin.remove();
+      pin = new maplibregl.Marker({ color: "#c8452d" }).setLngLat(e.lngLat).addTo(map);
+      placeForm.elements.save.disabled = false;
+    });
+  }
   var markers = [];
   var pending = null;
+
+  function estimated(it) {
+    return it.est_m ? " · estimated, within " + (it.est_m >= 1000 ? (it.est_m / 1000).toFixed(1) + " km" : it.est_m + " m") : "";
+  }
 
   function viewerHref(it) {
     return "v/" + encodeURIComponent(it.who) + "/" + it.id;
@@ -77,7 +95,8 @@
     c.items.forEach(function (it) {
       var a = document.createElement("a");
       a.href = viewerHref(it);
-      a.title = it.taken.replace("T", " ");
+      a.title = it.taken.replace("T", " ") + estimated(it);
+      if (it.est_m) a.classList.add("est");
       if (it.thumb) {
         var img = document.createElement("img");
         img.src = it.thumb;
@@ -123,12 +142,12 @@
     node.type = "button";
     var one = c.n === 1 && c.items && c.items[0];
     if (one && one.thumb) {
-      node.className = "mk one" + (one.video ? " video" : "");
+      node.className = "mk one" + (one.video ? " video" : "") + (one.est_m ? " est" : "");
       var img = document.createElement("img");
       img.src = one.thumb;
       img.alt = "";
       node.appendChild(img);
-      node.title = one.taken.replace("T", " ");
+      node.title = one.taken.replace("T", " ") + estimated(one);
     } else {
       node.className = "mk " + (c.n < 10 ? "s" : c.n < 100 ? "m" : "l");
       node.textContent = c.n < 10000 ? String(c.n) : Math.round(c.n / 1000) + "k";

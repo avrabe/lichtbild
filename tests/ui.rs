@@ -289,3 +289,59 @@ async fn home_shows_this_day_in_earlier_years() {
         "{otd}"
     );
 }
+
+fn arrow(page: &str, rel: &str) -> Option<u64> {
+    let at = page.find(&format!(r#"rel="{rel}" href="v/"#))?;
+    let rest = &page[at..];
+    let href = rest.split("href=\"").nth(1)?.split('"').next()?;
+    href.split('/').nth(2)?.split('?').next()?.parse().ok()
+}
+
+// With a filter, the date chooser offers only months that have such
+// items, and the viewer opened from the timeline keeps the filter: its
+// arrows step only through such items, and "Timeline" returns to the
+// filtered timeline. Its arrows also skip what the person hid.
+// rivet: verifies REQ-WEB-010
+#[tokio::test]
+async fn the_filter_holds_in_the_chooser_and_the_viewer() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let month = e.idx.locate(e.video).unwrap().unwrap().taken_local[..7].to_string();
+
+    let (_, page) = get(&app, "/t/p1?kind=video", false).await;
+    // The rail and the menu both list the months.
+    let months: std::collections::BTreeSet<&str> = page
+        .split("data-ym=\"")
+        .skip(1)
+        .filter_map(|s| s.split('"').next())
+        .collect();
+    assert_eq!(
+        months.into_iter().collect::<Vec<_>>(),
+        vec![month.as_str()],
+        "{page}"
+    );
+    assert!(
+        page.contains(&format!(r#"href="v/p1/{}?kind=video""#, e.video)),
+        "{page}"
+    );
+
+    let (_, page) = get(&app, &format!("/v/p1/{}?kind=video", e.video), false).await;
+    assert!(
+        page.contains("&amp;kind=video#i"),
+        "back to the filtered timeline: {page}"
+    );
+    assert_eq!(
+        (arrow(&page, "prev"), arrow(&page, "next")),
+        (None, None),
+        "{page}"
+    );
+
+    // Unfiltered, the video has a photo beside it; hidden, it is skipped.
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    let (prev, next) = (arrow(&page, "prev"), arrow(&page, "next"));
+    let beside = prev.or(next).expect("a neighbour");
+    e.idx.set_hidden("operator", beside, true).unwrap();
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    assert_ne!(arrow(&page, "prev"), Some(beside), "{page}");
+    assert_ne!(arrow(&page, "next"), Some(beside), "{page}");
+}

@@ -103,6 +103,11 @@ at nice 0.
 | F89 | REQ-WEB-010 | search ignores the photo/video filter | `photos_or_videos_only` |
 | F90 | REQ-WORDS-001 | common words are not left out of the cloud | `words_come_from_the_viewers_videos_without_common_words` |
 | F91 | REQ-WORDS-001 | the cloud counts videos of libraries the viewer may not see | `words_come_from_the_viewers_videos_without_common_words` |
+| F93 | REQ-PLACE-002 | an estimate places further pictures (chaining) | `estimates_do_not_chain` |
+| F94 | REQ-PLACE-002 | another library's pictures place a picture | `neighbours_in_time_place_a_picture_as_estimated` |
+| F95 | REQ-PLACE-002 | another site's form can set a position | `a_picture_placed_by_hand_places_its_neighbours` |
+| F96 | REQ-PLACE-002 | someone who only sees a library can place its pictures | `only_the_owner_places_a_picture_by_hand` |
+| F97 | REQ-PLACE-002 | a file's time places a picture | `libraries_and_weak_dates_do_not_mix` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
