@@ -517,7 +517,7 @@ impl Index {
 
     /// Live videos (by content), how many have a transcript from `model`,
     /// and how many of those have speech.
-    pub fn transcript_counts(&self, model: &str) -> Result<(u64, u64, u64)> {
+    pub fn transcript_counts(&self, labels: &[String], model: &str) -> Result<(u64, u64, u64)> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
         let t = r.open_table(TRANSCRIPTS)?;
@@ -525,7 +525,11 @@ impl Index {
         let (mut videos, mut done, mut speech) = (0, 0, 0);
         for e in items.iter()? {
             let rec = decode(e?.1.value())?;
-            if rec.missing || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
+            if rec.missing
+                || rec.video.is_none()
+                || !labels.contains(&rec.label)
+                || !seen.insert(rec.hash.clone())
+            {
                 continue;
             }
             videos += 1;

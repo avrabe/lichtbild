@@ -1100,3 +1100,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-011
+
+  - id: VER-079
+    type: verification
+    title: Status totals only for whoever sees every library
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "status_totals_only_for_whoever_sees_every_library"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth status_totals_only_for_whoever_sees_every_library"
+    links:
+      - type: verifies
+        target: REQ-WEB-009

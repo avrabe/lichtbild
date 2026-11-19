@@ -225,7 +225,7 @@ fn spawn_scanner(
         loop {
             let since = SystemTime::now();
             status.set_phase(Phase::Scanning { since });
-            let done = |rep: Option<&scan::Report>, failed: Option<String>| ScanDone {
+            let done = |rep: Option<&scan::Report>, failed: bool| ScanDone {
                 ended: SystemTime::now(),
                 took: since.elapsed().unwrap_or_default(),
                 found: rep.map_or(0, |r| r.total_found),
@@ -236,7 +236,7 @@ fn spawn_scanner(
             };
             match scan::run(&cfg, &idx, &scan::Options::default()) {
                 Ok(rep) => {
-                    status.scan_done(done(Some(&rep), None));
+                    status.scan_done(done(Some(&rep), false));
                     if rep.reconciled {
                         tracing::info!("scan finished\n{}", rep.to_text())
                     } else {
@@ -244,7 +244,7 @@ fn spawn_scanner(
                     }
                 }
                 Err(e) => {
-                    status.scan_done(done(None, Some(format!("{e:#}"))));
+                    status.scan_done(done(None, true));
                     tracing::error!("scan failed: {e:#}")
                 }
             }

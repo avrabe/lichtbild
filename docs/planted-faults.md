@@ -98,6 +98,7 @@ at nice 0.
 | F85 | REQ-DUP-002 | "back" after hiding may lead to another site | `hide_and_keep_choose_what_is_shown` |
 | F86 | REQ-WEB-011 | the app menu loses its link to the status page | `every_page_has_the_app_menu` |
 | F87 | REQ-WEB-009 | the status page's refresh gets the whole page, not the list | `the_status_page_shows_scan_and_transcription` |
+| F92 | REQ-WEB-009 | the status page shows totals over all libraries to someone who sees only some | `status_totals_only_for_whoever_sees_every_library` |
 | F88 | REQ-WEB-010 | the timeline's photo/video filter is inverted | `photos_or_videos_only` |
 | F89 | REQ-WEB-010 | search ignores the photo/video filter | `photos_or_videos_only` |
 | F90 | REQ-WORDS-001 | common words are not left out of the cloud | `words_come_from_the_viewers_videos_without_common_words` |

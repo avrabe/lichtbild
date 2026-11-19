@@ -384,7 +384,9 @@ artifacts:
       found, how many videos have a transcript, the duplicate groups, the
       search documents, whether a map file and place names are configured,
       and the version and uptime. It refreshes itself and shows counts and
-      times only, never paths or file names.
+      times only, never paths, file names or error text; transcript counts
+      cover the viewer's libraries, and totals over all libraries are shown
+      only to someone who may see all of them.
     fields:
       priority: should
       category: functional

@@ -1865,13 +1865,18 @@ async fn duplicates_csv(
 
 /// GET /status: what the server is doing (REQ-WEB-009): scan,
 /// transcription, duplicates, search, version. Counts and times only.
-async fn status_page(State(st): State<AppState>, headers: axum::http::HeaderMap) -> Response {
+async fn status_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+) -> Response {
     use crate::status::{relative, span, Phase};
     let s = st.status.snapshot();
     let counts = match st.transcribe_model.clone() {
         Some(m) => {
             let idx = st.index.clone();
-            match tokio::task::spawn_blocking(move || idx.transcript_counts(&m)).await {
+            let labels = viewer.labels.clone();
+            match tokio::task::spawn_blocking(move || idx.transcript_counts(&labels, &m)).await {
                 Ok(Ok(c)) => Some(c),
                 Ok(Err(e)) => return internal(e),
                 Err(e) => return internal(e),
@@ -1880,6 +1885,7 @@ async fn status_page(State(st): State<AppState>, headers: axum::http::HeaderMap)
         None => None,
     };
     let now = std::time::SystemTime::now();
+    let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
     let mut rows: Vec<(&str, String)> = Vec::new();
     let (state, cls) = match &s.phase {
         Phase::Starting => ("Starting".to_string(), "busy"),
@@ -1919,9 +1925,13 @@ async fn status_page(State(st): State<AppState>, headers: axum::http::HeaderMap)
         "Last scan",
         match &s.last_scan {
             None => "not yet".into(),
-            Some(d) => match &d.failed {
-                Some(e) => format!("failed {}: {}", relative(d.ended, now), esc(e)),
-                None => format!(
+            Some(d) => match () {
+                _ if d.failed => format!(
+                    "failed {}; the server's log says why",
+                    relative(d.ended, now)
+                ),
+                _ if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
+                _ => format!(
                     "{}, took {}: {} files found, {} indexed, {} skipped{}",
                     relative(d.ended, now),
                     span(d.took),
@@ -1954,14 +1964,17 @@ async fn status_page(State(st): State<AppState>, headers: axum::http::HeaderMap)
             _ => "off (no speech model configured)".into(),
         },
     ));
-    rows.push((
-        "Duplicates",
-        match s.duplicates {
-            Some((g, n)) => format!("{g} groups with {n} items, each shown once"),
-            None => "not grouped yet".into(),
-        },
-    ));
-    rows.push(("Search", format!("{} documents", s.search_docs)));
+    // Totals over all libraries only for whoever sees all of them.
+    if everything {
+        rows.push((
+            "Duplicates",
+            match s.duplicates {
+                Some((g, n)) => format!("{g} groups with {n} items, each shown once"),
+                None => "not grouped yet".into(),
+            },
+        ));
+        rows.push(("Search", format!("{} documents", s.search_docs)));
+    }
     rows.push((
         "Map",
         if st.map.pmtiles.is_some() {

@@ -34,7 +34,9 @@ pub struct ScanDone {
     pub indexed: u64,
     pub skipped: u64,
     pub reconciled: bool,
-    pub failed: Option<String>,
+    /// The scan failed; why goes to the server log only, since the error
+    /// can name paths.
+    pub failed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -157,7 +157,7 @@ async fn the_status_page_shows_scan_and_transcription() {
         indexed: 15,
         skipped: 2,
         reconciled: true,
-        failed: None,
+        failed: false,
     });
     st.set_phase(Phase::Transcribing {
         since: std::time::SystemTime::now(),
@@ -179,6 +179,21 @@ async fn the_status_page_shows_scan_and_transcription() {
     );
     assert!(list.contains("4 groups with 9 items"), "{list}");
     assert!(list.contains(lichtbild::VERSION), "{list}");
+    // The operator sees every library, so the totals too.
+    assert!(list.contains("<dt>Search</dt>"), "{list}");
+
+    // A failed scan says so, but not why: the error can name paths.
+    st.scan_done(ScanDone {
+        ended: std::time::SystemTime::now(),
+        took: std::time::Duration::from_secs(1),
+        found: 0,
+        indexed: 0,
+        skipped: 0,
+        reconciled: false,
+        failed: true,
+    });
+    let (_, list) = get(&app, "/status", true).await;
+    assert!(list.contains("the server's log says why"), "{list}");
 }
 
 // The words cloud: frequent words of the viewer's videos, without common
