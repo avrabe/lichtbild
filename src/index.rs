@@ -40,6 +40,10 @@ const FINGERPRINTS: TableDefinition<&str, (u64, bool)> = TableDefinition::new("f
 /// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
 /// restart does not sign anyone out (crate::auth::SessionStore).
 const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
+/// (person, item id) -> (): what each person chose not to see
+/// (REQ-DUP-002). Per person: one person's choice never changes another's
+/// view; nothing in the libraries changes.
+const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -155,6 +159,7 @@ impl Index {
             w.open_table(TRANSCRIPTS)?;
             w.open_table(FINGERPRINTS)?;
             w.open_table(SESSIONS)?;
+            w.open_table(HIDDEN)?;
         }
         w.commit()?;
         Ok(Index {
@@ -451,6 +456,32 @@ impl Index {
             let (k, v) = e?;
             let (h, some) = v.value();
             out.insert(k.value().to_string(), some.then_some(h));
+        }
+        Ok(out)
+    }
+
+    /// Hide or show again an item for one person.
+    pub fn set_hidden(&self, person: &str, id: u64, hidden: bool) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(HIDDEN)?;
+            if hidden {
+                t.insert((person, id), ())?;
+            } else {
+                t.remove((person, id))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The items one person has hidden.
+    pub fn hidden(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(HIDDEN)?;
+        let mut out = std::collections::HashSet::new();
+        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
+            out.insert(e?.0.value().1);
         }
         Ok(out)
     }

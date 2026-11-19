@@ -419,3 +419,18 @@ body:has(.viewer) footer.version { display: none; }
 .viewer .cpanel li { margin: 0 0 6px; overflow-wrap: anywhere; }
 .viewer .cpanel li.current > a { color: var(--kaki); }
 
+/* Hide and keep (REQ-DUP-002): small buttons; the hidden list. */
+.viewer form.hidef { display: inline; margin: 0 4px; }
+.viewer form.hidef button, .viewer .cpanel form button, .hiddenlist form button {
+  font: 500 12px/1 var(--sans); letter-spacing: .06em; padding: 6px 10px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 12px; background: none; color: inherit;
+}
+.viewer form.hidef button:hover, .viewer .cpanel form button:hover, .hiddenlist form button:hover {
+  border-color: var(--shu); color: var(--shu);
+}
+.viewer .cpanel form { display: inline; margin-left: 6px; }
+.hiddenlist .hid { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.duplist { font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.duplist .keep { font-weight: 500; }
+.more-links { margin-top: 18px; font-size: 14px; letter-spacing: .06em; }
+

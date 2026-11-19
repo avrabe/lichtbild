@@ -11,7 +11,7 @@
 //! copy is shown depends on what the viewer may see: the best copy among
 //! the visible ones (REQ-AUTH-002).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 use anyhow::Result;
@@ -101,6 +101,12 @@ pub struct Dups {
     inner: RwLock<Groups>,
 }
 
+impl std::fmt::Debug for Dups {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Dups")
+    }
+}
+
 struct Candidate {
     id: u64,
     rec: Record,
@@ -141,13 +147,24 @@ fn same_picture(a: &Record, b: &Record) -> bool {
 }
 
 /// Better copy first: a camera date, a position, more pixels, a larger
-/// file, then the older id.
-fn rank(r: &Record, id: u64) -> (bool, bool, u64, u64, std::cmp::Reverse<u64>) {
+/// file, then the older file (copies are usually made later), then the
+/// older id.
+type Rank = (
+    bool,
+    bool,
+    u64,
+    u64,
+    std::cmp::Reverse<i64>,
+    std::cmp::Reverse<u64>,
+);
+
+fn rank(r: &Record, id: u64) -> Rank {
     (
         !DateSource::is_weak(&r.date_source),
         r.lat.is_some(),
         u64::from(r.width) * u64::from(r.height),
         r.size,
+        std::cmp::Reverse(r.mtime_ns),
         std::cmp::Reverse(id),
     )
 }
@@ -285,13 +302,15 @@ impl Dups {
         Ok(rep)
     }
 
-    /// Whether `id` is shown to a viewer who may see `labels`, and how many
-    /// copies of it they may see.
-    pub fn shown(&self, id: u64, labels: &[String]) -> Shown {
+    /// Whether `id` is shown to a viewer who may see `labels` and has
+    /// hidden `hidden`, and how many copies of it they may see. The shown
+    /// copy is the best one that is visible and not hidden; hiding it
+    /// shows the next, hiding all shows none.
+    pub fn shown(&self, id: u64, labels: &[String], hidden: &HashSet<u64>) -> Shown {
         let g = self.inner.read().expect("dups lock");
         let Some(&gi) = g.group_of.get(&id) else {
             return Shown {
-                shown: true,
+                shown: !hidden.contains(&id),
                 copies: 1,
             };
         };
@@ -300,7 +319,10 @@ impl Dups {
             .filter(|m| labels.contains(&m.label))
             .collect();
         Shown {
-            shown: visible.first().is_some_and(|m| m.id == id),
+            shown: visible
+                .iter()
+                .find(|m| !hidden.contains(&m.id))
+                .is_some_and(|m| m.id == id),
             copies: visible.len().max(1),
         }
     }
@@ -317,6 +339,36 @@ impl Dups {
             .filter(|m| labels.contains(&m.label))
             .map(|m| m.id)
             .collect()
+    }
+
+    /// Groups of exact copies (same content) with at least two files in
+    /// one library, for the cleanup list (REQ-DUP-003): (label, the ids of
+    /// that library's copies, best first). Copies of the same picture in
+    /// other files are left out: they are not the same file.
+    pub fn exact_in(&self, idx: &Index, label: &str) -> Result<Vec<Vec<u64>>> {
+        let ids: Vec<Vec<u64>> = {
+            let g = self.inner.read().expect("dups lock");
+            g.groups
+                .iter()
+                .map(|m| {
+                    m.iter()
+                        .filter(|m| m.label == label)
+                        .map(|m| m.id)
+                        .collect()
+                })
+                .collect()
+        };
+        let mut out = Vec::new();
+        for members in ids.into_iter().filter(|m: &Vec<u64>| m.len() > 1) {
+            let mut by_hash: HashMap<String, Vec<u64>> = HashMap::new();
+            for id in members {
+                if let Some(r) = idx.locate(id)? {
+                    by_hash.entry(r.hash).or_default().push(id);
+                }
+            }
+            out.extend(by_hash.into_values().filter(|v| v.len() > 1));
+        }
+        Ok(out)
     }
 }
 

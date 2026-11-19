@@ -89,6 +89,13 @@ at nice 0.
 | F76 | REQ-AUTH-001 | sign-out leaves the stored session | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
 | F77 | REQ-AUTH-002 | a stored session counts for whoever now has its label | `sessions_survive_a_restart_but_not_a_removal_or_logout` |
 | F78 | REQ-WEB-006 | the date chooser puts every month's photos under January | `date_scrubber_jumps_to_years_and_months` |
+| F79 | REQ-DUP-002 | everyone's hiding is one shared list | `hiding_is_per_person` |
+| F80 | REQ-DUP-002 | another site's form can hide items | `hide_and_keep_choose_what_is_shown` |
+| F81 | REQ-AUTH-002 | an item in a library one may not see can be hidden | `hiding_is_per_person` |
+| F82 | REQ-DUP-003 | the cleanup list shows paths of libraries one was only granted | `only_ones_own_library_is_listed_for_cleanup` |
+| F83 | REQ-DUP-002 | a hidden copy is still the one shown | `hide_and_keep_choose_what_is_shown` |
+| F84 | REQ-DUP-003 | the cleanup list counts the same picture in another file as a duplicate file | `the_cleanup_list_names_exact_duplicate_files` |
+| F85 | REQ-DUP-002 | "back" after hiding may lead to another site | `hide_and_keep_choose_what_is_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

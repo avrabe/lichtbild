@@ -603,3 +603,39 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-DUP-002
+    type: requirement
+    title: Each person can hide what they do not want to see
+    status: implemented
+    release: v0.5.0
+    description: >
+      In the viewer a person can hide an item, or keep one copy of a
+      duplicate group and hide the others. Hidden items leave that person's
+      timeline, search and map; a "Hidden" page shows them again. One
+      person's choice never changes another's view, an item in a library
+      the person may not see cannot be hidden, another site's form cannot
+      hide anything, and nothing in the libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-DUP-003
+    type: requirement
+    title: A list of duplicate files to clean up, for one's own library
+    status: implemented
+    release: v0.5.0
+    description: >
+      A page and a CSV list exact duplicate files (same content) in the
+      libraries a person owns, with the copy to keep and the space the
+      others take. Only one's own library's paths are listed, never those
+      of a library one was granted. lichtbild deletes nothing.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+

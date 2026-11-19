@@ -97,6 +97,12 @@ pub fn router(state: AppState) -> Router {
         .route("/t/{who}", get(timeline))
         .route("/v/{who}/{id}", get(viewer))
         .route("/search", get(search))
+        .route("/hide/{id}", axum::routing::post(hide))
+        .route("/unhide/{id}", axum::routing::post(unhide))
+        .route("/keep/{id}", axum::routing::post(keep))
+        .route("/hidden", get(hidden_page))
+        .route("/duplicates", get(duplicates_page))
+        .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
@@ -527,6 +533,15 @@ pub(crate) fn internal<E: std::fmt::Display>(e: E) -> Response {
 /// The libraries a timeline shows for this viewer: "all" is every library
 /// they may see (the merged view, only when that is more than one), a
 /// label only when they may see it.
+/// Whose choices (hidden items) apply: the signed-in person, or the
+/// operator when there is no login.
+pub fn person(viewer: &Viewer) -> String {
+    viewer
+        .name
+        .clone()
+        .unwrap_or_else(|| "operator".to_string())
+}
+
 pub fn scope(viewer: &Viewer, who: &str) -> Option<Vec<String>> {
     if who == "all" {
         (viewer.labels.len() > 1).then(|| viewer.labels.clone())
@@ -561,6 +576,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
             &format!("<li><a href=\"t/all\">merged</a> <span class=\"n\">{total}</span></li>\n");
     }
     body += "</ul>\n";
+    body += "<p class=\"more-links\"><a href=\"hidden\">Hidden</a> · <a href=\"duplicates\">Duplicate files</a></p>\n";
     if st.auth.is_some() {
         body += "<form class=\"signout\" method=\"post\" action=\"auth/logout\"><button type=\"submit\">Sign out</button></form>\n";
     }
@@ -812,6 +828,7 @@ async fn timeline(
     let full_page = !headers.contains_key("hx-request");
     let idx = st.index.clone();
     let dups = st.dups.clone();
+    let me = person(&viewer);
     // A continuation carries before/id; a jump carries from (id 0 sorts
     // before every real id, so the bound month is excluded entirely).
     let before = cur
@@ -820,15 +837,17 @@ async fn timeline(
         .zip(cur.id)
         .or_else(|| from_bound.clone().map(|b| (b, 0)));
     let res = tokio::task::spawn_blocking(move || {
-        // One copy of each duplicate group: the best the viewer may see.
+        // One copy of each duplicate group, the best the viewer may see,
+        // and nothing this person hid (REQ-DUP-001, REQ-DUP-002).
+        let hidden = idx.hidden(&me)?;
         let mut items = idx.timeline_where(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
             PAGE_SIZE as usize + 1,
-            |id| dups.shown(id, &labels).shown,
+            |id| dups.shown(id, &labels, &hidden).shown,
         )?;
         for it in &mut items {
-            it.copies = dups.shown(it.id, &labels).copies;
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
         }
         let months = if full_page {
             idx.months(&labels)?
@@ -904,6 +923,7 @@ type ViewerItem = (
     Vec<(&'static str, String)>,
     Option<crate::stt::Transcript>,
     Vec<(u64, index::Record)>,
+    bool,
 );
 
 #[derive(Deserialize)]
@@ -949,7 +969,7 @@ pub fn render_copies(id: u64, who: &str, copies: &[(u64, index::Record)]) -> Str
     }
     let mut s = format!(
         "<details class=\"copies\"><summary title=\"Copies\" aria-label=\"Copies\">×{n}</summary>\
-         <div class=\"cpanel\"><p class=\"dim\">The same picture {n} times; the timeline shows the first.</p><ol>",
+         <div class=\"cpanel\"><p class=\"dim\">The same picture {n} times; the timeline shows the first. “Keep this one” hides the others, for you only.</p><ol>",
         n = copies.len()
     );
     for (c, r) in copies {
@@ -960,7 +980,8 @@ pub fn render_copies(id: u64, who: &str, copies: &[(u64, index::Record)]) -> Str
             format!("{} kB", r.size.div_ceil(1024))
         };
         s += &format!(
-            "<li{cur}><a href=\"v/{who}/{c}\">{lib} · {path}</a> <span class=\"dim\">{w} × {h} · {bytes} · date from {src}</span></li>",
+            "<li{cur}><a href=\"v/{who}/{c}\">{lib} · {path}</a> <span class=\"dim\">{w} × {h} · {bytes} · date from {src}</span>\
+             <form method=\"post\" action=\"keep/{c}\"><input type=\"hidden\" name=\"back\" value=\"v/{who}/{c}\"><button type=\"submit\">Keep this one</button></form></li>",
             cur = if *c == id { " class=\"current\"" } else { "" },
             who = esc(who),
             lib = esc(&r.label),
@@ -1130,6 +1151,7 @@ async fn viewer(
     let idx = st.index.clone();
     let roots = st.roots.clone();
     let dups = st.dups.clone();
+    let me = person(&viewer);
     let max_file_bytes = st.max_file_bytes;
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ViewerItem>> {
         let Some(rec) = idx.locate(id)? else {
@@ -1169,12 +1191,13 @@ async fn viewer(
                 copies.push((c, r));
             }
         }
+        let is_hidden = idx.hidden(&me)?.contains(&id);
         Ok(Some((
-            rec, newer, older, prefetch, exif, transcript, copies,
+            rec, newer, older, prefetch, exif, transcript, copies, is_hidden,
         )))
     })
     .await;
-    let (rec, newer, older, prefetch, exif, transcript, copies) = match res {
+    let (rec, newer, older, prefetch, exif, transcript, copies, is_hidden) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1203,7 +1226,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}{hide}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
@@ -1222,6 +1245,21 @@ async fn viewer(
             .map(|t| render_transcript(id, &who, t))
             .unwrap_or_default(),
         info = render_copies(id, &who, &copies) + &render_info(&rec, &exif, st.places.as_deref()),
+        hide = {
+            // Back to the timeline where this item was; showing it again
+            // stays in the viewer.
+            let back = format!("t/{who}?before={}&id={}#i{id}", rec.taken_local, id + 1);
+            if is_hidden {
+                format!(
+                    "<form class=\"hidef\" method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}\"><button type=\"submit\" title=\"Hidden for you\">Show again</button></form>"
+                )
+            } else {
+                format!(
+                    "<form class=\"hidef\" method=\"post\" action=\"hide/{id}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" title=\"Hide for you\">Hide</button></form>",
+                    b = esc(&back)
+                )
+            }
+        },
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
     );
@@ -1255,15 +1293,23 @@ async fn search(
     let idx = st.index.clone();
     let sx = st.search.clone();
     let dups = st.dups.clone();
+    let me = person(&viewer);
     let q2 = q.clone();
     let res = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Vec<(crate::search::Hit, index::Record)>> {
+            let hidden = idx.hidden(&me)?;
             let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
             for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
-                // A hit on a copy shows the copy the timeline shows.
-                if !dups.shown(h.id, &labels).shown {
-                    if let Some(&best) = dups.copies(h.id, &labels).first() {
-                        h.id = best;
+                // A hit on a copy shows the copy the timeline shows; a hit
+                // on something hidden, with no copy shown, is left out.
+                if !dups.shown(h.id, &labels, &hidden).shown {
+                    match dups
+                        .copies(h.id, &labels)
+                        .into_iter()
+                        .find(|c| dups.shown(*c, &labels, &hidden).shown)
+                    {
+                        Some(best) => h.id = best,
+                        None => continue,
                     }
                 }
                 if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
@@ -1348,6 +1394,277 @@ pub fn render_search(
     }
     s += "</section>";
     s
+}
+
+#[derive(Deserialize)]
+pub struct Back {
+    /// Where to go afterwards: a path inside the app (auth::safe_next).
+    back: Option<String>,
+}
+
+/// A change made by a page of this app, not by another site (as for
+/// sign-out): browsers label cross-site requests in Sec-Fetch-Site.
+fn same_site(headers: &axum::http::HeaderMap) -> bool {
+    let site = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok());
+    site.is_none_or(|s| s == "same-origin" || s == "none")
+}
+
+fn back_to(st: &AppState, back: Option<&str>) -> Response {
+    let next = crate::auth::safe_next(back.unwrap_or(""));
+    Redirect::to(&format!("{}/{}", st.base_path, next)).into_response()
+}
+
+/// Run `change` on the item if the viewer may see it, then go back.
+async fn choice(
+    st: AppState,
+    viewer: Viewer,
+    id: u64,
+    headers: axum::http::HeaderMap,
+    back: Option<String>,
+    change: fn(&index::Index, &crate::dups::Dups, &Viewer, &str, u64) -> anyhow::Result<()>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some(rec) = idx.locate(id)? else {
+            return Ok(false);
+        };
+        if !viewer.may_see(&rec.label) {
+            return Ok(false);
+        }
+        change(&idx, &dups, &viewer, &me, id)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, back.as_deref()),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /hide/{id}: this person no longer sees the item (REQ-DUP-002).
+async fn hide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_hidden(me, id, true)
+    })
+    .await
+}
+
+/// POST /unhide/{id}: show the item again.
+async fn unhide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_hidden(me, id, false)
+    })
+    .await
+}
+
+/// POST /keep/{id}: show this copy, hide its other copies (for this person).
+async fn keep(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(
+        st,
+        viewer,
+        id,
+        headers,
+        b.back,
+        |idx, dups, viewer, me, id| {
+            for c in dups.copies(id, &viewer.labels) {
+                idx.set_hidden(me, c, c != id)?;
+            }
+            Ok(())
+        },
+    )
+    .await
+}
+
+/// GET /hidden: what this person hid, to show it again.
+async fn hidden_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, index::Record)>> {
+        let mut out = Vec::new();
+        let mut ids: Vec<u64> = idx.hidden(&me)?.into_iter().collect();
+        ids.sort_unstable();
+        for id in ids {
+            if let Some(r) = idx.locate(id)?.filter(|r| labels.contains(&r.label)) {
+                out.push((id, r));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    let items = match res {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = format!(
+        "<h1>Hidden</h1><p class=\"dim\">{} hidden by you; only your view changes, nothing in the library.</p><div class=\"grid hiddenlist\">",
+        items.len()
+    );
+    for (id, r) in &items {
+        let img = if r.thumb == "ok" {
+            format!(
+                "<img src=\"thumb/{id}?h={}\" loading=\"lazy\" alt=\"\">",
+                esc(r.hash.get(..12).unwrap_or(""))
+            )
+        } else {
+            "<span class=\"nothumb\">no preview</span>".to_string()
+        };
+        body += &format!(
+            "<div class=\"hid\"><a class=\"item\" href=\"v/{l}/{id}\">{img}</a>\
+             <form method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"hidden\"><button type=\"submit\">Show again</button></form></div>",
+            l = esc(&r.label)
+        );
+    }
+    body += "</div>";
+    page_for(&st, "lichtbild hidden", &body).into_response()
+}
+
+/// The libraries whose file paths this viewer may list: their own (the
+/// library with their label), or all of them in operator mode (no login).
+/// A library someone else owns is never listed, even when granted.
+pub fn owned(login: bool, viewer: &Viewer) -> Vec<String> {
+    match (login, &viewer.name) {
+        (true, Some(me)) => viewer.labels.iter().filter(|l| *l == me).cloned().collect(),
+        (true, None) => Vec::new(),
+        (false, _) => viewer.labels.clone(),
+    }
+}
+
+/// Exact duplicate files in the viewer's own libraries: (label, kept
+/// copy, the other copies).
+type Cleanup = Vec<(String, index::Record, Vec<index::Record>)>;
+
+async fn cleanup(st: &AppState, viewer: &Viewer) -> anyhow::Result<Cleanup> {
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let labels = owned(st.auth.is_some(), viewer);
+    tokio::task::spawn_blocking(move || -> anyhow::Result<Cleanup> {
+        let mut out = Vec::new();
+        for l in labels {
+            for group in dups.exact_in(&idx, &l)? {
+                let mut recs: Vec<index::Record> = Vec::new();
+                for id in group {
+                    if let Some(r) = idx.locate(id)? {
+                        recs.push(r);
+                    }
+                }
+                if recs.len() > 1 {
+                    let keep = recs.remove(0);
+                    out.push((l.clone(), keep, recs));
+                }
+            }
+        }
+        out.sort_by(|a, b| (&a.0, &a.1.rel).cmp(&(&b.0, &b.1.rel)));
+        Ok(out)
+    })
+    .await?
+}
+
+/// GET /duplicates: exact duplicate files in your own libraries, and the
+/// space their extra copies take (REQ-DUP-003). lichtbild deletes nothing.
+async fn duplicates_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let groups = match cleanup(&st, &viewer).await {
+        Ok(g) => g,
+        Err(e) => return internal(e),
+    };
+    let files: usize = groups.iter().map(|g| g.2.len()).sum();
+    let bytes: u64 = groups.iter().flat_map(|g| g.2.iter()).map(|r| r.size).sum();
+    let mut body = format!(
+        "<h1>Duplicate files</h1><p>{n} {groups} of identical files in your library: {files} extra {copies}, {mb:.1} MB.</p>\
+         <p class=\"dim\">lichtbild changes nothing in the library. Delete the extra copies where they are stored, if you want to; the next scan notices.</p>\
+         <p><a href=\"duplicates.csv\" download>Download the list (CSV)</a></p><ol class=\"duplist\">",
+        n = groups.len(),
+        groups = if groups.len() == 1 { "group" } else { "groups" },
+        copies = if files == 1 { "copy" } else { "copies" },
+        mb = bytes as f64 / 1_048_576.0,
+    );
+    for (l, keep, others) in groups.iter().take(500) {
+        body += &format!(
+            "<li><span class=\"keep\">{l} · {k}</span><ul>",
+            l = esc(l),
+            k = esc(&String::from_utf8_lossy(&keep.rel))
+        );
+        for o in others {
+            body += &format!("<li>{}</li>", esc(&String::from_utf8_lossy(&o.rel)));
+        }
+        body += "</ul></li>";
+    }
+    body += "</ol>";
+    page_for(&st, "lichtbild duplicates", &body).into_response()
+}
+
+fn csv_field(s: &str) -> String {
+    // Quoted; a leading = + - @ is defused so a spreadsheet does not run it.
+    let s = if s.starts_with(['=', '+', '-', '@']) {
+        format!("'{s}")
+    } else {
+        s.to_string()
+    };
+    format!("\"{}\"", s.replace('"', "\"\""))
+}
+
+/// GET /duplicates.csv: the same list, one row per extra copy.
+async fn duplicates_csv(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let groups = match cleanup(&st, &viewer).await {
+        Ok(g) => g,
+        Err(e) => return internal(e),
+    };
+    let mut csv = String::from("library,keep,duplicate,bytes\n");
+    for (l, keep, others) in &groups {
+        for o in others {
+            csv += &format!(
+                "{},{},{},{}\n",
+                csv_field(l),
+                csv_field(&String::from_utf8_lossy(&keep.rel)),
+                csv_field(&String::from_utf8_lossy(&o.rel)),
+                o.size
+            );
+        }
+    }
+    (
+        [
+            (header::CONTENT_TYPE, "text/csv; charset=utf-8"),
+            (
+                header::CONTENT_DISPOSITION,
+                "attachment; filename=\"lichtbild-duplicates.csv\"",
+            ),
+            (header::CACHE_CONTROL, "private, no-store"),
+        ],
+        csv,
+    )
+        .into_response()
 }
 
 /// GET /preview/{id}: the JPEG preview of a HEIC original.
@@ -1602,4 +1919,26 @@ pub fn embedded_assets() -> [(&'static str, &'static str); 4] {
         ("lichtbild.js", JS),
         ("map.js", crate::map::MAP_JS),
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_ones_own_library_is_listed_for_cleanup() {
+        let v = Viewer {
+            labels: vec!["p2".into(), "p1".into()],
+            name: Some("p2".into()),
+        };
+        // p2 may see p1, but p1's paths are p1's.
+        assert_eq!(owned(true, &v), vec!["p2".to_string()]);
+        let anon = Viewer {
+            labels: vec!["p1".into()],
+            name: None,
+        };
+        assert!(owned(true, &anon).is_empty());
+        // Operator mode (loopback, no login): every library.
+        assert_eq!(owned(false, &v), v.labels);
+    }
 }

@@ -507,12 +507,15 @@ pub async fn clusters_json(
     let idx = st.index.clone();
     let map = st.map.clone();
     let dups = st.dups.clone();
+    let me = crate::web::person(&viewer);
     let res = tokio::task::spawn_blocking(move || {
         let points = map.points(&idx)?;
-        // One copy of each duplicate group, as on the timeline.
+        // One copy of each duplicate group, and nothing this person hid,
+        // as on the timeline.
+        let hidden = idx.hidden(&me)?;
         let shown: Vec<Point> = points
             .iter()
-            .filter(|p| dups.shown(p.id, &labels).shown)
+            .filter(|p| dups.shown(p.id, &labels, &hidden).shown)
             .cloned()
             .collect();
         anyhow::Ok(clusters(&shown, &labels, z, bbox))
