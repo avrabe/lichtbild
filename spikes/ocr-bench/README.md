@@ -55,3 +55,22 @@ Each finding below changed the result:
 - **ocrs is ruled out for this household.** Its alphabet has no ä ö ü ß.
 
 All of the above runs in pure Rust: rten 0.28 loads the ONNX files directly, so there is no ONNX Runtime and no Python.
+
+## Results on a Raspberry Pi 5, 8 GB (smithy, 2026-11-19)
+
+Setup: binary sha256 b31bbf96…, 4 threads, `nice -n 19`. Fonts were
+DejaVu Sans and Serif, so the set was 12 pictures and 84 lines. lichtbild
+was idle. The Pi reached 73.6 °C and did not throttle.
+
+| engine | per picture (median, max) | CER | umlauts/ß right |
+|---|---|---|---|
+| PaddleOCR v3 det + v5 Latin rec | **1.02 s**, 1.45 s (tilted pages) | **0.0 %** | **125 / 125** |
+| PaddleOCR v5 server det | 6.70 s, 12.91 s | 0.8 % | 124 / 125 |
+| ocrs 0.14 | 7.94 s, 9.41 s | 69.1 % | 0 / 125 |
+
+- The Pi is about 6.5× slower than the M4 for v3.
+- A sign in a scene takes about 0.55 s. A deskewed page takes about 1.4 s, because detection runs twice.
+- Peak RSS was about 0.9 GB for the whole process, with all three engines loaded one after another.
+- At about 1 s per picture, about 31,000 photos take about 9 hours of 4-core CPU. That is a few nights at `nice -n 19`.
+
+**Decision for v0.7:** PaddleOCR v3 det + v5 Latin rec, run by rten, in a child process after the scan, like transcription.
