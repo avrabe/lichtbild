@@ -1,0 +1,19 @@
+[package]
+name = "ocr-bench"
+version = "0.0.0"
+edition = "2021"
+publish = false
+description = "Spike: OCR engines on synthetic German text, timing and character error rate"
+
+# Not part of the lichtbild workspace.
+[workspace]
+
+[dependencies]
+ab_glyph = "0.2.32"
+anyhow = "1"
+image = "0.25.10"
+imageproc = "0.27.0"
+ocrs = "0.14.0"
+rten = { version = "0.28.0", features = ["rten_format"] }
+rten-imageproc = "0.28.0"
+rten-tensor = "0.28.0"
