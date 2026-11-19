@@ -202,10 +202,11 @@
   }
   function showLayer() {
     if (!layer) return;
-    layer.hidden = !(textp && textp.open);
+    layer.hidden = !(viewer.classList.contains("below") || (textp && textp.open));
     placeLayer();
   }
   if (textp) textp.addEventListener("toggle", showLayer);
+  viewer.addEventListener("lb-layout", showLayer);
   if (img.complete) showLayer(); else img.addEventListener("load", showLayer);
   window.addEventListener("resize", placeLayer);
   function apply() {
@@ -304,5 +305,96 @@
       else checked = false;
     }, function () { checked = false; });
   }, true);
+})();
+
+// Transcript and text in the picture: copy them, and show them below the
+// picture instead of over it (REQ-TEXT-001). The choice is kept in this
+// browser only.
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  var under = viewer && viewer.querySelector("section.under");
+  if (!under) return;
+  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".tpanel, .xpanel"));
+  if (!panels.length) return;
+  var homes = panels.map(function (p) { return p.parentNode; });
+  var KEY = "lichtbild.below";
+  function stored() {
+    try { return window.localStorage.getItem(KEY) === "1"; } catch (e) { return false; }
+  }
+  function store(v) {
+    try { window.localStorage.setItem(KEY, v ? "1" : "0"); } catch (e) { /* private mode */ }
+  }
+  function textOf(p) {
+    if (p.classList.contains("tpanel")) {
+      return Array.prototype.map.call(p.querySelectorAll("li"), function (li) {
+        return li.textContent.trim();
+      }).join("\n");
+    }
+    return Array.prototype.map.call(p.querySelectorAll(":scope > p:not(.dim), section > p"), function (para) {
+      return Array.prototype.map.call(para.querySelectorAll("span"), function (s) { return s.textContent; }).join("\n");
+    }).join("\n\n");
+  }
+  function copy(text, button) {
+    function done(ok) {
+      var was = "Copy";
+      button.textContent = ok ? "Copied" : "Select and copy by hand";
+      setTimeout(function () { button.textContent = was; }, 1600);
+    }
+    // The clipboard API needs a secure context; plain http (a house
+    // address) falls back to a selected text area.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    done(ok);
+  }
+  function setBelow(below) {
+    viewer.classList.toggle("below", below);
+    under.hidden = !below;
+    panels.forEach(function (p, i) {
+      var label = p.querySelector("button.place");
+      if (below) {
+        var box = document.createElement("div");
+        box.className = "ublock";
+        var h = document.createElement("h2");
+        h.textContent = p.getAttribute("data-title") || "";
+        box.appendChild(h);
+        box.appendChild(p);
+        under.appendChild(box);
+        if (label) label.textContent = "Show over the picture";
+      } else {
+        homes[i].appendChild(p);
+        if (label) label.textContent = "Show below the picture";
+      }
+    });
+    if (!below) under.textContent = "";
+    viewer.dispatchEvent(new Event("lb-layout"));
+  }
+  panels.forEach(function (p) {
+    var tools = p.querySelector(".ptools");
+    if (!tools) return;
+    tools.hidden = false;
+    tools.querySelector("button.copy").addEventListener("click", function (e) {
+      copy(textOf(p), e.currentTarget);
+    });
+    tools.querySelector("button.place").addEventListener("click", function () {
+      var below = !viewer.classList.contains("below");
+      store(below);
+      setBelow(below);
+    });
+  });
+  if (stored()) setBelow(true);
 })();
 

@@ -600,3 +600,20 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .textlayer a.hit { border-color: var(--shu); background: rgba(200, 69, 45, .3); }
 .result .readhit { margin: 4px 0 0; font-size: 14px; }
 
+/* Panels: copy, and below the picture instead of over it. */
+.viewer .ptools { display: flex; gap: 8px; margin: 0 0 10px; }
+.viewer .ptools button {
+  font: 500 12px/1 var(--sans); letter-spacing: .04em; padding: 6px 10px; border-radius: 999px; cursor: pointer;
+  color: #e9e1d1; background: rgba(233, 225, 209, .1); border: 1px solid rgba(233, 225, 209, .3);
+}
+.viewer .ptools button:hover { border-color: var(--shu); }
+.viewer.below { overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.viewer.below .stage { flex: none; height: 68vh; height: 68dvh; }
+.viewer.below details.transcript, .viewer.below details.textp { display: none; }
+.viewer section.under { padding: 4px 22px 40px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.viewer section.under[hidden] { display: none; }
+.viewer .ublock h2 { font: 400 15px/1.2 var(--serif); letter-spacing: .1em; color: #b3a995; margin: 0 0 8px; }
+.viewer .ublock .tpanel, .viewer .ublock .xpanel {
+  position: static; width: auto; max-height: none; box-shadow: none; background: rgba(233, 225, 209, .05);
+}
+

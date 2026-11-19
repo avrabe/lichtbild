@@ -198,6 +198,16 @@ async fn read_text_is_stored_searched_and_shown() {
         "closed without a search"
     );
 
+    // Words in pictures join the cloud, like words said in videos.
+    let words = get(&app, "/words").await;
+    assert!(
+        words.contains(r#"href="search?q=leuchtturmfest""#),
+        "{words}"
+    );
+    assert!(page.contains(
+        r#"<div class="ptools" hidden><button type="button" class="copy">Copy</button>"#
+    ));
+
     let status = get(&app, "/status").await;
     assert!(
         status.contains("2 of 2 photos read, 1 with text"),

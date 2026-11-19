@@ -1161,7 +1161,7 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
     langs.dedup();
     let mut s = format!(
         "<details class=\"transcript\"><summary title=\"Transcript (t)\" aria-label=\"Transcript\">≡</summary>\
-         <div class=\"tpanel\"><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
+         <div class=\"tpanel\" data-title=\"What is said\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
         esc(&langs.join(", ")),
         if tr.partial { ", first 30 minutes" } else { "" },
         esc(&tr.model)
@@ -1205,7 +1205,7 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String)
     let docs = text.documents();
     let mut panel = format!(
         "<details class=\"textp\"{open}><summary title=\"Text in the picture\" aria-label=\"Text in the picture\">Aa</summary>\
-         <div class=\"xpanel\"><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
+         <div class=\"xpanel\" data-title=\"Text in the picture\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
         open = if any_hit { " open" } else { "" },
         many = if docs > 1 { format!("; {docs} separate documents") } else { String::new() },
     );
@@ -1608,6 +1608,7 @@ async fn viewer(
         "<div class=\"viewer\">\n\
          <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{next}</div>\n\
+         <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
@@ -2373,13 +2374,13 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
         Err(e) => return internal(e),
     };
     let mut body = String::from(
-        "<h1>Words</h1><p class=\"dim\">What was said in your videos: the larger a word, the more videos say it. Common words are left out. A word searches for it.</p>",
+        "<h1>Words</h1><p class=\"dim\">What was said in your videos and written in your pictures: the larger a word, the more of them hold it. Common words are left out. A word searches for it.</p>",
     );
     if words.is_empty() {
-        body += "<p>No transcripts yet. They are made in the background after each scan.</p>";
+        body += "<p>No words yet. Transcripts and the text in pictures are made in the background after each scan.</p>";
         return page_for(&st, "lichtbild words", &body).into_response();
     }
-    let top_v = words.iter().map(|w| w.videos).max().unwrap_or(1).max(1) as f64;
+    let top_v = words.iter().map(|w| w.items).max().unwrap_or(1).max(1) as f64;
     let top_t = words.iter().map(|w| w.times).max().unwrap_or(1).max(1) as f64;
     // Sizes 1 to 6 on a log scale: mostly how many videos say a word, partly
     // how often (so a cloud of few videos still varies). The order mixes big
@@ -2387,7 +2388,7 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     let mut cloud: Vec<(u8, &crate::words::Word)> = words
         .iter()
         .map(|w| {
-            let v = (w.videos as f64).ln_1p() / top_v.ln_1p();
+            let v = (w.items as f64).ln_1p() / top_v.ln_1p();
             let t = (w.times as f64).ln_1p() / top_t.ln_1p();
             let r = if top_v > 1.0 { 0.7 * v + 0.3 * t } else { t };
             (1 + (r * 5.0).round() as u8, w)
@@ -2397,9 +2398,9 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     body += "<div class=\"cloud\">";
     for (size, w) in cloud {
         body += &format!(
-            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"{v} videos, {t} times\">{word}</a>",
+            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"in {v} pictures and videos, {t} times\">{word}</a>",
             q = esc(&w.word),
-            v = w.videos,
+            v = w.items,
             t = w.times,
             word = esc(&w.word)
         );
