@@ -657,8 +657,8 @@ artifacts:
     fields:
       decision: >
         The PaddleOCR ONNX models (Apache-2.0, pinned by SHA-256, from
-        monkt/paddleocr-onnx) run in rten, pure Rust, in a `read-text`
-        child with a CPU and address-space limit and a 90 s wall clock.
+        monkt/paddleocr-onnx) run in rten, pure Rust, in the `look` child
+        (shared with things and picture vectors) with a CPU and address-space limit and a 120 s wall clock.
         Detection at up to 960 px; the text's skew from the detected
         regions' second moments, and a page tilted more than 0.7° is
         straightened and detected again; line crops padded by 2.5 times
@@ -684,4 +684,46 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-TEXT-001
+
+  - id: DD-024
+    type: design-decision
+    title: One look at each photo finds text, things and what it shows, in the house
+    status: implemented
+    release: v0.7.0
+    description: >
+      Spike (scratchpad vision-bench; Pi 5 measured by smithy 2026-11-19):
+      RT-DETRv2-R18 int8 and SigLIP base-patch16-256 multilingual int8 run
+      in rten. Pi 5: things 0.72 s, picture vector 0.35 s, a query 0.08 s,
+      0.7 GB peak; German sentences ranked the right COCO photo first and
+      unrelated sentences scored below 0. On an M4 the int8 models gave
+      the same answers as float32 at half the time.
+    fields:
+      decision: >
+        One `look` child per photo decodes it once and runs the OCR,
+        RT-DETRv2-R18 (80 COCO kinds, kept from score 0.70; noise patterns
+        reached 0.63) and the SigLIP image encoder (768-d, stored as signed
+        bytes). All seven model files sit in LICHTBILD_VISION_DIR, pinned by
+        SHA-256 (Apache-2.0). Each photo is looked at once per VERSION,
+        newest first, after the transcripts. Things go into search with
+        their German singular and plural and English names. The server
+        loads the SigLIP text encoder on the first search and keeps the
+        picture vectors in memory (768 bytes each); a query matches from a
+        cosine of 0.05 and from 60 % of the best match's (single words on
+        noise pictures reached 0.032), and pictures look alike from 0.80.
+      rationale: >
+        One decode and one process per photo instead of three keeps the
+        Pi's I/O and memory down (about 2 s per photo with OCR, 18 h of
+        CPU once for 31,000 photos). Search by meaning in German finds
+        pictures no file name, place or date describes, which the big
+        photo apps do only on their servers.
+      alternatives: >
+        YOLO (AGPL, not compatible with the repository's licence); CLIP
+        (English only); the float32 models (same answers, twice the time,
+        four times the size); candle for SigLIP (a second runtime beside
+        rten).
+    links:
+      - type: satisfies
+        target: REQ-SEE-001
+      - type: satisfies
+        target: REQ-SEE-002
 

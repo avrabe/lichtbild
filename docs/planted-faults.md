@@ -111,8 +111,11 @@ at nice 0.
 | F98 | REQ-TEXT-001 | texture junk is kept as text | `texture_junk_is_dropped_and_real_lines_kept` |
 | F99 | REQ-TEXT-001 | separate sheets are merged into one document | `the_reader_finds_lines_blocks_and_documents` |
 | F100 | REQ-TEXT-001 | an unpinned model file is accepted | `no_model_reads_nothing_and_a_wrong_one_is_refused` |
-| F101 | REQ-TEXT-001 | the same picture in two places is read twice | `read_text_is_stored_searched_and_shown` |
-| F102 | REQ-TEXT-001 | without a search every line is marked as a hit | `read_text_is_stored_searched_and_shown` |
+| F101 | REQ-TEXT-001 | a picture already looked at is looked at again | `what_was_seen_is_stored_searched_and_shown` |
+| F102 | REQ-TEXT-001 | without a search every line is marked as a hit | `what_was_seen_is_stored_searched_and_shown` |
+| F103 | REQ-SEE-001 | unsure detections are kept as things | `what_was_seen_is_stored_searched_and_shown` |
+| F104 | REQ-SEE-001 | things are searchable in English only | `what_was_seen_is_stored_searched_and_shown` |
+| F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
 
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001

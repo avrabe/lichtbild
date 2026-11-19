@@ -421,6 +421,45 @@ artifacts:
       - type: satisfies
         target: SC-001
 
+  - id: REQ-SEE-001
+    type: requirement
+    title: Things in pictures are found, searched by name and shown where they are
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19. lichtbild finds the common kinds of thing in
+      photos (people, animals, vehicles, food, furniture and more), in the
+      house, with their place on the picture, keeping only confident
+      finds. Search knows them by their German and English names; the
+      viewer lists them, each a search, and marks them on the picture.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-003
+
+  - id: REQ-SEE-002
+    type: requirement
+    title: Pictures are found by what they show, and by what they look like
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19 (usability beyond the big photo apps). A
+      search in plain words, German or English ("zwei Katzen auf dem
+      Sofa"), also finds the pictures that show it, after the exact hits,
+      and only those that match well. The viewer shows the pictures that
+      look like the one shown. Pictures and words are compared in the
+      house; nothing leaves it. Only the viewer's libraries count.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-003
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-009
     type: requirement
     title: A status page says what the server is doing

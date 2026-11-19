@@ -154,7 +154,9 @@ impl Search {
                 f.id => id,
                 f.label => rec.label.as_str(),
                 f.t => -1.0f64,
-                f.text => item_words(&rec, pos.get(&id).map(|p| (p.lat, p.lon)), places),
+                f.text => item_words(&rec, pos.get(&id).map(|p| (p.lat, p.lon)), places)
+                    + " "
+                    + &crate::objects::words(&idx.objects(&rec.hash)?),
             ))?;
             docs += 1;
             if rec.video.is_none() {

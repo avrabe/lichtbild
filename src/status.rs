@@ -20,11 +20,11 @@ pub enum Phase {
         total: u64,
         report: PassReport,
     },
-    Reading {
+    Looking {
         since: SystemTime,
         done: u64,
         total: u64,
-        report: crate::ocr::PassReport,
+        report: crate::vision::PassReport,
     },
     Idle {
         next: Option<SystemTime>,
@@ -57,7 +57,7 @@ pub struct Snapshot {
     pub phase: Phase,
     pub last_scan: Option<ScanDone>,
     pub last_pass: Option<PassDone>,
-    /// When the last reading pass ended.
+    /// When the last look pass ended.
     pub last_read: Option<SystemTime>,
     /// (groups, items in them)
     pub duplicates: Option<(usize, usize)>,
@@ -105,7 +105,7 @@ impl Status {
         });
     }
 
-    pub fn read_done(&self, _report: crate::ocr::PassReport) {
+    pub fn look_done(&self, _report: crate::vision::PassReport) {
         self.inner.lock().expect("status lock").last_read = Some(SystemTime::now());
     }
 

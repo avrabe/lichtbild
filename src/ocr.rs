@@ -14,10 +14,7 @@
 //! straightened before reading, and line crops are padded by 2.5 times
 //! the DB "unclip" distance, which keeps the dots of the umlauts.
 
-use std::fs::File;
-use std::io::Read;
 use std::path::Path;
-use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 use image::{Rgb, RgbImage};
@@ -25,37 +22,15 @@ use rten_tensor::prelude::*;
 use rten_tensor::{NdTensor, Tensor};
 use serde::{Deserialize, Serialize};
 
-/// The model files, pinned by SHA-256 (spikes/ocr-bench/SHA256SUMS.models):
-/// from huggingface.co/monkt/paddleocr-onnx at revision 7b02d0a3,
-/// PaddleOCR models, Apache-2.0.
-pub const FILES: &[(&str, &str)] = &[
-    (
-        "det.onnx",
-        "ee40e80071ba3a320d4efda75f3e22047a7d049e9bf7bcaaf9daea23fc21b935",
-    ),
-    (
-        "rec.onnx",
-        "614ffc2d6d3902d360fad7f1b0dd455ee45e877069d14c4e51a99dc4ef144409",
-    ),
-    (
-        "dict.txt",
-        "3c0a8a79b612653c25f765271714f71281e4e955962c153e272b7b8c1d2b13ff",
-    ),
-];
-
 /// The name stored with each result; a new model reads everything again.
 pub const MODEL: &str = "ppocr-v3det-v5latin";
 
-/// Pictures are read at most this large (longer side, in pixels).
-pub const WORK_SIDE: u32 = 2400;
 /// Detection runs at most this large (longer side).
 const DET_SIDE: f32 = 960.0;
 /// Crop padding: the DB unclip ratio for axis-aligned boxes.
 const UNCLIP: f32 = 2.5;
 /// Pages tilted more than this are straightened and detected again.
 const DESKEW_DEG: f32 = 0.7;
-/// Wall clock per picture; the Pi 5 needs about 1.5 s for a tilted page.
-pub const TIME_BUDGET: Duration = Duration::from_secs(90);
 
 /// One line of text: its corners (top-left, top-right, bottom-right,
 /// bottom-left) as fractions of the picture's width and height, its
@@ -113,24 +88,6 @@ impl Text {
     }
 }
 
-fn sha256_hex(data: &[u8]) -> String {
-    use sha2::Digest;
-    format!("{:x}", sha2::Sha256::digest(data))
-}
-
-/// Check the model directory: every file present with its pinned hash.
-pub fn check_model(dir: &Path) -> Result<()> {
-    for (name, sum) in FILES {
-        let p = dir.join(name);
-        let data = std::fs::read(&p).with_context(|| format!("ocr model: {}", p.display()))?;
-        let h = sha256_hex(&data);
-        if h != *sum {
-            bail!("{}: unknown model file (sha256 {h})", p.display());
-        }
-    }
-    Ok(())
-}
-
 /// The loaded models.
 pub struct Engine {
     det: rten::Model,
@@ -139,19 +96,12 @@ pub struct Engine {
 }
 
 impl Engine {
-    /// Load and verify (each file once, hashed in memory).
+    /// Load from the vision directory (files pinned by vision::FILES).
     pub fn load(dir: &Path) -> Result<Engine> {
-        let read = |name: &str| -> Result<Vec<u8>> {
-            let data = std::fs::read(dir.join(name)).with_context(|| name.to_string())?;
-            let sum = FILES.iter().find(|(n, _)| *n == name).map(|(_, s)| *s);
-            if sum != Some(sha256_hex(&data).as_str()) {
-                bail!("{name}: unknown model file");
-            }
-            Ok(data)
-        };
-        let det = rten::Model::load(read("det.onnx")?).context("det.onnx")?;
-        let rec = rten::Model::load(read("rec.onnx")?).context("rec.onnx")?;
-        let mut dict: Vec<char> = String::from_utf8(read("dict.txt")?)?
+        let read = |name: &str| crate::vision::read_pinned(dir, name);
+        let det = rten::Model::load(read("ocr-det.onnx")?).context("ocr-det.onnx")?;
+        let rec = rten::Model::load(read("ocr-rec.onnx")?).context("ocr-rec.onnx")?;
+        let mut dict: Vec<char> = String::from_utf8(read("ocr-dict.txt")?)?
             .lines()
             .filter_map(|l| l.chars().next())
             .collect();
@@ -545,182 +495,6 @@ pub fn layout(lines: &mut Vec<Line>) -> Vec<u16> {
     }
     *lines = ordered;
     docs
-}
-
-/// Decode a picture for reading: oriented, at most WORK_SIDE on its
-/// longer side.
-pub fn load_picture(path: &Path, max_bytes: u64) -> Result<RgbImage> {
-    let crate::media::Class::Media(format) = crate::media::classify(path) else {
-        bail!("not a picture");
-    };
-    if format.is_video() {
-        bail!("not a picture");
-    }
-    let mut data = Vec::new();
-    File::open(path)?.take(max_bytes).read_to_end(&mut data)?;
-    let img =
-        crate::media::decode(&data, format, 100_000_000).map_err(|_| anyhow::anyhow!("decode"))?;
-    let img = if img.width().max(img.height()) > WORK_SIDE {
-        img.resize(WORK_SIDE, WORK_SIDE, image::imageops::FilterType::Triangle)
-    } else {
-        img
-    };
-    Ok(img.to_rgb8())
-}
-
-/// Run `exe read-text` on one picture, killed after `timeout`.
-pub fn run_child(exe: &Path, file: &Path, model_dir: &Path, timeout: Duration) -> Result<Text> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(exe)
-        .arg("read-text")
-        .arg(model_dir)
-        .arg(file)
-        .env_clear()
-        .env("RAYON_NUM_THREADS", "4")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("start read-text")?;
-    let mut stdout = child.stdout.take().context("stdout")?;
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        (&mut stdout)
-            .take(16 << 20)
-            .read_to_end(&mut out)
-            .map(|_| out)
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break Some(s),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-    let out = reader.join().map_err(|_| anyhow::anyhow!("reader"))??;
-    match status {
-        None => bail!("timeout"),
-        Some(s) if !s.success() => bail!("exit {}", s.code().unwrap_or(-1)),
-        Some(_) => Ok(serde_json::from_slice(&out).context("child output")?),
-    }
-}
-
-/// The `read-text` child: `lichtbild read-text <model-dir> <file>`.
-pub fn child_main(args: &[&str]) -> Result<()> {
-    let [model_dir, file] = args else {
-        bail!("usage: read-text <model-dir> <file>");
-    };
-    limit_self(TIME_BUDGET.as_secs() * 4);
-    let img = load_picture(Path::new(file), 256 << 20)?;
-    let engine = Engine::load(Path::new(model_dir))?;
-    let t = engine.read(&img)?;
-    serde_json::to_writer(std::io::stdout().lock(), &t)?;
-    Ok(())
-}
-
-fn limit_self(cpu_seconds: u64) {
-    let set = |res, v: u64| {
-        let lim = libc::rlimit {
-            rlim_cur: v as libc::rlim_t,
-            rlim_max: v as libc::rlim_t,
-        };
-        // SAFETY: setrlimit(2) on this process with a valid struct.
-        unsafe { libc::setrlimit(res, &lim) };
-    };
-    set(libc::RLIMIT_CPU, cpu_seconds);
-    // About 0.9 GB measured on the Pi 5 at 2400 px; room for 100 MP decodes.
-    #[cfg(target_os = "linux")]
-    set(libc::RLIMIT_AS, 3 << 30);
-}
-
-/// What one reading pass did.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize)]
-pub struct PassReport {
-    pub with_text: u64,
-    pub without: u64,
-    pub failed: u64,
-    /// Left for the next pass because the deadline came.
-    pub remaining: u64,
-}
-
-impl PassReport {
-    pub fn to_text(&self) -> String {
-        format!(
-            "text in pictures: {} with text, {} without, {} failed, {} left for the next pass",
-            self.with_text, self.without, self.failed, self.remaining
-        )
-    }
-}
-
-/// Read the photos that have no result from this model yet, newest first,
-/// one child at a time, until `deadline`. Every result, failures included,
-/// is stored under the photo's content hash, so the pass resumes.
-pub fn run_pass(
-    cfg: &crate::config::Config,
-    idx: &crate::index::Index,
-    exe: &Path,
-    deadline: Option<Instant>,
-    progress: &dyn Fn(u64, u64, &PassReport),
-) -> Result<PassReport> {
-    let mut rep = PassReport::default();
-    let Some(dir) = &cfg.ocr_dir else {
-        return Ok(rep);
-    };
-    let todo = idx.photos_to_read(MODEL)?;
-    let total = todo.len() as u64;
-    if total > 0 {
-        tracing::info!("text in pictures: {total} photos to read");
-    }
-    let started = Instant::now();
-    let mut said = Instant::now();
-    for (n, (_, rec)) in todo.into_iter().enumerate() {
-        if n > 0 && said.elapsed() >= Duration::from_secs(600) {
-            said = Instant::now();
-            tracing::info!(
-                "text in pictures: {n} of {total} read ({} with text, {} failed) in {} min",
-                rep.with_text,
-                rep.failed,
-                started.elapsed().as_secs() / 60
-            );
-        }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
-            rep.remaining = total - n as u64;
-            break;
-        }
-        let Some(root) = cfg.roots.iter().find(|r| r.label == rec.label) else {
-            continue;
-        };
-        let rel = crate::index::rel_from_bytes(&rec.rel);
-        // SSC-004: the stored path must still resolve inside its root.
-        let Ok(path) = crate::source::resolve(&root.path, &rel) else {
-            continue;
-        };
-        let t = run_child(exe, &path, dir, TIME_BUDGET).unwrap_or_else(|e| {
-            let s = e.to_string();
-            let s: String = s
-                .split(':')
-                .next()
-                .unwrap_or("error")
-                .chars()
-                .filter(|c| c.is_ascii_alphanumeric() || *c == ' ' || *c == '-')
-                .take(40)
-                .collect();
-            Text::failed(s.trim())
-        });
-        match t.state.as_str() {
-            "ok" => rep.with_text += 1,
-            "none" => rep.without += 1,
-            _ => rep.failed += 1,
-        }
-        idx.set_text(&rec.hash, &t)?;
-        progress(n as u64 + 1, total, &rep);
-    }
-    Ok(rep)
 }
 
 #[cfg(test)]

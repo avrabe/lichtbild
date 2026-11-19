@@ -52,14 +52,21 @@ jobs:
       - name: Fetch the test model
         run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
 
-      # PaddleOCR detection and Latin recognition for tests/ocr.rs, pinned.
-      - name: Fetch the OCR model
-        run: scripts/fetch-ocr-model.sh "$RUNNER_TEMP/ocr"
+      # OCR, object and embedding models for tests/vision.rs (~410 MB),
+      # pinned; cached across runs by the script's content (it holds every
+      # revision and hash).
+      - name: Cache the vision models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vision
+          key: vision-${{ hashFiles('scripts/fetch-vision-models.sh') }}
+      - name: Fetch the vision models
+        run: scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
 
       - name: cargo test
         env:
           LICHTBILD_TEST_WHISPER_DIR: ${{ runner.temp }}/whisper-tiny
-          LICHTBILD_TEST_OCR_DIR: ${{ runner.temp }}/ocr
+          LICHTBILD_TEST_VISION_DIR: ${{ runner.temp }}/vision
         run: cargo test --locked --no-fail-fast
 
   # The release build steps on every PR, so release.yml is not first run at
@@ -125,14 +132,21 @@ jobs:
       - name: Fetch the test model
         run: scripts/fetch-test-model.sh "$RUNNER_TEMP/whisper-tiny"
 
-      # PaddleOCR detection and Latin recognition for tests/ocr.rs, pinned.
-      - name: Fetch the OCR model
-        run: scripts/fetch-ocr-model.sh "$RUNNER_TEMP/ocr"
+      # OCR, object and embedding models for tests/vision.rs (~410 MB),
+      # pinned; cached across runs by the script's content (it holds every
+      # revision and hash).
+      - name: Cache the vision models
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/vision
+          key: vision-${{ hashFiles('scripts/fetch-vision-models.sh') }}
+      - name: Fetch the vision models
+        run: scripts/fetch-vision-models.sh "$RUNNER_TEMP/vision"
 
       - name: Plant each fault and expect its check to fail
         env:
           LICHTBILD_TEST_WHISPER_DIR: ${{ runner.temp }}/whisper-tiny
-          LICHTBILD_TEST_OCR_DIR: ${{ runner.temp }}/ocr
+          LICHTBILD_TEST_VISION_DIR: ${{ runner.temp }}/vision
         run: python3 scripts/planted_faults.py
 
   # rivet: verifies REQ-TRACE-001

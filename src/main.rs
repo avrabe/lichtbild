@@ -68,9 +68,9 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
-        // Internal: read the text in one picture in a separate, limited
-        // process (DD-023).
-        ["read-text", rest @ ..] => match lichtbild::ocr::child_main(rest) {
+        // Internal: look at one picture (text, things, what it shows) in a
+        // separate, limited process (DD-023, DD-024).
+        ["look", rest @ ..] => match lichtbild::vision::child_main(rest) {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
@@ -167,6 +167,7 @@ fn run_serve() -> Result<ExitCode> {
         state.dups.clone(),
         state.places.clone(),
         state.status.clone(),
+        state.space.clone(),
     );
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
@@ -193,6 +194,7 @@ fn spawn_scanner(
     dups: Arc<lichtbild::dups::Dups>,
     places: Option<Arc<lichtbild::places::Places>>,
     status: Arc<lichtbild::status::Status>,
+    space: Arc<lichtbild::embed::Space>,
 ) {
     use lichtbild::status::{Phase, ScanDone};
     use std::time::SystemTime;
@@ -228,6 +230,9 @@ fn spawn_scanner(
         };
         regroup("at start");
         rebuild("at start");
+        if let Err(e) = space.rebuild(&idx) {
+            tracing::error!("picture vectors failed: {e:#}");
+        }
         loop {
             let since = SystemTime::now();
             status.set_phase(Phase::Scanning { since });
@@ -290,13 +295,13 @@ fn spawn_scanner(
                 }
                 rebuild("after transcription");
             }
-            // Text in pictures, after the transcripts, until the next scan
-            // (REQ-TEXT-001).
-            if cfg.ocr_dir.is_some() {
+            // Looking at photos (text, things, what they show), after the
+            // transcripts, until the next scan.
+            if cfg.vision_dir.is_some() {
                 let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
                 let since = SystemTime::now();
-                let progress = |done: u64, total: u64, rep: &lichtbild::ocr::PassReport| {
-                    status.set_phase(Phase::Reading {
+                let progress = |done: u64, total: u64, rep: &lichtbild::vision::PassReport| {
+                    status.set_phase(Phase::Looking {
                         since,
                         done,
                         total,
@@ -306,15 +311,20 @@ fn spawn_scanner(
                 progress(0, 0, &Default::default());
                 match std::env::current_exe()
                     .map_err(anyhow::Error::from)
-                    .and_then(|exe| lichtbild::ocr::run_pass(&cfg, &idx, &exe, deadline, &progress))
-                {
+                    .and_then(|exe| {
+                        lichtbild::vision::run_pass(&cfg, &idx, &exe, deadline, &progress)
+                    }) {
                     Ok(rep) => {
                         tracing::info!("{}", rep.to_text());
-                        status.read_done(rep);
+                        status.look_done(rep);
                     }
-                    Err(e) => tracing::error!("reading pass failed: {e:#}"),
+                    Err(e) => tracing::error!("look pass failed: {e:#}"),
                 }
-                rebuild("after reading");
+                match space.rebuild(&idx) {
+                    Ok(n) => tracing::info!("{n} picture vectors"),
+                    Err(e) => tracing::error!("picture vectors failed: {e:#}"),
+                }
+                rebuild("after looking");
             }
             if cfg.scan_interval_hours == 0 {
                 status.set_phase(Phase::Idle { next: None });

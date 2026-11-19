@@ -35,6 +35,13 @@ const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_tim
 const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
 /// Text read from pictures (REQ-TEXT-001): content hash -> JSON `ocr::Text`.
 const TEXTS: TableDefinition<&str, &[u8]> = TableDefinition::new("texts");
+/// Things in pictures (REQ-SEE-001): content hash -> JSON `[objects::Object]`.
+const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");
+/// What pictures show (REQ-SEE-002): content hash -> embed::DIM signed bytes.
+const VECTORS: TableDefinition<&str, &[u8]> = TableDefinition::new("vectors");
+/// Which pictures were looked at: content hash -> vision::VERSION, or
+/// "<version> failed (<reason>)".
+const LOOKED: TableDefinition<&str, &str> = TableDefinition::new("looked");
 /// Content hash -> (difference hash of the thumbnail, has one): the
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
@@ -166,6 +173,9 @@ impl Index {
             w.open_table(HIDDEN)?;
             w.open_table(PLACED)?;
             w.open_table(TEXTS)?;
+            w.open_table(OBJECTS)?;
+            w.open_table(VECTORS)?;
+            w.open_table(LOOKED)?;
         }
         w.commit()?;
         Ok(Index {
@@ -684,12 +694,67 @@ impl Index {
         Ok(())
     }
 
-    /// Live photos (not videos) with a thumbnail whose content has no
-    /// text from `model` yet, newest first: (id, record).
-    pub fn photos_to_read(&self, model: &str) -> Result<Vec<(u64, Record)>> {
+    /// Store what the look child found in a picture.
+    pub fn set_look(&self, hash: &str, version: &str, look: &crate::vision::Look) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(TEXTS)?
+                .insert(hash, serde_json::to_vec(&look.text)?.as_slice())?;
+            w.open_table(OBJECTS)?
+                .insert(hash, serde_json::to_vec(&look.objects)?.as_slice())?;
+            let v: Vec<u8> = look.vector.iter().map(|b| *b as u8).collect();
+            if v.len() == crate::embed::DIM {
+                w.open_table(VECTORS)?.insert(hash, v.as_slice())?;
+            }
+            w.open_table(LOOKED)?.insert(hash, version)?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Mark a picture the look child failed on, so it is not tried again
+    /// with this version.
+    pub fn set_look_failed(&self, hash: &str, version: &str, reason: &str) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mark = format!("{version} failed ({reason})");
+            w.open_table(LOOKED)?.insert(hash, mark.as_str())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The things found in a picture, by content hash.
+    pub fn objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(OBJECTS)?;
+        match t.get(hash)? {
+            Some(v) => Ok(serde_json::from_slice(v.value()).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Every stored picture vector: (content hash, signed bytes).
+    pub fn embeddings(&self) -> Result<Vec<(String, Vec<i8>)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(VECTORS)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push((
+                k.value().to_string(),
+                v.value().iter().map(|b| *b as i8).collect(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Live photos (not videos) with a thumbnail whose content was not
+    /// looked at with `version` yet, newest first: (id, record).
+    pub fn photos_to_look(&self, version: &str) -> Result<Vec<(u64, Record)>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
-        let t = r.open_table(TEXTS)?;
+        let t = r.open_table(LOOKED)?;
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for e in items.iter()? {
@@ -703,8 +768,7 @@ impl Index {
                 continue;
             }
             let done = match t.get(rec.hash.as_str())? {
-                Some(v) => serde_json::from_slice::<crate::ocr::Text>(v.value())
-                    .is_ok_and(|x| x.model == model),
+                Some(v) => v.value().split(' ').next() == Some(version),
                 None => false,
             };
             if !done {
@@ -715,14 +779,16 @@ impl Index {
         Ok(out)
     }
 
-    /// Live photos (by content), how many have been read by `model`, and
-    /// how many of those hold text, in `labels`.
-    pub fn text_counts(&self, labels: &[String], model: &str) -> Result<(u64, u64, u64)> {
+    /// Live photos (by content) in `labels`, how many were looked at with
+    /// `version`, how many of those hold text, and how many things.
+    pub fn look_counts(&self, labels: &[String], version: &str) -> Result<(u64, u64, u64, u64)> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
-        let t = r.open_table(TEXTS)?;
+        let looked = r.open_table(LOOKED)?;
+        let texts = r.open_table(TEXTS)?;
+        let objects = r.open_table(OBJECTS)?;
         let mut seen = std::collections::HashSet::new();
-        let (mut photos, mut done, mut with) = (0, 0, 0);
+        let (mut photos, mut done, mut with_text, mut with_things) = (0, 0, 0, 0);
         for e in items.iter()? {
             let rec = decode(e?.1.value())?;
             if rec.missing
@@ -734,16 +800,29 @@ impl Index {
                 continue;
             }
             photos += 1;
-            if let Some(v) = t.get(rec.hash.as_str())? {
-                if let Ok(x) = serde_json::from_slice::<crate::ocr::Text>(v.value()) {
-                    if x.model == model {
-                        done += 1;
-                        with += u64::from(x.state == "ok");
+            let h = rec.hash.as_str();
+            if looked
+                .get(h)?
+                .is_some_and(|v| v.value().split(' ').next() == Some(version))
+            {
+                done += 1;
+                if let Some(v) = texts.get(h)? {
+                    if serde_json::from_slice::<crate::ocr::Text>(v.value())
+                        .is_ok_and(|t| t.state == "ok")
+                    {
+                        with_text += 1;
+                    }
+                }
+                if let Some(v) = objects.get(h)? {
+                    if serde_json::from_slice::<Vec<crate::objects::Object>>(v.value())
+                        .is_ok_and(|o| !o.is_empty())
+                    {
+                        with_things += 1;
                     }
                 }
             }
         }
-        Ok((photos, done, with))
+        Ok((photos, done, with_text, with_things))
     }
 
     /// Live videos whose content has no transcript from `model` yet,

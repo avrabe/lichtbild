@@ -252,3 +252,24 @@ artifacts:
       - type: satisfies
         target: REQ-TEXT-001
 
+  - id: FEAT-013
+    type: feature
+    title: Things in pictures and search by meaning
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19: object detection together with the text
+      in pictures, in one big release, more usable than the big photo
+      apps.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - Searching "Katze" finds the photos with a cat, and the viewer marks it
+        - A sentence like "zwei Katzen auf dem Sofa" finds such a photo without any words in it
+        - The viewer shows pictures that look like the one shown
+    links:
+      - type: satisfies
+        target: REQ-SEE-001
+      - type: satisfies
+        target: REQ-SEE-002
+

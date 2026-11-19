@@ -176,12 +176,13 @@
   if (!img) return;
 
   var scale = 1, tx = 0, ty = 0;
-  // Text in the picture (REQ-TEXT-001): line boxes over the photo, shown
-  // while the text panel is open; they follow the photo's zoom.
-  var layer = viewer.querySelector(".textlayer");
-  var textp = viewer.querySelector("details.textp");
-  function placeLayer() {
-    if (!layer) return;
+  // Boxes over the photo (REQ-TEXT-001, REQ-SEE-001): lines of text and
+  // things found, each layer shown while its panel is open (text also
+  // while the panels sit below the picture); they follow the zoom.
+  var layers = Array.prototype.map.call(viewer.querySelectorAll(".boxlayer"), function (layer) {
+    return { el: layer, panel: viewer.querySelector("details." + layer.getAttribute("data-for")) };
+  });
+  function placeLayer(layer) {
     var W = img.offsetWidth, H = img.offsetHeight;
     layer.style.left = img.offsetLeft + "px";
     layer.style.top = img.offsetTop + "px";
@@ -200,19 +201,25 @@
       a.style.transform = "rotate(" + Math.atan2(y1 - y0, x1 - x0) + "rad)";
     });
   }
-  function showLayer() {
-    if (!layer) return;
-    layer.hidden = !(viewer.classList.contains("below") || (textp && textp.open));
-    placeLayer();
+  function showLayers() {
+    layers.forEach(function (l) {
+      var below = viewer.classList.contains("below") && l.el.getAttribute("data-for") === "textp";
+      l.el.hidden = !(below || (l.panel && l.panel.open));
+      if (!l.el.hidden) placeLayer(l.el);
+    });
   }
-  if (textp) textp.addEventListener("toggle", showLayer);
-  viewer.addEventListener("lb-layout", showLayer);
-  if (img.complete) showLayer(); else img.addEventListener("load", showLayer);
-  window.addEventListener("resize", placeLayer);
+  layers.forEach(function (l) {
+    if (l.panel) l.panel.addEventListener("toggle", showLayers);
+  });
+  viewer.addEventListener("lb-layout", showLayers);
+  if (img.complete) showLayers(); else img.addEventListener("load", showLayers);
+  window.addEventListener("resize", showLayers);
   function apply() {
     img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
     viewer.classList.toggle("zoomed", scale > 1.001);
-    if (layer && !layer.hidden) layer.style.transform = img.style.transform;
+    layers.forEach(function (l) {
+      if (!l.el.hidden) l.el.style.transform = img.style.transform;
+    });
   }
   function maxScale() {
     // At least 4x, and enough to show every pixel of the original.
