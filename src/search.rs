@@ -85,14 +85,19 @@ fn schema() -> (Schema, Fields) {
 }
 
 /// Words describing an item without its content: names, place, date.
-pub fn item_words(rec: &crate::index::Record, places: Option<&Places>) -> String {
+/// `at` is the item's position: recorded, set by hand or estimated.
+pub fn item_words(
+    rec: &crate::index::Record,
+    at: Option<(f64, f64)>,
+    places: Option<&Places>,
+) -> String {
     let rel = String::from_utf8_lossy(&rec.rel);
     let mut words: Vec<String> = rel
         .split(['/', '_', '-', '.', ' '])
         .filter(|w| !w.is_empty())
         .map(str::to_string)
         .collect();
-    if let (Some(p), Some(lat), Some(lon)) = (places, rec.lat, rec.lon) {
+    if let (Some(p), Some((lat, lon))) = (places, at) {
         if let Some(n) = p.nearest(lat, lon) {
             words.push(n.label);
         }
@@ -132,7 +137,9 @@ impl Search {
         );
         let mut w = index.writer_with_num_threads(1, 50_000_000)?;
         let mut docs = 0usize;
-        for (id, rec) in idx.all()? {
+        let items = idx.all()?;
+        let pos = crate::place::positions(&items, &idx.placed()?);
+        for (id, rec) in items {
             if rec.missing {
                 continue;
             }
@@ -140,7 +147,7 @@ impl Search {
                 f.id => id,
                 f.label => rec.label.as_str(),
                 f.t => -1.0f64,
-                f.text => item_words(&rec, places),
+                f.text => item_words(&rec, pos.get(&id).map(|p| (p.lat, p.lon)), places),
             ))?;
             docs += 1;
             if rec.video.is_some() {

@@ -52,6 +52,8 @@ pub struct AppState {
     pub dups: Arc<crate::dups::Dups>,
     /// What the scan thread is doing (REQ-WEB-009).
     pub status: Arc<crate::status::Status>,
+    /// Positions, recorded, set by hand or estimated (REQ-PLACE-002).
+    pub positions: Arc<crate::place::Cache>,
     /// The speech model's name, when transcripts are on.
     pub transcribe_model: Option<String>,
     /// The world map's files and positions cache (REQ-MAP-001).
@@ -80,6 +82,7 @@ impl AppState {
             dups: Arc::new(crate::dups::Dups::default()),
             status: Arc::new(crate::status::Status::default()),
             transcribe_model: cfg.transcribe.as_ref().map(|t| t.model.to_string()),
+            positions: Arc::new(crate::place::Cache::default()),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -108,6 +111,8 @@ pub fn router(state: AppState) -> Router {
         .route("/keep/{id}", axum::routing::post(keep))
         .route("/hidden", get(hidden_page))
         .route("/status", get(status_page))
+        .route("/place/{id}", axum::routing::post(place))
+        .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
@@ -582,6 +587,15 @@ pub fn kind_filter(kind: Option<&str>) -> (Option<bool>, &'static str) {
     }
 }
 
+/// The filter's suffix ("&amp;kind=video") as the query of a viewer link
+/// ("?kind=video"), so the viewer walks and returns to the same items.
+pub fn viewer_query(kq: &str) -> String {
+    match kq.strip_prefix("&amp;") {
+        Some(q) => format!("?{q}"),
+        None => String::new(),
+    }
+}
+
 /// The All / Photos / Videos switch for `base` ("t/p1", "search?q=x").
 pub fn kind_switch(base: &str, kind: Option<bool>) -> String {
     let sep = if base.contains('?') { "&amp;" } else { "?" };
@@ -956,12 +970,13 @@ pub fn render_items(
             dur
         };
         s += &format!(
-            "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}\" title=\"{t}\">{img}{dur}</a>",
+            "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}{vq}\" title=\"{t}\">{img}{dur}</a>",
             cls = if weak { " weak" } else { "" },
             vid = if it.video_ms.is_some() { " video" } else { "" },
             id = it.id,
             who = esc(who),
             t = esc(&title),
+            vq = viewer_query(kq),
         );
     }
     if open {
@@ -1028,8 +1043,9 @@ async fn timeline(
         for it in &mut items {
             it.copies = dups.shown(it.id, &labels, &hidden).copies;
         }
+        // The chooser counts what this timeline shows (REQ-WEB-010).
         let months = if full_page {
-            idx.months(&labels)?
+            idx.months_where(&labels, |id| dups.shown(id, &labels, &hidden).shown, kind)?
         } else {
             Vec::new()
         };
@@ -1111,6 +1127,8 @@ type ViewerItem = (
 pub struct ViewerQuery {
     /// Start a video at this second (from a transcript search hit).
     t: Option<f32>,
+    /// The timeline's photo/video filter (REQ-WEB-010).
+    kind: Option<String>,
 }
 
 /// A video's transcript as a panel of timed lines; a click on a time seeks
@@ -1189,10 +1207,16 @@ pub fn duration(ms: u64) -> String {
     }
 }
 
+/// What the viewer may do about an item's position: (item id, may set it
+/// on the map, may forget a hand-set one).
+pub type PlaceActions = Option<(u64, bool, bool)>;
+
 pub fn render_info(
     rec: &index::Record,
     exif: &[(&'static str, String)],
     places: Option<&crate::places::Places>,
+    pos: Option<&crate::place::Position>,
+    act: PlaceActions,
 ) -> String {
     let mut rows: Vec<(&str, String)> = Vec::new();
     let mut taken = esc(&rec.taken_local.replace('T', " "));
@@ -1210,26 +1234,65 @@ pub fn render_info(
     };
     taken += &format!("<br><span class=\"dim\">from {}</span>", esc(source));
     rows.push(("Taken", taken));
-    match (rec.lat, rec.lon) {
-        (Some(lat), Some(lon)) => {
-            let coords = format!("{lat:.5}, {lon:.5}");
-            let place = places.and_then(|p| p.nearest(lat, lon));
-            let v = match place {
+    use crate::place::How;
+    let mut v = match pos {
+        Some(p) => {
+            let coords = format!("{:.5}, {:.5}", p.lat, p.lon);
+            let near = match places.and_then(|pl| pl.nearest(p.lat, p.lon)) {
                 Some(n) => format!(
-                    "near {} <span class=\"dim\">({:.0} km)</span><br><span class=\"dim\">{}</span>",
+                    "near {} <span class=\"dim\">({:.0} km)</span><br>",
                     esc(&n.label),
-                    n.km.max(1.0),
-                    coords
+                    n.km.max(1.0)
                 ),
-                None => coords,
+                None => String::new(),
             };
-            rows.push(("Place", v));
+            let within = if p.radius_m >= 1000 {
+                format!("{:.1} km", f64::from(p.radius_m) / 1000.0)
+            } else {
+                format!("{} m", p.radius_m)
+            };
+            let mins = |s: u32| match s / 60 {
+                0 => "less than a minute".to_string(),
+                1 => "1 minute".to_string(),
+                m => format!("{m} minutes"),
+            };
+            let how = match p.how {
+                How::Recorded => String::new(),
+                How::ByHand => "<br><span class=\"dim\">set by hand</span>".into(),
+                How::Between { gap_s } => format!(
+                    "<br><span class=\"dim\">estimated, within {within}: between two pictures {} apart</span>",
+                    mins(gap_s)
+                ),
+                How::Near { gap_s } => format!(
+                    "<br><span class=\"dim\">estimated, within {within}: from a picture {} away</span>",
+                    mins(gap_s)
+                ),
+            };
+            let about = if p.how.estimated() { "about " } else { "" };
+            format!("{about}{near}<span class=\"dim\">{coords}</span>{how}")
         }
-        _ => rows.push((
-            "Place",
-            "<span class=\"dim\">no position recorded</span>".into(),
-        )),
+        None => "<span class=\"dim\">no position recorded</span>".into(),
+    };
+    if let Some((id, can_set, can_forget)) = act {
+        let mut a = Vec::new();
+        if can_set {
+            let label = match pos.map(|p| p.how) {
+                None => "Place it on the map",
+                Some(How::ByHand) => "Move it",
+                Some(_) => "Place it yourself",
+            };
+            a.push(format!("<a href=\"map?place={id}\">{label}</a>"));
+        }
+        if can_forget && pos.is_some_and(|p| p.how == How::ByHand) {
+            a.push(format!(
+                "<form method=\"post\" action=\"unplace/{id}\"><button type=\"submit\">Forget it</button></form>"
+            ));
+        }
+        if !a.is_empty() {
+            v += &format!("<br><span class=\"placeact\">{}</span>", a.join(" · "));
+        }
     }
+    rows.push(("Place", v));
     if let Some(v) = &rec.video {
         let codec = match v.codec.as_str() {
             "h264" => "H.264",
@@ -1334,6 +1397,8 @@ async fn viewer(
     let dups = st.dups.clone();
     let me = person(&viewer);
     let max_file_bytes = st.max_file_bytes;
+    let (kind, kq) = kind_filter(vq.kind.as_deref());
+    let vqs = viewer_query(kq);
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<ViewerItem>> {
         let Some(rec) = idx.locate(id)? else {
             return Ok(None);
@@ -1342,7 +1407,12 @@ async fn viewer(
         if !labels.contains(&rec.label) {
             return Ok(None);
         }
-        let (newer, older) = idx.neighbours(&labels, &rec.taken_local, id)?;
+        // Step through what the timeline shows: one copy of each
+        // duplicate, nothing hidden, and the photo/video filter.
+        let hidden = idx.hidden(&me)?;
+        let (newer, older) = idx.neighbours_where(&labels, &rec.taken_local, id, |n, r| {
+            kind.is_none_or(|v| r.video.is_some() == v) && dups.shown(n, &labels, &hidden).shown
+        })?;
         let mut prefetch = Vec::new();
         for n in [newer, older].into_iter().flatten() {
             if let Some(r) = idx.locate(n)? {
@@ -1372,7 +1442,7 @@ async fn viewer(
                 copies.push((c, r));
             }
         }
-        let is_hidden = idx.hidden(&me)?.contains(&id);
+        let is_hidden = hidden.contains(&id);
         Ok(Some((
             rec, newer, older, prefetch, exif, transcript, copies, is_hidden,
         )))
@@ -1384,10 +1454,20 @@ async fn viewer(
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
+    // Where it was taken: recorded, set by hand or estimated; worked out
+    // once per index change. Without it the panel just says nothing is known.
+    let (pc, idx2) = (st.positions.clone(), st.index.clone());
+    let pos = tokio::task::spawn_blocking(move || pc.get(&idx2).map(|m| m.get(&id).copied()))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten();
+    let mine = owned(st.auth.is_some(), &viewer).contains(&rec.label) && rec.lat.is_none();
+    let act = mine.then_some((id, st.map.pmtiles.is_some(), true));
     let w = esc(&who);
     let link = |rel: &str, label: &str, target: Option<u64>| {
         match target {
-        Some(t) => format!("<a class=\"{rel}\" rel=\"{rel}\" href=\"v/{w}/{t}\" aria-label=\"{label}\">{arrow}</a>",
+        Some(t) => format!("<a class=\"{rel}\" rel=\"{rel}\" href=\"v/{w}/{t}{vqs}\" aria-label=\"{label}\">{arrow}</a>",
             arrow = if rel == "prev" { "‹" } else { "›" }),
         None => format!("<span class=\"{rel} none\" aria-hidden=\"true\">{}</span>", if rel == "prev" { "‹" } else { "›" }),
     }
@@ -1422,7 +1502,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{next}</div>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
@@ -1442,7 +1522,7 @@ async fn viewer(
             .unwrap_or_default(),
         // Hide is an action on this picture, inside its info panel.
         info = render_copies(id, &who, &copies)
-            + &render_info(&rec, &exif, st.places.as_deref())
+            + &render_info(&rec, &exif, st.places.as_deref(), pos.as_ref(), act)
                 .replace(
                     "</dl></details>",
                     &format!("<div class=\"hiderow\">{hide}</div></dl></details>"),
@@ -1752,6 +1832,89 @@ pub fn owned(login: bool, viewer: &Viewer) -> Vec<String> {
     }
 }
 
+#[derive(Deserialize)]
+pub struct PlaceForm {
+    lat: f64,
+    lon: f64,
+}
+
+/// Set or remove a hand-set position (REQ-PLACE-002): only for an item of
+/// the viewer's own library that records no position itself, only from a
+/// same-site form; then back to the item.
+async fn set_place(
+    st: AppState,
+    viewer: Viewer,
+    id: u64,
+    headers: axum::http::HeaderMap,
+    at: Option<(f64, f64)>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    if at.is_some_and(|(lat, lon)| !crate::place::valid(lat, lon)) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+    let idx = st.index.clone();
+    let own = owned(st.auth.is_some(), &viewer);
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(rec) = idx.locate(id)? else {
+            return Ok(None);
+        };
+        if !own.contains(&rec.label) || rec.lat.is_some() {
+            return Ok(None);
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let placed = at.map(|(lat, lon)| crate::place::Placed {
+            lat,
+            lon,
+            by: me,
+            at: now,
+        });
+        idx.set_placed(id, placed.as_ref())?;
+        Ok(Some(rec.label))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(label))) => {
+            // Search finds pictures by place: rebuild it in the background.
+            let (search, idx, places) = (st.search.clone(), st.index.clone(), st.places.clone());
+            tokio::task::spawn_blocking(move || {
+                if let Err(e) = search.rebuild(&idx, places.as_deref()) {
+                    tracing::warn!("search rebuild after placing failed: {e:#}");
+                }
+            });
+            back_to(&st, Some(&format!("v/{label}/{id}")))
+        }
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /place/{id}: set where the item was taken.
+async fn place(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<PlaceForm>,
+) -> Response {
+    set_place(st, viewer, id, headers, Some((f.lat, f.lon))).await
+}
+
+/// POST /unplace/{id}: forget the position set by hand.
+async fn unplace(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    set_place(st, viewer, id, headers, None).await
+}
+
 /// Exact duplicate files in the viewer's own libraries: (label, kept
 /// copy, the other copies).
 type Cleanup = Vec<(String, index::Record, Vec<index::Record>)>;
@@ -1884,6 +2047,23 @@ async fn status_page(
         }
         None => None,
     };
+    let positions = {
+        let (pc, idx, labels) = (
+            st.positions.clone(),
+            st.index.clone(),
+            viewer.labels.clone(),
+        );
+        match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let pos = pc.get(&idx)?;
+            Ok(crate::place::counts(&idx.all()?, &pos, &labels))
+        })
+        .await
+        {
+            Ok(Ok(c)) => c,
+            Ok(Err(e)) => return internal(e),
+            Err(e) => return internal(e),
+        }
+    };
     let now = std::time::SystemTime::now();
     let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
     let mut rows: Vec<(&str, String)> = Vec::new();
@@ -1963,6 +2143,19 @@ async fn status_page(
             ),
             _ => "off (no speech model configured)".into(),
         },
+    ));
+    let c = positions;
+    rows.push((
+        "Positions",
+        format!(
+            "{} recorded, {} estimated ({} between two pictures, {} from one nearby), {} set by hand, {} without",
+            c.recorded,
+            c.between + c.near,
+            c.between,
+            c.near,
+            c.by_hand,
+            c.without
+        ),
     ));
     // Totals over all libraries only for whoever sees all of them.
     if everything {

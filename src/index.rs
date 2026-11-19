@@ -44,6 +44,8 @@ const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new(
 /// (REQ-DUP-002). Per person: one person's choice never changes another's
 /// view; nothing in the libraries changes.
 const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
+/// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
+const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -160,6 +162,7 @@ impl Index {
             w.open_table(FINGERPRINTS)?;
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
+            w.open_table(PLACED)?;
         }
         w.commit()?;
         Ok(Index {
@@ -237,7 +240,30 @@ impl Index {
     /// Live items per month ("YYYY-MM"), newest first, for the timeline's
     /// date scrubber. One label reads `by_root`; several read `by_time`.
     pub fn months(&self, labels: &[String]) -> Result<Vec<(String, u64)>> {
+        self.months_where(labels, |_| true, None)
+    }
+
+    /// `months`, counting only the items `keep` accepts and, when `video`
+    /// is set, only videos (true) or only photos (false). The kind needs
+    /// the record, so only a filtered count reads it.
+    pub fn months_where(
+        &self,
+        labels: &[String],
+        keep: impl Fn(u64) -> bool,
+        video: Option<bool>,
+    ) -> Result<Vec<(String, u64)>> {
         let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let wanted = |id: u64| -> Result<bool> {
+            if !keep(id) {
+                return Ok(false);
+            }
+            let Some(v) = video else { return Ok(true) };
+            Ok(match items.get(id)? {
+                Some(raw) => decode(raw.value())?.video.is_some() == v,
+                None => false,
+            })
+        };
         let mut out: Vec<(String, u64)> = Vec::new();
         let mut add = |taken: &str| {
             let ym = taken.get(..7).unwrap_or(taken);
@@ -254,14 +280,18 @@ impl Index {
                     .range((one.as_str(), "", 0)..(one.as_str(), TAKEN_MAX, 0))?
                     .rev()
                 {
-                    add(e?.0.value().1);
+                    let (k, _) = e?;
+                    let (_, taken, id) = k.value();
+                    if wanted(id)? {
+                        add(taken);
+                    }
                 }
             }
             many => {
                 let t = r.open_table(BY_TIME)?;
                 for e in t.iter()?.rev() {
                     let (k, v) = e?;
-                    if many.iter().any(|l| l == v.value()) {
+                    if many.iter().any(|l| l == v.value()) && wanted(k.value().1)? {
                         add(k.value().0);
                     }
                 }
@@ -278,43 +308,70 @@ impl Index {
         taken: &str,
         id: u64,
     ) -> Result<(Option<u64>, Option<u64>)> {
+        self.neighbours_where(labels, taken, id, |_, _| true)
+    }
+
+    /// `neighbours`, stepping over the items `keep` rejects, so the viewer
+    /// walks the same items as the timeline it came from.
+    pub fn neighbours_where(
+        &self,
+        labels: &[String],
+        taken: &str,
+        id: u64,
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<(Option<u64>, Option<u64>)> {
         let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let ok = |n: u64| -> Result<bool> {
+            Ok(match items.get(n)? {
+                Some(raw) => {
+                    let rec = decode(raw.value())?;
+                    !rec.missing && keep(n, &rec)
+                }
+                None => false,
+            })
+        };
+        let mut newer = None;
+        let mut older = None;
         match labels {
-            [] => Ok((None, None)),
+            [] => {}
             [one] => {
                 let t = r.open_table(BY_ROOT)?;
                 let l = one.as_str();
-                let newer = match t.range((l, taken, id + 1)..(l, TAKEN_MAX, 0))?.next() {
-                    Some(e) => Some(e?.0.value().2),
-                    None => None,
-                };
-                let older = match t.range((l, "", 0)..(l, taken, id))?.next_back() {
-                    Some(e) => Some(e?.0.value().2),
-                    None => None,
-                };
-                Ok((newer, older))
+                for e in t.range((l, taken, id + 1)..(l, TAKEN_MAX, 0))? {
+                    let n = e?.0.value().2;
+                    if ok(n)? {
+                        newer = Some(n);
+                        break;
+                    }
+                }
+                for e in t.range((l, "", 0)..(l, taken, id))?.rev() {
+                    let n = e?.0.value().2;
+                    if ok(n)? {
+                        older = Some(n);
+                        break;
+                    }
+                }
             }
             many => {
                 let t = r.open_table(BY_TIME)?;
-                let mut newer = None;
                 for e in t.range((taken, id + 1)..(TAKEN_MAX, 0))? {
                     let (k, v) = e?;
-                    if many.iter().any(|x| x == v.value()) {
+                    if many.iter().any(|x| x == v.value()) && ok(k.value().1)? {
                         newer = Some(k.value().1);
                         break;
                     }
                 }
-                let mut older = None;
                 for e in t.range(("", 0)..(taken, id))?.rev() {
                     let (k, v) = e?;
-                    if many.iter().any(|x| x == v.value()) {
+                    if many.iter().any(|x| x == v.value()) && ok(k.value().1)? {
                         older = Some(k.value().1);
                         break;
                     }
                 }
-                Ok((newer, older))
             }
         }
+        Ok((newer, older))
     }
 
     /// Keyset page, newest first. One label reads `by_root`; several read
@@ -502,6 +559,41 @@ impl Index {
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// Set (Some) or remove (None) the position of an item set by hand.
+    /// Never written to the source file (REQ-SCAN-001).
+    pub fn set_placed(&self, id: u64, placed: Option<&crate::place::Placed>) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(PLACED)?;
+            match placed {
+                Some(p) => {
+                    t.insert(id, serde_json::to_vec(p)?.as_slice())?;
+                }
+                None => {
+                    t.remove(id)?;
+                }
+            }
+        }
+        w.commit()?;
+        // Maps and estimates read positions through the generation.
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+
+    /// Every position set by hand.
+    pub fn placed(&self) -> Result<HashMap<u64, crate::place::Placed>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(PLACED)?;
+        let mut out = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(p) = serde_json::from_slice(v.value()) {
+                out.insert(k.value(), p);
+            }
+        }
+        Ok(out)
     }
 
     /// The items one person has hidden.

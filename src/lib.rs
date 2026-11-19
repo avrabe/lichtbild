@@ -10,6 +10,7 @@ pub mod index;
 pub mod map;
 pub mod media;
 pub mod nav;
+pub mod place;
 pub mod places;
 pub mod scan;
 pub mod search;

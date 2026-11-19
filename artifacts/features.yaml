@@ -215,3 +215,22 @@ artifacts:
         target: REQ-WEB-011
       - type: satisfies
         target: REQ-WORDS-001
+
+  - id: FEAT-011
+    type: feature
+    title: Placing pictures without a recorded position
+    status: implemented
+    release: v0.6.1
+    description: >
+      Roadmap (owner, 2026-11-18): place photos without GPS from their
+      context, shown as estimated, never written to the sources; and let a
+      person place them on the map.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A camera photo taken minutes after a phone photo appears on the map, marked as estimated
+        - Placing one photo of a trip by hand places the photos taken around it
+    links:
+      - type: satisfies
+        target: REQ-PLACE-002
+
