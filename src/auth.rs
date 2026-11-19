@@ -66,6 +66,31 @@ struct Session {
     expires: Instant,
 }
 
+/// Where sessions outlive a restart (the index, so an upgrade does not sign
+/// the household out). Keys are the SHA-256 of the session id, never the
+/// id itself; the value names the person, whose access is worked out again
+/// from the current configuration.
+pub trait SessionStore: Send + Sync {
+    /// `identity` is how the person signed in ("sub:<subject>" or
+    /// "email:<address>"); a restored session must still match it.
+    fn put_session(&self, key: &str, person: &str, identity: &str, expires_unix: u64)
+        -> Result<()>;
+    fn get_session(&self, key: &str) -> Result<Option<(String, String, u64)>>;
+    fn remove_session(&self, key: &str) -> Result<()>;
+}
+
+/// The store key for a session id.
+pub fn session_key(sid: &str) -> String {
+    use sha2::Digest;
+    format!("{:x}", sha2::Sha256::digest(sid.as_bytes()))
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 struct Pending {
     verifier: PkceCodeVerifier,
     nonce: Nonce,
@@ -96,6 +121,7 @@ pub struct Auth {
     discovery_failed: Mutex<Option<Instant>>,
     pending: Mutex<HashMap<String, Pending>>,
     sessions: Mutex<HashMap<String, Session>>,
+    store: Option<std::sync::Arc<dyn SessionStore>>,
     people: Vec<Person>,
     roots: Vec<String>,
 }
@@ -170,6 +196,7 @@ impl Auth {
             discovery_failed: Mutex::new(None),
             pending: Mutex::new(HashMap::new()),
             sessions: Mutex::new(HashMap::new()),
+            store: None,
             people,
             roots,
         })
@@ -377,6 +404,27 @@ impl Auth {
             .viewer_for(&subject, email.as_deref())
             .ok_or(LoginError::NotAPerson)?;
         let sid = CsrfToken::new_random_len(32).secret().clone();
+        if let (Some(store), Some(person)) = (&self.store, viewer.name.as_deref()) {
+            // The identity the person was found by, as viewer_for does.
+            let by_subject = self
+                .people
+                .iter()
+                .any(|p| p.label == person && p.oidc_subject.as_deref() == Some(subject.as_str()));
+            let identity = if by_subject {
+                format!("sub:{subject}")
+            } else {
+                format!("email:{}", email.as_deref().unwrap_or_default())
+            };
+            // A session that cannot be stored still works until a restart.
+            if let Err(e) = store.put_session(
+                &session_key(&sid),
+                person,
+                &identity,
+                unix_now() + SESSION_TTL.as_secs(),
+            ) {
+                tracing::error!("login: session not stored: {e:#}");
+            }
+        }
         let mut s = self.sessions.lock().expect("sessions lock");
         s.retain(|_, v| v.expires > Instant::now());
         s.insert(
@@ -406,27 +454,79 @@ impl Auth {
                             .is_some_and(|e| e.eq_ignore_ascii_case(email))
                 })
             })?;
+        Some(self.viewer_of(p))
+    }
+
+    fn viewer_of(&self, p: &Person) -> Viewer {
         let mut labels = vec![p.label.clone()];
         for s in &p.sees {
             if !labels.contains(s) && self.roots.contains(s) {
                 labels.push(s.clone());
             }
         }
-        Some(Viewer {
+        Viewer {
             labels,
             name: Some(p.label.clone()),
-        })
+        }
+    }
+
+    /// Keep sessions in `store` as well, so they outlive a restart.
+    pub fn with_store(mut self, store: std::sync::Arc<dyn SessionStore>) -> Self {
+        self.store = Some(store);
+        self
     }
 
     pub fn session(&self, sid: &str) -> Option<Viewer> {
-        let s = self.sessions.lock().expect("sessions lock");
-        s.get(sid)
-            .filter(|v| v.expires > Instant::now())
-            .map(|v| v.viewer.clone())
+        // One lock across the memory check, the store read and the insert,
+        // so a concurrent sign-out cannot be undone by a restore.
+        let mut s = self.sessions.lock().expect("sessions lock");
+        if let Some(v) = s.get(sid).filter(|v| v.expires > Instant::now()) {
+            return Some(v.viewer.clone());
+        }
+        // Not in memory (the server restarted): the stored session, for a
+        // person who is still configured with the identity they signed in
+        // with, with today's grants.
+        let store = self.store.as_ref()?;
+        let (person, identity, expires) = store.get_session(&session_key(sid)).ok()??;
+        let now = unix_now();
+        if expires <= now {
+            return None;
+        }
+        let p = self.people.iter().find(|p| p.label == person)?;
+        let still = match identity.split_once(':') {
+            Some(("sub", sub)) => p.oidc_subject.as_deref() == Some(sub),
+            Some(("email", mail)) => {
+                p.oidc_subject.is_none()
+                    && p.oidc_email
+                        .as_deref()
+                        .is_some_and(|e| !mail.is_empty() && e.eq_ignore_ascii_case(mail))
+            }
+            _ => false,
+        };
+        if !still {
+            return None;
+        }
+        let viewer = self.viewer_of(p);
+        s.insert(
+            sid.to_string(),
+            Session {
+                viewer: viewer.clone(),
+                expires: Instant::now() + Duration::from_secs(expires - now),
+            },
+        );
+        Some(viewer)
     }
 
-    pub fn logout(&self, sid: &str) {
-        self.sessions.lock().expect("sessions lock").remove(sid);
+    /// End a session: the stored one first, then memory, under the lock
+    /// session() restores under. Err when the stored session could not be
+    /// removed (it would come back after a restart).
+    pub fn logout(&self, sid: &str) -> Result<()> {
+        let mut s = self.sessions.lock().expect("sessions lock");
+        if let Some(store) = &self.store {
+            store.remove_session(&session_key(sid))?;
+        }
+        s.remove(sid);
+        Ok(())
     }
 }
 

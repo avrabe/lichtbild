@@ -20,15 +20,44 @@
     if (next) next.classList.add("on");
   }
 
+  // The chooser's button names the month in view; its year opens.
+  var MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function markChooser(menu, ym) {
+    var now = menu.querySelector(".jnow");
+    var m = parseInt(ym.slice(5, 7), 10);
+    if (now && m >= 1 && m <= 12) now.textContent = MONTHS[m - 1] + " " + ym.slice(0, 4);
+    var cur = menu.querySelector(".months a.on");
+    if (cur) cur.classList.remove("on");
+    var next = menu.querySelector('.months a[data-ym="' + ym + '"]');
+    if (next) next.classList.add("on");
+    menu.setAttribute("data-ym", ym);
+  }
+
   function init() {
     var rail = document.querySelector("nav.rail");
-    if (!rail) return;
-    sizeTicks(rail);
+    var menu = document.querySelector("details.jumpmenu");
+    if (!rail && !menu) return;
+    if (rail) sizeTicks(rail);
+    if (menu) {
+      // Opening the chooser opens the year in view, closes the others.
+      menu.addEventListener("toggle", function () {
+        if (!menu.open) return;
+        var y = (menu.getAttribute("data-ym") || "").slice(0, 4);
+        if (!y) return;
+        menu.querySelectorAll("details.jyear").forEach(function (d) {
+          d.open = d.getAttribute("data-y") === y;
+          if (d.open) d.scrollIntoView({ block: "nearest" });
+        });
+      });
+    }
     if (!("IntersectionObserver" in window)) return;
     var io = new IntersectionObserver(
       function (entries) {
         entries.forEach(function (e) {
-          if (e.isIntersecting) markActive(rail, e.target.textContent.slice(0, 7));
+          if (!e.isIntersecting) return;
+          var ym = e.target.textContent.slice(0, 7);
+          if (rail) markActive(rail, ym);
+          if (menu) markChooser(menu, ym);
         });
       },
       { rootMargin: "0px 0px -80% 0px" }
@@ -225,5 +254,22 @@
   img.addEventListener("pointerup", up);
   img.addEventListener("pointercancel", up);
   img.addEventListener("dragstart", function (e) { e.preventDefault(); });
+})();
+
+// A thumbnail that fails to load because the session ended (the server
+// restarted for an upgrade) is a redirect to the login: reload the page,
+// which goes through the login, instead of showing empty tiles.
+(function () {
+  "use strict";
+  var checked = false;
+  document.addEventListener("error", function (e) {
+    var img = e.target;
+    if (checked || !img || img.tagName !== "IMG" || !img.closest(".item, .mapstrip, .result")) return;
+    checked = true;
+    fetch(img.src, { redirect: "manual", credentials: "same-origin" }).then(function (r) {
+      if (r.type === "opaqueredirect" || r.status === 401) window.location.reload();
+      else checked = false;
+    }, function () { checked = false; });
+  }, true);
 })();
 

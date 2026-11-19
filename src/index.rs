@@ -37,6 +37,9 @@ const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcri
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
 const FINGERPRINTS: TableDefinition<&str, (u64, bool)> = TableDefinition::new("fingerprints");
+/// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
+/// restart does not sign anyone out (crate::auth::SessionStore).
+const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -151,6 +154,7 @@ impl Index {
             w.open_table(BY_TIME)?;
             w.open_table(TRANSCRIPTS)?;
             w.open_table(FINGERPRINTS)?;
+            w.open_table(SESSIONS)?;
         }
         w.commit()?;
         Ok(Index {
@@ -627,6 +631,55 @@ impl Batch {
     pub fn commit(self) -> Result<()> {
         self.w.commit()?;
         self.generation.fetch_add(1, Ordering::AcqRel);
+        Ok(())
+    }
+}
+
+impl crate::auth::SessionStore for Index {
+    fn put_session(
+        &self,
+        key: &str,
+        person: &str,
+        identity: &str,
+        expires_unix: u64,
+    ) -> Result<()> {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(SESSIONS)?;
+            // Expired sessions go when a new one comes.
+            let expired: Vec<String> = t
+                .iter()?
+                .filter_map(|e| e.ok())
+                .filter(|(_, v)| v.value().2 <= now)
+                .map(|(k, _)| k.value().to_string())
+                .collect();
+            for k in expired {
+                t.remove(k.as_str())?;
+            }
+            t.insert(key, (person, identity, expires_unix))?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    fn get_session(&self, key: &str) -> Result<Option<(String, String, u64)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(SESSIONS)?;
+        Ok(t.get(key)?.map(|v| {
+            let (p, i, e) = v.value();
+            (p.to_string(), i.to_string(), e)
+        }))
+    }
+
+    fn remove_session(&self, key: &str) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(SESSIONS)?.remove(key)?;
+        }
+        w.commit()?;
         Ok(())
     }
 }

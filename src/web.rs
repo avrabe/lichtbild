@@ -362,7 +362,15 @@ async fn auth_logout(State(st): State<AppState>, headers: axum::http::HeaderMap)
         return StatusCode::FORBIDDEN.into_response();
     }
     if let (Some(auth), Some(sid)) = (&st.auth, session_cookie(&headers)) {
-        auth.logout(&sid);
+        if let Err(e) = auth.logout(&sid) {
+            tracing::error!("logout: stored session not removed: {e:#}");
+            return notice(
+                &st,
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Sign-out failed",
+                "The session could not be ended. <a href=\"./\">Back</a>",
+            );
+        }
     }
     let mut r = notice(
         &st,
@@ -402,6 +410,20 @@ async fn security_headers(req: Request, next: Next) -> Response {
         header::REFERRER_POLICY,
         HeaderValue::from_static("no-referrer"),
     );
+    // Pages are asked for again on every visit: a page kept from before an
+    // upgrade (sessions do not survive a restart) showed no thumbnails,
+    // because each one was redirected to the login. Static files carry
+    // their version in the URL and keep their own caching.
+    let html = h
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.starts_with("text/html"));
+    if html && !h.contains_key(header::CACHE_CONTROL) {
+        h.insert(
+            header::CACHE_CONTROL,
+            HeaderValue::from_static("no-cache, private"),
+        );
+    }
     res
 }
 
@@ -590,24 +612,16 @@ pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
         let m: usize = ym.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
         MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("")
     };
+    // The rail: month ticks, for a mouse on a wide screen (CSS hides it on
+    // touch screens, where its ticks are too fine to hit).
     let mut rail = String::from("<nav class=\"rail\" aria-label=\"Jump to date\">");
-    let mut menu = String::from(
-        "<details class=\"jumpmenu\"><summary>Jump to date</summary><div class=\"jm\">",
-    );
     let mut year = "";
     for (ym, n) in months {
         let y = ym.get(..4).unwrap_or("");
         if y != year {
-            if !year.is_empty() {
-                menu += "</div></div>";
-            }
             year = y;
             rail += &format!(
                 "<a class=\"y\" href=\"t/{who}?from={y}\">{y}</a>",
-                y = esc(y)
-            );
-            menu += &format!(
-                "<div class=\"jy\"><a class=\"y\" href=\"t/{who}?from={y}\">{y}</a><div class=\"chips\">",
                 y = esc(y)
             );
         }
@@ -618,13 +632,52 @@ pub fn render_jump(who: &str, months: &[(String, u64)]) -> String {
             full = name(ym),
             y = esc(y),
         );
+    }
+    rail += "</nav>";
+
+    // The chooser, on every screen: a floating button that names the month
+    // in view, opening the years, newest first; a year opens its twelve
+    // months (empty ones greyed). It stays one row per year however many
+    // years the library spans.
+    let mut years: Vec<(&str, [u64; 12])> = Vec::new();
+    for (ym, n) in months {
+        let y = ym.get(..4).unwrap_or("");
+        let m: usize = ym.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
+        if years.last().is_none_or(|(ly, _)| *ly != y) {
+            years.push((y, [0; 12]));
+        }
+        if let (Some(last), 1..=12) = (years.last_mut(), m) {
+            last.1[m - 1] += n;
+        }
+    }
+    let mut menu = String::from(
+        "<details class=\"jumpmenu\"><summary><span class=\"jnow\">Jump to date</span></summary><div class=\"jm\">",
+    );
+    for (i, (y, counts)) in years.iter().enumerate() {
+        let total: u64 = counts.iter().sum();
         menu += &format!(
-            "<a href=\"t/{who}?from={ym}\">{short} <span class=\"n\">{n}</span></a>",
-            ym = esc(ym)
+            "<details class=\"jyear\" data-y=\"{y}\"{open}><summary><span class=\"y\">{y}</span><span class=\"n\">{total}</span></summary><div class=\"months\">",
+            y = esc(y),
+            open = if i == 0 { " open" } else { "" },
+        );
+        for (mi, n) in counts.iter().enumerate() {
+            let short = MONTHS[mi].get(..3).unwrap_or("");
+            if *n > 0 {
+                menu += &format!(
+                    "<a href=\"t/{who}?from={y}-{m:02}\" data-ym=\"{y}-{m:02}\">{short}<span class=\"n\">{n}</span></a>",
+                    y = esc(y),
+                    m = mi + 1,
+                );
+            } else {
+                menu += &format!("<span class=\"none\">{short}</span>");
+            }
+        }
+        menu += &format!(
+            "</div><a class=\"whole\" href=\"t/{who}?from={y}\">All of {y}</a></details>",
+            y = esc(y)
         );
     }
-    menu += "</div></div></div></details>";
-    rail += "</nav>";
+    menu += "</div></details>";
     rail + &menu
 }
 
