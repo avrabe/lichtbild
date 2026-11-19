@@ -707,8 +707,10 @@ artifacts:
         SHA-256 (Apache-2.0). Each photo is looked at once per VERSION,
         newest first, after the transcripts. Things go into search with
         their German singular and plural and English names. The server
-        loads the SigLIP text encoder on the first search and keeps the
-        picture vectors in memory (768 bytes each); a query matches from a
+        loads the SigLIP text encoder on the first search and drops it
+        after 10 minutes without one (it holds about 0.6 GB: the tokenizer
+        of 250,000 pieces 0.3 GB and the int8 model 0.3 GB, measured on an
+        M4), and keeps the picture vectors in memory (768 bytes each); a query matches from a
         cosine of 0.05 and from 60 % of the best match's (single words on
         noise pictures reached 0.032), and pictures look alike from 0.80.
       rationale: >

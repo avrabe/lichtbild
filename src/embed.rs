@@ -27,6 +27,9 @@ const PAD: u32 = 1;
 /// noise pictures up to 0.032, sentences on unrelated photos at most 0.022).
 pub const TEXT_MIN: f32 = 0.05;
 pub const TEXT_OF_BEST: f32 = 0.6;
+/// The text encoder is dropped after this long without a query.
+pub const IDLE: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// Pictures look alike from this cosine on.
 pub const SIMILAR_MIN: f32 = 0.80;
 
@@ -149,12 +152,17 @@ struct Entry {
     norm: f32,
 }
 
+/// The loaded text encoder and when it was last used.
+type Slot = Arc<Mutex<Option<(Arc<TextEncoder>, std::time::Instant)>>>;
+
 /// The stored picture vectors, for search and "looks like"; and the text
 /// encoder, loaded on first use.
 #[derive(Default)]
 pub struct Space {
     vectors: RwLock<Vec<Entry>>,
-    text: Mutex<Option<Arc<TextEncoder>>>,
+    /// The text encoder and when it was last used; dropped after IDLE.
+    text: Slot,
+    reaper: std::sync::OnceLock<()>,
     dir: RwLock<Option<std::path::PathBuf>>,
 }
 
@@ -202,15 +210,37 @@ impl Space {
         self.len() == 0
     }
 
+    /// The text encoder, loaded on first use. It holds about 0.6 GB (the
+    /// tokenizer of 250,000 pieces 0.3 GB, the int8 model 0.3 GB, measured
+    /// on an M4), so it is dropped after IDLE without a query (DD-024).
     fn encoder(&self) -> Result<Option<Arc<TextEncoder>>> {
         let Some(dir) = self.dir.read().expect("space lock").clone() else {
             return Ok(None);
         };
         let mut t = self.text.lock().expect("space lock");
-        if t.is_none() {
-            *t = Some(Arc::new(TextEncoder::load(&dir)?));
-        }
-        Ok(t.clone())
+        let enc = match t.take() {
+            Some((enc, _)) => enc,
+            None => Arc::new(TextEncoder::load(&dir)?),
+        };
+        *t = Some((enc.clone(), std::time::Instant::now()));
+        drop(t);
+        let slot = self.text.clone();
+        self.reaper.get_or_init(move || {
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let mut t = slot.lock().unwrap_or_else(|e| e.into_inner());
+                if t.as_ref().is_some_and(|(_, used)| used.elapsed() >= IDLE) {
+                    *t = None;
+                    tracing::info!("search by meaning idle: text encoder unloaded");
+                }
+            });
+        });
+        Ok(Some(enc))
+    }
+
+    /// Whether the text encoder is loaded (for the status page and tests).
+    pub fn encoder_loaded(&self) -> bool {
+        self.text.lock().expect("space lock").is_some()
     }
 
     /// Pictures that show `query`, best first: the ids holding each in
