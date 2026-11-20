@@ -807,8 +807,9 @@ artifacts:
       in them, their places and their years that some but not all results
       hold, with how many hold each: up to four things, three places and
       four years, the most held first. Each is a link to the query with the
-      term added, keeping the photo/video filter; terms already in the
-      query are not offered.
+      term added, keeping the photo/video filter and the library searched;
+      terms already in the query, and terms that would find nothing with
+      it, are not offered, and each count is what the link finds.
     fields:
       priority: should
       category: functional

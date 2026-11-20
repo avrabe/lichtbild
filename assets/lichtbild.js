@@ -575,12 +575,14 @@
     schedule();
   }
   function go(k) {
+    // Playing again after the end starts over.
+    if (k >= slides.length && playing && !show.querySelector(".send").hidden) k = 0;
     if (k >= slides.length) {
       show.querySelector(".send").hidden = false;
       setPlaying(false);
       return;
     }
-    if (k < 0 || k === i) return;
+    if (k < 0 || (k === i && show.querySelector(".send").hidden)) return;
     show.querySelector(".send").hidden = true;
     i = k;
     var next = imgs[1 - cur], li = slides[k];
@@ -589,13 +591,19 @@
       imgs[cur].classList.remove("on");
       cur = 1 - cur;
     };
+    // A photo that does not load is passed over while playing.
+    next.onerror = function () { if (i === k && playing) go(k + 1); };
     next.src = li.getAttribute("data-src");
     cap.textContent = li.getAttribute("data-when");
     close.href = li.getAttribute("data-href");
     if (slides[k + 1]) new Image().src = slides[k + 1].getAttribute("data-src");
     schedule();
   }
-  play.addEventListener("click", function (e) { e.stopPropagation(); setPlaying(!playing); });
+  play.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (!playing && !show.querySelector(".send").hidden) { setPlaying(true); go(0); return; }
+    setPlaying(!playing);
+  });
   show.querySelector(".snext").addEventListener("click", function (e) { e.stopPropagation(); go(i + 1); });
   show.querySelector(".sprev").addEventListener("click", function (e) { e.stopPropagation(); go(i - 1); });
   show.addEventListener("click", function (e) {
@@ -669,9 +677,15 @@
     }
     return [tile.id.slice(1)];
   }
+  // What a tile stands for is fixed when it is chosen: a closed series
+  // whole, so opening it afterwards changes nothing.
   function chosen() {
-    var out = [];
-    tl.querySelectorAll(".item.sel").forEach(function (t) { out = out.concat(ids(t)); });
+    var seen = {}, out = [];
+    tl.querySelectorAll(".item.sel").forEach(function (t) {
+      (t.getAttribute("data-ids") || t.id.slice(1)).split(",").forEach(function (id) {
+        if (!seen[id]) { seen[id] = true; out.push(id); }
+      });
+    });
     return out;
   }
   function update() {
@@ -684,7 +698,11 @@
     btn.setAttribute("aria-pressed", on ? "true" : "false");
     btn.textContent = on ? "Done" : "Select";
     bar.hidden = !on;
-    if (!on) tl.querySelectorAll(".item.sel").forEach(function (t) { t.classList.remove("sel"); t.removeAttribute("aria-pressed"); });
+    if (!on) tl.querySelectorAll(".item.sel").forEach(function (t) {
+      t.classList.remove("sel");
+      t.removeAttribute("aria-pressed");
+      t.removeAttribute("data-ids");
+    });
     update();
   }
   btn.addEventListener("click", function () { setMode(!document.body.classList.contains("selecting")); });
@@ -696,6 +714,8 @@
     e.preventDefault();
     var on = tile.classList.toggle("sel");
     tile.setAttribute("aria-pressed", on ? "true" : "false");
+    if (on) tile.setAttribute("data-ids", ids(tile).join(","));
+    else tile.removeAttribute("data-ids");
     update();
   });
   function post(url, list) {
@@ -715,7 +735,13 @@
         var t = document.getElementById("i" + id);
         if (t) t.remove();
       });
-      tl.querySelectorAll(".series").forEach(function (s) { if (!s.querySelector(".item")) s.remove(); });
+      // A series that lost its first tile shows what is left as tiles.
+      tl.querySelectorAll(".series").forEach(function (s) {
+        if (s.querySelector(".stack")) return;
+        s.querySelectorAll(".item.later").forEach(function (t) { t.classList.remove("later"); });
+        while (s.firstChild) s.parentNode.insertBefore(s.firstChild, s);
+        s.remove();
+      });
       setMode(false);
       toast(list);
     }, function () { hideBtn.disabled = false; count.textContent = "Could not hide, try again"; });

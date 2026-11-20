@@ -144,6 +144,39 @@ pub struct Suggestion {
     pub items: u64,
 }
 
+/// A term as plain words for a query: characters the query parser reads
+/// as operators (a leading minus, colons, quotes, brackets) become spaces.
+pub fn plain(term: &str) -> String {
+    term.chars()
+        .map(|c| {
+            if matches!(
+                c,
+                ':' | '"'
+                    | '('
+                    | ')'
+                    | '['
+                    | ']'
+                    | '{'
+                    | '}'
+                    | '^'
+                    | '~'
+                    | '*'
+                    | '+'
+                    | '-'
+                    | '!'
+                    | '\\'
+            ) {
+                ' '
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// A term that narrows results down (REQ-SEARCH-003), and how many of
 /// them hold it.
 #[derive(Debug, Clone, PartialEq)]
@@ -527,11 +560,11 @@ impl Search {
                 continue;
             }
             let (query, items) = if head.is_empty() {
-                (term.clone(), n)
+                (plain(&term), n)
             } else {
                 // With earlier words, only what still finds something,
                 // and how many items it finds.
-                let query = format!("{} {}", head.join(" "), term);
+                let query = format!("{} {}", head.join(" "), plain(&term));
                 let ids: HashSet<u64> = self
                     .query(&query, labels)
                     .unwrap_or_default()
@@ -729,6 +762,13 @@ mod tests {
             .join(" ")
             .contains("Ostern"));
         assert!(date_words("unknown").is_empty());
+    }
+
+    #[test]
+    fn terms_become_plain_words_for_a_query() {
+        assert_eq!(plain("Neustadt, Nord"), "Neustadt, Nord");
+        assert_eq!(plain("-Ost:dorf \"x\""), "Ost dorf x");
+        assert_eq!(plain("Bad Münster-Eifel"), "Bad Münster Eifel");
     }
 
     #[test]

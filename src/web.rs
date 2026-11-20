@@ -1997,6 +1997,7 @@ async fn search(
     let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
     // Without `who`, every library the viewer may see; result links open
     // the merged timeline, or the single one when there is only one.
+    let explicit_who = sq.who.clone();
     let who = match sq.who {
         Some(w) => w,
         None if viewer.labels.len() == 1 => viewer.labels[0].clone(),
@@ -2102,7 +2103,32 @@ async fn search(
             }
             held.push(terms);
         }
-        let narrow = crate::search::narrow(&q2, &held);
+        // A chip must find what it promises: words match within one
+        // document, and the year or place of a hit on what was said is
+        // not in that document. Each chip is run, counted as the results
+        // page would count it, and dropped when it finds nothing.
+        let mut narrow = Vec::new();
+        for mut n in crate::search::narrow(&q2, &held) {
+            let query = format!("{} {}", q2.trim(), crate::search::plain(&n.term));
+            let ids: std::collections::HashSet<u64> = sx
+                .query(&query, &labels)?
+                .into_iter()
+                .map(|h| h.id)
+                .filter(|id| dups.shown(*id, &labels, &hidden).shown)
+                .filter(|id| {
+                    kind.is_none_or(|v| {
+                        idx.locate(*id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|r| r.video.is_some() == v)
+                    })
+                })
+                .collect();
+            if !ids.is_empty() {
+                n.items = ids.len();
+                narrow.push(n);
+            }
+        }
         Ok((out, looks, narrow))
     })
     .await;
@@ -2114,7 +2140,7 @@ async fn search(
     let body = format!(
         "{}{}{}{}",
         kind_switch(&format!("search?q={}", esc(&q)), kind),
-        render_narrow(&q, &narrow, sq_kind_query(kind)),
+        render_narrow(&q, &narrow, &narrow_query(kind, explicit_who.as_deref())),
         // No exact hit but look-alikes: their heading says enough.
         if hits.is_empty() && !looks.is_empty() {
             String::new()
@@ -2132,13 +2158,18 @@ async fn search(
     page_for(&st, "lichtbild search", &body).into_response()
 }
 
-/// `&kind=…` for a link that keeps the photo/video filter.
-fn sq_kind_query(kind: Option<bool>) -> &'static str {
-    match kind {
-        Some(true) => "&amp;kind=video",
-        Some(false) => "&amp;kind=photo",
-        None => "",
+/// `&kind=…&who=…` for a link that keeps the photo/video filter and the
+/// library searched.
+fn narrow_query(kind: Option<bool>, who: Option<&str>) -> String {
+    let mut s = match kind {
+        Some(true) => "&amp;kind=video".to_string(),
+        Some(false) => "&amp;kind=photo".to_string(),
+        None => String::new(),
+    };
+    if let Some(w) = who {
+        s += &format!("&amp;who={}", urlencode(w));
     }
+    s
 }
 
 /// Terms that narrow the results down (REQ-SEARCH-003), each a link to
@@ -2159,7 +2190,7 @@ pub fn render_narrow(q: &str, narrow: &[crate::search::Narrow], kq: &str) -> Str
         };
         s += &format!(
             "<a href=\"search?q={q}{kq}\"><span aria-hidden=\"true\">{icon}</span> {term} <span class=\"n\">{c}</span></a>",
-            q = urlencode(&format!("{} {}", q.trim(), n.term)),
+            q = urlencode(&format!("{} {}", q.trim(), crate::search::plain(&n.term))),
             term = esc(&n.term),
             c = n.items,
         );

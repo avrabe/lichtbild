@@ -1298,6 +1298,7 @@ artifacts:
       steps:
         - run: "cargo test --test ui search_results_offer_terms_that_narrow_them_down"
         - run: "cargo test --lib search::tests::narrowing_offers_terms_that_split_the_results"
+        - run: "cargo test --test ui narrowing_never_offers_a_dead_end"
     links:
       - type: verifies
         target: REQ-SEARCH-003

@@ -479,3 +479,48 @@ async fn pictures_are_found_by_season_and_holiday() {
     let (_, l) = get(&app, "/suggest?q=som", true).await;
     assert!(l.contains(r#"href="search?q=Sommer%202019""#), "{l}");
 }
+
+// A chip finds what it promises: text read in pictures holds no year, so
+// a search that matches only that text offers no year that would find
+// nothing.
+// rivet: verifies REQ-SEARCH-003
+#[tokio::test]
+async fn narrowing_never_offers_a_dead_end() {
+    let e = env();
+    let photos: Vec<_> = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|(_, r)| r.video.is_none() && r.thumb == "ok")
+        .collect();
+    assert!(photos.len() >= 4, "{}", photos.len());
+    let years: std::collections::HashSet<_> = photos
+        .iter()
+        .map(|(_, r)| r.taken_local[..4].to_string())
+        .collect();
+    assert!(years.len() >= 2, "{years:?}");
+    for (_, r) in &photos {
+        let look = lichtbild::vision::Look {
+            text: lichtbild::ocr::Text {
+                state: "ok".into(),
+                model: "test".into(),
+                lines: vec![lichtbild::ocr::Line {
+                    quad: [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2],
+                    block: 0,
+                    text: "Geburtstag".into(),
+                    conf: 0.95,
+                }],
+                docs: vec![0],
+            },
+            objects: vec![],
+            vector: vec![],
+        };
+        e.idx.set_look(&r.hash, "test", &look).unwrap();
+    }
+    e.state.search.rebuild(&e.idx, None).unwrap();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, "/search?q=geburtstag", false).await;
+    assert!(page.contains("results for"), "{page}");
+    assert!(!page.contains("<nav class=\"narrow\""), "{page}");
+}
