@@ -734,3 +734,50 @@
     });
   }
 })();
+
+// Keys and gestures (REQ-WEB-015): "?" or the menu entry shows them.
+(function () {
+  "use strict";
+  var rows = [
+    ["Photo", "← →", "previous, next (or swipe)"],
+    ["Photo", "Esc", "back to the timeline"],
+    ["Photo", "+ − 0", "zoom in, out, fit (or pinch, double tap)"],
+    ["Photo", "i  t", "details, transcript"],
+    ["Photo", "f", "full screen"],
+    ["Photo", "s", "slideshow from here"],
+    ["Slideshow", "space", "pause, play (or tap)"],
+    ["Slideshow", "← →", "previous, next (or swipe)"],
+    ["Slideshow", "Esc", "close"],
+    ["Search", "↓ ↑", "move through the suggestions"],
+    ["Timeline", "Select", "choose several, then hide them"],
+    ["Anywhere", "?", "this list"]
+  ];
+  var dlg = null;
+  function open() {
+    if (!dlg) {
+      dlg = document.createElement("dialog");
+      dlg.className = "keys";
+      var h = '<h2>Keys and gestures</h2><table>';
+      rows.forEach(function (r) {
+        h += "<tr><th>" + r[0] + "</th><td><kbd>" + r[1] + "</kbd></td><td>" + r[2] + "</td></tr>";
+      });
+      dlg.innerHTML = h + '</table><form method="dialog"><button>Close</button></form>';
+      document.body.appendChild(dlg);
+      dlg.addEventListener("click", function (e) { if (e.target === dlg) dlg.close(); });
+    }
+    if (dlg.showModal) dlg.showModal(); else dlg.setAttribute("open", "");
+  }
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "?" || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+    e.preventDefault();
+    open();
+  });
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest(".keyhelp");
+    if (!b) return;
+    var menu = b.closest("details");
+    if (menu) menu.open = false;
+    open();
+  });
+})();

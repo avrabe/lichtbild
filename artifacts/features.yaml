@@ -308,3 +308,5 @@ artifacts:
         target: REQ-SEARCH-004
       - type: satisfies
         target: REQ-TRIP-001
+      - type: satisfies
+        target: REQ-WEB-015

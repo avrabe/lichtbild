@@ -873,6 +873,24 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-015
+    type: requirement
+    title: Keys and gestures are listed one tap away
+    status: implemented
+    release: v0.7.0
+    description: >
+      Every page's menu has "Keys and gestures", and "?" outside a text
+      field opens the same list: the viewer's, the slideshow's, the search
+      box's and the timeline's keys and gestures, in a dialog closed by
+      Escape, a tap outside or its button. The automated check covers the
+      menu entry on every page; the dialog itself runs in the browser.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

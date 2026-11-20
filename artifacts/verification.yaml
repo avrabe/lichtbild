@@ -1344,3 +1344,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-TRIP-001
+
+  - id: VER-096
+    type: verification
+    title: Keys and gestures in every page's menu
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "every_page_has_the_app_menu"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui every_page_has_the_app_menu"
+    links:
+      - type: verifies
+        target: REQ-WEB-015

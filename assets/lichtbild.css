@@ -780,3 +780,23 @@ body.selecting .timeline .item.sel::before {
   position: absolute; top: 8px; left: 8px; right: 8px; width: fit-content; padding: 3px 9px;
   border-radius: 10px; background: rgba(15, 13, 10, .62); color: #fff; font-size: 12px;
 }
+
+/* Keys and gestures (REQ-WEB-015). */
+dialog.keys {
+  border: 1px solid var(--line); border-radius: 14px; background: var(--paper); color: var(--ink);
+  box-shadow: var(--shadow); padding: 18px 22px; max-width: min(560px, calc(100vw - 32px));
+}
+dialog.keys::backdrop { background: rgba(15, 13, 10, .45); }
+dialog.keys h2 { margin: 0 0 10px; font: 500 20px/1.2 var(--serif); }
+dialog.keys table { border-collapse: collapse; font-size: 14px; }
+dialog.keys th { text-align: left; font-weight: 500; color: var(--ink-faint); padding: 4px 14px 4px 0; }
+dialog.keys td { padding: 4px 12px 4px 0; }
+dialog.keys kbd {
+  font: 13px/1 var(--sans); padding: 3px 7px; border: 1px solid var(--line); border-radius: 5px;
+  background: var(--paper-2); white-space: nowrap;
+}
+dialog.keys form { text-align: right; margin-top: 12px; }
+dialog.keys button {
+  font: inherit; padding: 6px 16px; border-radius: 16px; border: 1px solid var(--line);
+  background: transparent; color: inherit; cursor: pointer;
+}

@@ -519,6 +519,7 @@ fn app_menu(st: &AppState) -> String {
          <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
+         <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
          {signout}</ul></details>"
     )
 }

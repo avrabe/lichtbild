@@ -102,6 +102,7 @@ fn env() -> Env {
 // Every page behind login carries the app menu with all places; the
 // house's nav stays beside it.
 // rivet: verifies REQ-WEB-011
+// rivet: verifies REQ-WEB-015
 #[tokio::test]
 async fn every_page_has_the_app_menu() {
     let e = env();
@@ -113,6 +114,8 @@ async fn every_page_has_the_app_menu() {
         "/status",
         "/words",
         "/things",
+        "/trips",
+        "/show/p1",
         "/map",
         "/hidden",
         "/duplicates",
@@ -134,6 +137,7 @@ async fn every_page_has_the_app_menu() {
             "./",
             "map",
             "things",
+            "trips",
             "words",
             "hidden",
             "duplicates",
@@ -144,6 +148,8 @@ async fn every_page_has_the_app_menu() {
                 "{uri}: {href}"
             );
         }
+        // Keys and gestures are one tap away everywhere (REQ-WEB-015).
+        assert!(header.contains(r#"class="keyhelp""#), "{uri}");
     }
 }
 
