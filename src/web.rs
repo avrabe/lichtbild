@@ -70,6 +70,9 @@ pub struct AppState {
     pub rebuild: Arc<Later>,
     /// Thumbnail scores for the best shot of a series (REQ-WEB-021).
     pub best: Arc<crate::best::Best>,
+    /// The face models are in the vision directory: faces are looked for
+    /// after the photos (DD-025).
+    pub faces_on: bool,
 }
 
 /// A search rebuild in the background that runs again, once, if asked
@@ -131,6 +134,10 @@ impl AppState {
             people: Arc::new(crate::people::People::default()),
             rebuild: Arc::new(Later::default()),
             best: Arc::new(crate::best::Best::default()),
+            faces_on: cfg
+                .vision_dir
+                .as_deref()
+                .is_some_and(|d| crate::faces::present(d).unwrap_or(false)),
         }
     }
 
@@ -3882,137 +3889,236 @@ async fn status_page(
     let now = std::time::SystemTime::now();
     let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
     let mut rows: Vec<(&str, String)> = Vec::new();
+    // The work comes in four steps, one after another (REQ-WEB-009): what
+    // runs now, what is done, and what waits for it.
+    let left = |since: std::time::SystemTime, done: u64, total: u64| -> String {
+        let spent = now.duration_since(since).unwrap_or_default().as_secs_f64();
+        if done < 5 || total <= done || spent < 60.0 {
+            return String::new();
+        }
+        let rest = std::time::Duration::from_secs_f64(spent * (total - done) as f64 / done as f64);
+        format!(", about {} left", span(rest))
+    };
+    let pct = |done: u64, total: u64| {
+        // Only while a step is not done.
+        if total == 0 || done >= total {
+            String::new()
+        } else {
+            format!(" ({} %)", done * 100 / total)
+        }
+    };
+    let bar = |done: u64, total: u64| {
+        if total == 0 {
+            String::new()
+        } else {
+            format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
+        }
+    };
+    let current = match &s.phase {
+        Phase::Scanning { .. } => Some(0),
+        Phase::Transcribing { .. } => Some(1),
+        Phase::Looking { .. } => Some(2),
+        Phase::Faces { .. } => Some(3),
+        _ => None,
+    };
     let (state, cls) = match &s.phase {
         Phase::Starting => ("Starting".to_string(), "busy"),
         Phase::Scanning { since } => (
-            format!("Scanning the libraries, since {}", relative(*since, now)),
+            format!(
+                "Step 1 of 4: scanning the libraries, since {}",
+                relative(*since, now)
+            ),
             "busy",
         ),
         Phase::Transcribing {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
             format!(
-                "Transcribing videos: {done} of {total} done ({} with speech, {} without, {} failed), since {}",
-                report.transcribed,
-                report.no_speech,
-                report.failed,
-                relative(*since, now)
+                "Step 2 of 4: transcribing videos, {done} of {total} done{}",
+                left(*since, *done, *total)
             ),
             "busy",
         ),
         Phase::Looking {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
             format!(
-                "Looking at photos: {done} of {total} done ({} with text, {} with things, {} failed), since {}",
-                report.with_text,
-                report.with_things,
-                report.failed,
-                relative(*since, now)
+                "Step 3 of 4: looking at photos, {done} of {total} in this pass{}",
+                left(*since, *done, *total)
             ),
             "busy",
         ),
         Phase::Faces {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
-            if everything {
-                format!(
-                    "Looking for faces: {done} of {total} photos done ({} faces, {} failed), since {}",
-                    report.faces,
-                    report.failed,
-                    relative(*since, now)
-                )
-            } else {
-                format!("Looking for faces, since {}", relative(*since, now))
-            },
+            format!(
+                "Step 4 of 4: looking for faces, {done} of {total} photos{}",
+                left(*since, *done, *total)
+            ),
             "busy",
         ),
-        Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
-        Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
+        Phase::Idle { next: Some(n) } => (
+            format!("All steps done; next scan {}", relative(*n, now)),
+            "ok",
+        ),
+        Phase::Idle { next: None } => ("All steps done".to_string(), "ok"),
     };
     let progress = match &s.phase {
         Phase::Transcribing { done, total, .. }
         | Phase::Looking { done, total, .. }
-        | Phase::Faces { done, total, .. }
-            if *total > 0 =>
-        {
-            format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
-        }
+        | Phase::Faces { done, total, .. } => bar(*done, *total),
         _ => String::new(),
     };
     rows.push((
         "Now",
         format!("<span class=\"dot {cls}\"></span>{}{progress}", esc(&state)),
     ));
-    rows.push((
-        "Last scan",
+    // One step: its state (done, running, waiting, off) and its line.
+    let step = |i: usize, name: &str, on: bool, complete: bool, line: String| -> String {
+        let (c, mark) = match (on, current) {
+            (false, _) => ("off", "off"),
+            (true, Some(k)) if k == i => ("run", "now"),
+            (true, Some(k)) if k < i => ("wait", "waits"),
+            (true, _) if complete => ("done", "done"),
+            (true, _) => ("part", "so far"),
+        };
+        format!("<li class=\"{c}\"><b>{name}</b><i>{mark}</i><span>{line}</span></li>")
+    };
+    let mut steps = String::from("<ol class=\"steps\">");
+    steps += &step(
+        0,
+        "Scan",
+        true,
+        s.last_scan.as_ref().is_some_and(|d| !d.failed),
         match &s.last_scan {
             None => "not yet".into(),
-            Some(d) => match () {
-                _ if d.failed => format!(
-                    "failed {}; the server's log says why",
-                    relative(d.ended, now)
-                ),
-                _ if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
-                _ => format!(
-                    "{}, took {}: {} files found, {} indexed, {} skipped{}",
-                    relative(d.ended, now),
-                    span(d.took),
-                    d.found,
-                    d.indexed,
-                    d.skipped,
-                    if d.reconciled {
-                        ""
-                    } else {
-                        " (did not reconcile)"
-                    }
-                ),
-            },
+            Some(d) if d.failed => format!(
+                "failed {}; the server's log says why",
+                relative(d.ended, now)
+            ),
+            Some(d) if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
+            Some(d) => format!(
+                "{}, took {}: {} files found, {} indexed, {} skipped{}",
+                relative(d.ended, now),
+                span(d.took),
+                d.found,
+                d.indexed,
+                d.skipped,
+                if d.reconciled {
+                    ""
+                } else {
+                    " (did not reconcile)"
+                }
+            ),
         },
-    ));
-    rows.push((
+    );
+    steps += &step(
+        1,
         "Transcripts",
-        match (st.transcribe_model.as_deref(), counts) {
-            (Some(m), Some((videos, done, speech))) => format!(
-                "{done} of {videos} videos transcribed, {speech} with speech <span class=\"dim\">(model {})</span>{}",
-                esc(m),
-                match &s.last_pass {
-                    Some(p) => format!(
-                        "<br><span class=\"dim\">last pass ended {}</span>",
-                        relative(p.ended, now)
+        st.transcribe_model.is_some(),
+        counts.is_some_and(|(v, d, _)| d >= v),
+        match (st.transcribe_model.as_deref(), counts, &s.phase) {
+            (Some(m), Some((videos, done, speech)), ph) => {
+                let run = match ph {
+                    Phase::Transcribing { since, done: d, total, report } => format!(
+                        "<br>This pass: {d} of {total} done ({} with speech, {} without, {} failed){}",
+                        report.transcribed,
+                        report.no_speech,
+                        report.failed,
+                        left(*since, *d, *total),
                     ),
-                    None => String::new(),
-                }
-            ),
-            _ => "off (no speech model configured)".into(),
+                    _ => String::new(),
+                };
+                format!(
+                    "{done} of {videos} videos transcribed, {speech} with speech <span class=\"dim\">(model {})</span>{run}",
+                    esc(m)
+                )
+            }
+            _ => "off: no speech model configured".into(),
         },
-    ));
-    rows.push((
-        "Photos looked at",
-        match read_counts {
-            Some((photos, done, with, things)) => format!(
-                "{done} of {photos} photos looked at: {with} with text, {things} with things <span class=\"dim\">({})</span>{}",
-                esc(&st.vision_version),
-                match s.last_read {
-                    Some(t) => format!(
-                        "<br><span class=\"dim\">last pass ended {}</span>",
-                        relative(t, now)
+    );
+    steps += &step(
+        2,
+        "Looking at photos",
+        st.vision_on,
+        read_counts.is_some_and(|(p, d, _, _)| d >= p),
+        match (read_counts, &s.phase) {
+            (Some((photos, done, with, things)), ph) => {
+                let run = match ph {
+                    Phase::Looking {
+                        since,
+                        done: d,
+                        total,
+                        report,
+                    } => format!(
+                        "<br>This pass: {d} of {total} ({} with text, {} with things, {} failed){}",
+                        report.with_text,
+                        report.with_things,
+                        report.failed,
+                        left(*since, *d, *total),
                     ),
-                    None => String::new(),
-                }
-            ),
-            None => "off (no vision models configured)".into(),
+                    _ => String::new(),
+                };
+                format!(
+                    "{done} of {photos} photos looked at{}: {with} with text, {things} with things <span class=\"dim\">({})</span>{run}",
+                    pct(done, photos),
+                    esc(&st.vision_version),
+                )
+            }
+            (None, _) => "off: no vision models configured".into(),
         },
-    ));
+    );
+    let faced = if st.faces_on {
+        let (idx, labels) = (st.index.clone(), viewer.labels.clone());
+        match tokio::task::spawn_blocking(move || idx.faces_counts(&labels, crate::faces::VERSION))
+            .await
+        {
+            Ok(Ok(c)) => Some(c),
+            Ok(Err(e)) => return internal(e),
+            Err(e) => return internal(e),
+        }
+    } else {
+        None
+    };
+    steps += &step(
+        3,
+        "Faces",
+        st.faces_on,
+        faced.is_some_and(|(p, d)| d >= p),
+        match (faced, &s.phase) {
+            (None, _) => "off: the face models are not in the vision directory".into(),
+            (Some((photos, done)), ph) => {
+                let run = match ph {
+                    Phase::Faces {
+                        since,
+                        done: d,
+                        total,
+                        report,
+                    } => format!(
+                        "<br>This pass: {d} of {total}{}{}",
+                        if everything {
+                            format!(" ({} faces, {} failed)", report.faces, report.failed)
+                        } else {
+                            String::new()
+                        },
+                        left(*since, *d, *total),
+                    ),
+                    _ => String::new(),
+                };
+                let waits = if current.is_some_and(|k| k < 3) {
+                    " Starts when every photo has been looked at."
+                } else {
+                    ""
+                };
+                format!(
+                    "{done} of {photos} photos looked at for faces{}.{waits}{run}",
+                    pct(done, photos)
+                )
+            }
+        },
+    );
+    steps += "</ol>";
+    rows.push(("Steps", steps));
     let c = positions;
     rows.push((
         "Positions",
@@ -4948,6 +5054,27 @@ const GROUPS_MAX: usize = 48;
 
 /// GET /people: the named people the viewer has photos of, then groups of
 /// one unnamed person each, biggest first, to be named.
+/// Where the looking for faces stands, for the People page: still waiting
+/// for the photos to be looked at, or under way (REQ-WEB-009).
+fn faces_note(st: &AppState) -> String {
+    use crate::status::Phase;
+    if !st.faces_on {
+        return String::new();
+    }
+    match st.status.snapshot().phase {
+        Phase::Starting | Phase::Scanning { .. } | Phase::Transcribing { .. } => {
+            "<p class=\"note\">Faces are looked for after the scan, the transcripts and the looking at photos. <a href=\"status\">Status</a></p>".to_string()
+        }
+        Phase::Looking { done, total, .. } => format!(
+            "<p class=\"note\">Faces are looked for once every photo has been looked at; that pass is at {done} of {total}. <a href=\"status\">Status</a></p>"
+        ),
+        Phase::Faces { done, total, .. } => format!(
+            "<p class=\"note\">Looking for faces now: {done} of {total} photos. People appear here as they are found. <a href=\"status\">Status</a></p>"
+        ),
+        Phase::Idle { .. } => String::new(),
+    }
+}
+
 async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let (idx, people) = (st.index.clone(), st.people.clone());
     let me = person(&viewer);
@@ -5008,9 +5135,12 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         Err(e) => return internal(e),
     };
     let mut body = String::from("<h1>People</h1>");
+    body += &faces_note(&st);
     if named.is_empty() && groups.is_empty() {
-        body += if st.people.is_empty() {
-            "<p class=\"dim\">No faces yet. With the face models in the vision directory, lichtbild looks for faces after it has looked at the photos.</p>"
+        body += if !st.faces_on {
+            "<p class=\"dim\">No faces: the face models are not in the vision directory.</p>"
+        } else if st.people.is_empty() {
+            "<p class=\"dim\">No faces yet.</p>"
         } else {
             "<p class=\"dim\">No one twice yet in the photos you see.</p>"
         };

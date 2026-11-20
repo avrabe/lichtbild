@@ -1492,6 +1492,35 @@ impl Index {
     }
 
     /// Like `photos_to_look`, for the faces pass.
+    /// Photos in `labels` (one per content) and how many of them were
+    /// looked at for faces with `version`, failures included.
+    pub fn faces_counts(&self, labels: &[String], version: &str) -> Result<(u64, u64)> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let faced = r.open_table(FACED)?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut photos, mut done) = (0, 0);
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.missing
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !labels.contains(&rec.label)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            photos += 1;
+            if faced
+                .get(rec.hash.as_str())?
+                .is_some_and(|v| v.value().split(' ').next() == Some(version))
+            {
+                done += 1;
+            }
+        }
+        Ok((photos, done))
+    }
+
     pub fn photos_for_faces(&self, version: &str) -> Result<Vec<(u64, Record)>> {
         self.photos_not_done(FACED, version)
     }

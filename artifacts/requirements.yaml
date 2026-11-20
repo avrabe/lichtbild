@@ -474,7 +474,11 @@ artifacts:
       and the version and uptime. It refreshes itself and shows counts and
       times only, never paths, file names or error text; transcript counts
       cover the viewer's libraries, and totals over all libraries are shown
-      only to someone who may see all of them.
+      only to someone who may see all of them. Owner report 2026-11-20
+      (v0.9.0): the work is shown as four steps in order (scan,
+      transcripts, looking at photos, faces), each done, running, waiting
+      or off, with its totals, this pass's progress and the time left; the
+      People page says when faces are still waiting for the look pass.
     fields:
       priority: should
       category: functional

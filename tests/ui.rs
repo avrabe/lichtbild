@@ -213,6 +213,74 @@ async fn the_status_page_shows_scan_and_transcription() {
     assert!(list.contains("the server's log says why"), "{list}");
 }
 
+// The steps say what runs now, what is done and what waits: faces wait
+// for the photos to be looked at, with time left, and the People page says
+// so instead of "no faces".
+// rivet: verifies REQ-WEB-009
+#[tokio::test]
+async fn the_status_page_shows_the_steps_and_what_waits() {
+    let mut e = env();
+    e.state.vision_on = true;
+    e.state.faces_on = true;
+    let st = e.state.status.clone();
+    let app = web::router(e.state.clone());
+    st.set_phase(Phase::Looking {
+        since: std::time::SystemTime::now() - std::time::Duration::from_secs(41 * 60),
+        done: 856,
+        total: 14635,
+        report: Default::default(),
+    });
+    let (_, list) = get(&app, "/status", true).await;
+    assert!(
+        list.contains("Step 3 of 4: looking at photos, 856 of 14635 in this pass, about 10 h 5"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"run\"><b>Looking at photos</b><i>now</i>"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"wait\"><b>Faces</b><i>waits</i>"),
+        "{list}"
+    );
+    assert!(
+        list.contains("Starts when every photo has been looked at."),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"done\"><b>Transcripts</b>")
+            || list.contains("<li class=\"off\"><b>Transcripts</b>"),
+        "{list}"
+    );
+    let (_, people) = get(&app, "/people", false).await;
+    assert!(
+        people.contains("Faces are looked for once every photo has been looked at; that pass is at 856 of 14635."),
+        "{people}"
+    );
+    assert!(!people.contains("not in the vision directory"), "{people}");
+
+    st.set_phase(Phase::Faces {
+        since: std::time::SystemTime::now(),
+        done: 10,
+        total: 100,
+        report: Default::default(),
+    });
+    let (_, list) = get(&app, "/status", true).await;
+    assert!(
+        list.contains("Step 4 of 4: looking for faces, 10 of 100 photos"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"run\"><b>Faces</b><i>now</i>"),
+        "{list}"
+    );
+    let (_, people) = get(&app, "/people", false).await;
+    assert!(
+        people.contains("Looking for faces now: 10 of 100 photos."),
+        "{people}"
+    );
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

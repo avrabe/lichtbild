@@ -1006,3 +1006,20 @@ ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4p
 .mapslider output { grid-column: 1 / -1; color: var(--ink); font-variant-numeric: tabular-nums; }
 .mapwhen a.countrylink { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
 .mapwhen a.countrylink:hover { color: var(--shu); border-color: var(--shu); }
+
+/* Status (REQ-WEB-009): the four steps, one after another. */
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+ol.steps li { display: grid; grid-template-columns: 11em 5.5em 1fr; gap: 4px 10px; align-items: baseline; padding: 8px 10px; border-radius: 8px; background: var(--paper-2); }
+ol.steps li b { font-weight: 600; }
+ol.steps li i { font: 600 11px/1.6 var(--sans); letter-spacing: .08em; text-transform: uppercase; font-style: normal; text-align: center; border-radius: 999px; padding: 0 8px; }
+ol.steps li.done i { background: #2f7d4f; color: #fff; }
+ol.steps li.run i { background: var(--shu); color: #fff8ee; }
+ol.steps li.run { box-shadow: inset 3px 0 0 var(--shu); }
+ol.steps li.wait i, ol.steps li.part i { border: 1px solid var(--ink-faint); color: var(--ink-faint); }
+ol.steps li.off { opacity: .6; }
+ol.steps li.off i { color: var(--ink-faint); }
+ol.steps li span { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  ol.steps li { grid-template-columns: 1fr auto; }
+  ol.steps li span { grid-column: 1 / -1; }
+}

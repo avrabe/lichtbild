@@ -1634,3 +1634,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MAP-003
+
+  - id: VER-116
+    type: verification
+    title: The status page shows the four steps, what runs and what waits, and the People page says faces wait
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_status_page_shows_the_steps_and_what_waits"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_status_page_shows_the_steps_and_what_waits"
+    links:
+      - type: verifies
+        target: REQ-WEB-009
