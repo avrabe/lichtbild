@@ -833,6 +833,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-SEARCH-004
+    type: requirement
+    title: Pictures are found by season and holiday
+    status: implemented
+    release: v0.7.0
+    description: >
+      Besides year, month and day, search knows each item's season
+      (Frühling/spring March to May, Sommer/summer June to August,
+      Herbst/autumn September to November, Winter December to February) and
+      holiday (Weihnachten/Christmas 24 to 26 December, Silvester and
+      Neujahr, Ostern/Easter from Good Friday to Easter Monday), in German
+      and English; the search box suggests them with their year.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

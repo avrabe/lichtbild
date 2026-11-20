@@ -1315,3 +1315,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-014
+
+  - id: VER-094
+    type: verification
+    title: Season and holiday search
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "pictures_are_found_by_season_and_holiday"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui pictures_are_found_by_season_and_holiday"
+        - run: "cargo test --lib search::tests::dates_are_found_by_season_and_holiday"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-004

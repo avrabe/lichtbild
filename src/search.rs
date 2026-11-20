@@ -248,6 +248,83 @@ impl Vocab {
     }
 }
 
+/// The season (meteorological) of month `m`, German and English.
+fn season(m: u32) -> Option<(&'static str, &'static str)> {
+    match m {
+        3..=5 => Some(("Frühling", "spring")),
+        6..=8 => Some(("Sommer", "summer")),
+        9..=11 => Some(("Herbst", "autumn fall")),
+        12 | 1 | 2 => Some(("Winter", "winter")),
+        _ => None,
+    }
+}
+
+/// Easter Sunday of year `y` (Gregorian, the anonymous algorithm).
+fn easter(y: i32) -> Option<chrono::NaiveDate> {
+    let a = y % 19;
+    let b = y / 100;
+    let c = y % 100;
+    let d = b / 4;
+    let e = b % 4;
+    let f = (b + 8) / 25;
+    let g = (b - f + 1) / 3;
+    let h = (19 * a + b - d - g + 15) % 30;
+    let i = c / 4;
+    let k = c % 4;
+    let l = (32 + 2 * e + 2 * i - h - k) % 7;
+    let m = (a + 11 * h + 22 * l) / 451;
+    let month = (h + l - 7 * m + 114) / 31;
+    let day = (h + l - 7 * m + 114) % 31 + 1;
+    chrono::NaiveDate::from_ymd_opt(y, month as u32, day as u32)
+}
+
+/// The holiday a day is part of, German and English: Christmas (24 to 26
+/// December), New Year's Eve and Day, Easter (Good Friday to Easter
+/// Monday).
+fn holiday(day: chrono::NaiveDate) -> Option<(&'static str, &'static str)> {
+    use chrono::Datelike;
+    match (day.month(), day.day()) {
+        (12, 24..=26) => return Some(("Weihnachten", "Christmas")),
+        (12, 31) => return Some(("Silvester", "New Year's Eve")),
+        (1, 1) => return Some(("Neujahr", "New Year")),
+        _ => {}
+    }
+    let e = easter(day.year())?;
+    let off = (day - e).num_days();
+    (-2..=1).contains(&off).then_some(("Ostern", "Easter"))
+}
+
+/// The words of a date ("2021-07-14T10:00:00"): year, month, day, season
+/// and holiday, in German and English.
+pub fn date_words(taken: &str) -> Vec<String> {
+    let mut words = Vec::new();
+    let (Some(y), Some(m)) = (
+        taken
+            .get(..4)
+            .filter(|y| y.bytes().all(|b| b.is_ascii_digit())),
+        taken.get(5..7).and_then(|m| m.parse::<u32>().ok()),
+    ) else {
+        return words;
+    };
+    words.push(y.to_string());
+    if let Some((de, en)) = MONTHS.get((m as usize).wrapping_sub(1)) {
+        words.push(format!("{de} {en}"));
+    }
+    if let Some((de, en)) = season(m) {
+        words.push(format!("{de} {en}"));
+    }
+    if let Some(day) = taken.get(..10) {
+        words.push(day.to_string());
+        if let Some((de, en)) = chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d")
+            .ok()
+            .and_then(holiday)
+        {
+            words.push(format!("{de} {en}"));
+        }
+    }
+    words
+}
+
 /// Words describing an item without its content: names, place, date.
 /// `at` is the item's position: recorded, set by hand or estimated.
 pub fn item_words(
@@ -264,19 +341,7 @@ pub fn item_words(
     if let Some(name) = place_name(at, places) {
         words.push(name);
     }
-    let d = &rec.taken_local;
-    if let (Some(y), Some(m)) = (
-        d.get(..4),
-        d.get(5..7).and_then(|m| m.parse::<usize>().ok()),
-    ) {
-        words.push(y.to_string());
-        if let Some((de, en)) = MONTHS.get(m.wrapping_sub(1)) {
-            words.push(format!("{de} {en}"));
-        }
-        if let Some(day) = d.get(..10) {
-            words.push(day.to_string());
-        }
-    }
+    words.extend(date_words(&rec.taken_local));
     if rec.video.is_some() {
         words.push("video".into());
     }
@@ -323,6 +388,16 @@ impl Search {
                 ) {
                     vocab.add(Kind::Date, y, "", "", label);
                     if let Some((de, en)) = MONTHS.get(m.wrapping_sub(1)) {
+                        vocab.add(Kind::Date, &format!("{de} {y}"), en, "", label);
+                    }
+                    if let Some((de, en)) = season(m as u32) {
+                        vocab.add(Kind::Date, &format!("{de} {y}"), en, "", label);
+                    }
+                    if let Some((de, en)) = d
+                        .get(..10)
+                        .and_then(|day| chrono::NaiveDate::parse_from_str(day, "%Y-%m-%d").ok())
+                        .and_then(holiday)
+                    {
                         vocab.add(Kind::Date, &format!("{de} {y}"), en, "", label);
                     }
                 }
@@ -628,6 +703,32 @@ mod tests {
         assert!(narrow("x", &held[..3]).is_empty());
         let same = vec![vec![t(Kind::Date, "2021")]; 5];
         assert!(narrow("x", &same).is_empty());
+    }
+
+    #[test]
+    fn dates_are_found_by_season_and_holiday() {
+        let w = date_words("2021-07-14T10:00:00").join(" ");
+        assert!(w.contains("2021") && w.contains("Juli July") && w.contains("Sommer summer"));
+        assert!(!w.contains("Ostern"), "{w}");
+        assert!(date_words("2020-12-25T18:00:00")
+            .join(" ")
+            .contains("Weihnachten Christmas"));
+        assert!(date_words("2021-01-31T08:00:00")
+            .join(" ")
+            .contains("Winter winter"));
+        // Easter 2024 was on 31 March: Good Friday to Easter Monday.
+        assert_eq!(easter(2024), chrono::NaiveDate::from_ymd_opt(2024, 3, 31));
+        assert_eq!(easter(2025), chrono::NaiveDate::from_ymd_opt(2025, 4, 20));
+        assert!(date_words("2024-03-29T12:00:00")
+            .join(" ")
+            .contains("Ostern Easter"));
+        assert!(date_words("2024-04-01T12:00:00")
+            .join(" ")
+            .contains("Ostern Easter"));
+        assert!(!date_words("2024-04-02T12:00:00")
+            .join(" ")
+            .contains("Ostern"));
+        assert!(date_words("unknown").is_empty());
     }
 
     #[test]

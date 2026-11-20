@@ -303,3 +303,5 @@ artifacts:
         target: REQ-SEARCH-003
       - type: satisfies
         target: REQ-WEB-014
+      - type: satisfies
+        target: REQ-SEARCH-004

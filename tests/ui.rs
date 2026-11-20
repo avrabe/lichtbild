@@ -455,3 +455,21 @@ async fn search_results_offer_terms_that_narrow_them_down() {
     let (_, page) = get(&app, "/search?q=img%202020", false).await;
     assert!(!page.contains("search?q=img%202020%202020"), "{page}");
 }
+
+// Dates are found by season and holiday, in German and English, and the
+// box suggests them.
+// rivet: verifies REQ-SEARCH-004
+#[tokio::test]
+async fn pictures_are_found_by_season_and_holiday() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    for q in ["winter", "Winter%202020"] {
+        let (_, hits) = get(&app, &format!("/search?q={q}"), false).await;
+        assert!(hits.contains("2020-01-02 03:04:05"), "{q}: {hits}");
+        assert!(!hits.contains("2019-07-04"), "{q}: {hits}");
+    }
+    let (_, hits) = get(&app, "/search?q=sommer", false).await;
+    assert!(hits.contains("2019-07-04"), "{hits}");
+    let (_, l) = get(&app, "/suggest?q=som", true).await;
+    assert!(l.contains(r#"href="search?q=Sommer%202019""#), "{l}");
+}
