@@ -4,9 +4,10 @@ A self-hosted photo and video library for a household, as one Rust binary.
 
 lichtbild indexes photo folders read-only, in place, without copying or moving them. It serves:
 
-- a timeline per person, or merged;
-- a world map of where photos and videos were taken;
-- later, face recognition and similar search.
+- a timeline per person, or merged, with bursts folded into one tile and a slideshow;
+- a world map of where photos and videos were taken, and trips found from it;
+- one search box over what was said in videos, the text in pictures, the things in them (Katze, Fahrrad), places, dates, seasons and holidays, or a description in your own words, with suggestions as you type;
+- later, face recognition.
 
 Everything runs on the home server. The map tiles come from a local file, and no photo, place or face leaves the house.
 
@@ -24,6 +25,10 @@ lichtbild scan     # one scan and its report, only while no server runs; exit 2 
 The index is a redb file in the data directory, owned by one process: `serve` scans in a low-priority background thread and logs the report; `scan` refuses while a server holds the index.
 
 All settings are in `lichtbild --help` and [config.example.toml](config.example.toml). The data directory must exist (lichtbild creates nothing at startup), and lichtbild refuses to start when it and a root overlap. Behind a reverse proxy, set `LICHTBILD_ALLOWED_HOSTS` to the public host name: requests for any other host get 421.
+
+### Looking at photos
+
+With `LICHTBILD_VISION_DIR` set, every photo is looked at once in a background child process after the scan: the text in it (PaddleOCR), the things in it (RT-DETRv2, 80 kinds) and a picture vector for search by meaning and look-alikes (SigLIP, multilingual). `scripts/fetch-vision-models.sh <dir>` fetches the seven pinned files (about 410 MB) and picks compact int8 models where the CPU runs them correctly, float32 elsewhere; lichtbild refuses a set that does not match the CPU. On a Raspberry Pi 5 a photo takes about 2 s. Searching by meaning loads a text encoder of about 0.6 GB, dropped again after 10 idle minutes.
 
 ## Verification
 
