@@ -63,6 +63,28 @@ const ALBUM_ITEMS: TableDefinition<(u64, u64), ()> = TableDefinition::new("album
 /// The last album id given out; ids are never given out twice, so an old
 /// link to a deleted album never opens a newer one.
 const ALBUM_SEQ: TableDefinition<&str, u64> = TableDefinition::new("album_seq");
+/// Faces in pictures (REQ-FACE-002): content hash -> JSON `[faces::Face]`.
+const FACES: TableDefinition<&str, &[u8]> = TableDefinition::new("faces");
+/// Which pictures were looked at for faces: content hash -> faces::VERSION,
+/// or "<version> failed (<reason>)".
+const FACED: TableDefinition<&str, &str> = TableDefinition::new("faced");
+/// Person id -> JSON `Person` (REQ-FACE-003): the names given to faces,
+/// one set for the whole household.
+const PEOPLE: TableDefinition<u64, &[u8]> = TableDefinition::new("people");
+/// The last person id given out; never given out twice.
+const PEOPLE_SEQ: TableDefinition<&str, u64> = TableDefinition::new("people_seq");
+/// (content hash, face number) -> person id: faces someone named.
+const FACE_PERSON: TableDefinition<(&str, u32), u64> = TableDefinition::new("face_person");
+/// (content hash, face number, person id) -> (): "this is not them".
+const FACE_NOT: TableDefinition<(&str, u32, u64), ()> = TableDefinition::new("face_not");
+/// Corrections of things found (REQ-FIX-001): content hash -> JSON
+/// `[fixes::ThingFix]`.
+const THING_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("thing_fixes");
+/// Kinds never in the house (REQ-FIX-001): kind -> JSON `fixes::Mark`.
+const KIND_OFF: TableDefinition<u8, &[u8]> = TableDefinition::new("kind_off");
+/// Corrections of text read (REQ-FIX-002): content hash -> JSON
+/// `[fixes::TextFix]`.
+const TEXT_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("text_fixes");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -138,6 +160,15 @@ pub struct Item {
     pub copies: usize,
     /// The viewer's favourite.
     pub fav: bool,
+}
+
+/// A name given to faces (REQ-FACE-003), shared in the household.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Person {
+    pub name: String,
+    /// Who gave the name.
+    pub by: String,
+    pub created: u64,
 }
 
 /// An album (REQ-WEB-017): whose it is, its name, when it was made.
@@ -222,6 +253,15 @@ impl Index {
             w.open_table(OBJECTS)?;
             w.open_table(VECTORS)?;
             w.open_table(LOOKED)?;
+            w.open_table(FACES)?;
+            w.open_table(FACED)?;
+            w.open_table(PEOPLE)?;
+            w.open_table(PEOPLE_SEQ)?;
+            w.open_table(FACE_PERSON)?;
+            w.open_table(FACE_NOT)?;
+            w.open_table(THING_FIXES)?;
+            w.open_table(KIND_OFF)?;
+            w.open_table(TEXT_FIXES)?;
         }
         w.commit()?;
         Ok(Index {
@@ -896,6 +936,14 @@ impl Index {
 
     /// The text read from a picture, by content hash.
     pub fn text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
+        let fixes = self.text_fixes(hash)?;
+        Ok(self
+            .raw_text(hash)?
+            .map(|t| crate::fixes::apply_text(t, &fixes)))
+    }
+
+    /// The text as it was read, without the house's corrections.
+    pub fn raw_text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
         let r = self.db.begin_read()?;
         let t = r.open_table(TEXTS)?;
         match t.get(hash)? {
@@ -904,6 +952,65 @@ impl Index {
             )),
             None => Ok(None),
         }
+    }
+
+    /// The corrections of the text read in a photo.
+    pub fn text_fixes(&self, hash: &str) -> Result<Vec<crate::fixes::TextFix>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXT_FIXES)?;
+        Ok(match t.get(hash)? {
+            Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+            None => Vec::new(),
+        })
+    }
+
+    /// Every correction of text: (content hash, corrections).
+    pub fn all_text_fixes(&self) -> Result<Vec<(String, Vec<crate::fixes::TextFix>)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXT_FIXES)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push((
+                k.value().to_string(),
+                serde_json::from_slice(v.value()).unwrap_or_default(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Put a correction of a line, replacing an earlier one of that line;
+    /// with `undo`, the correction number `undo` is taken out instead.
+    pub fn fix_text(
+        &self,
+        hash: &str,
+        fix: Option<crate::fixes::TextFix>,
+        undo: Option<usize>,
+    ) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(TEXT_FIXES)?;
+            let mut v: Vec<crate::fixes::TextFix> = match t.get(hash)? {
+                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            if let Some(i) = undo.filter(|i| *i < v.len()) {
+                v.remove(i);
+            }
+            if let Some(f) = fix {
+                v.retain(|o| {
+                    crate::fixes::text_about(std::slice::from_ref(o), f.bbox, &f.was).is_none()
+                });
+                v.push(f);
+            }
+            if v.is_empty() {
+                t.remove(hash)?;
+            } else {
+                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
     }
 
     pub fn set_text(&self, hash: &str, text: &crate::ocr::Text) -> Result<()> {
@@ -946,14 +1053,324 @@ impl Index {
         Ok(())
     }
 
-    /// The things found in a picture, by content hash.
+    /// Store the faces found in a picture.
+    pub fn set_faces(&self, hash: &str, version: &str, faces: &[crate::faces::Face]) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(FACES)?
+                .insert(hash, serde_json::to_vec(faces)?.as_slice())?;
+            w.open_table(FACED)?.insert(hash, version)?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Mark a picture the faces child failed on.
+    pub fn set_faces_failed(&self, hash: &str, version: &str, reason: &str) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mark = format!("{version} failed ({reason})");
+            w.open_table(FACED)?.insert(hash, mark.as_str())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The faces found in a picture, by content hash.
+    pub fn faces(&self, hash: &str) -> Result<Vec<crate::faces::Face>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(FACES)?;
+        match t.get(hash)? {
+            Some(v) => Ok(serde_json::from_slice(v.value()).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// Every stored face: (content hash, faces).
+    pub fn all_faces(&self) -> Result<Vec<(String, Vec<crate::faces::Face>)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(FACES)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(f) = serde_json::from_slice::<Vec<crate::faces::Face>>(v.value()) {
+                if !f.is_empty() {
+                    out.push((k.value().to_string(), f));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Give a new name to the household's people; returns its id.
+    pub fn create_person(&self, name: &str, by: &str, now: u64) -> Result<u64> {
+        let w = self.db.begin_write()?;
+        let id;
+        {
+            let mut seq = w.open_table(PEOPLE_SEQ)?;
+            let mut t = w.open_table(PEOPLE)?;
+            let last = seq.get("people")?.map_or(0, |v| v.value());
+            id = last.max(t.last()?.map_or(0, |(k, _)| k.value())) + 1;
+            seq.insert("people", id)?;
+            let p = Person {
+                name: name.to_string(),
+                by: by.to_string(),
+                created: now,
+            };
+            t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(id)
+    }
+
+    /// Every named person, by id.
+    pub fn people(&self) -> Result<Vec<(u64, Person)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(PEOPLE)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(p) = serde_json::from_slice(v.value()) {
+                out.push((k.value(), p));
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn person(&self, id: u64) -> Result<Option<Person>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(PEOPLE)?;
+        Ok(match t.get(id)? {
+            Some(v) => serde_json::from_slice(v.value()).ok(),
+            None => None,
+        })
+    }
+
+    pub fn rename_person(&self, id: u64, name: &str) -> Result<bool> {
+        let w = self.db.begin_write()?;
+        let found;
+        {
+            let mut t = w.open_table(PEOPLE)?;
+            let p: Option<Person> = t
+                .get(id)?
+                .and_then(|v| serde_json::from_slice(v.value()).ok());
+            found = p.is_some();
+            if let Some(mut p) = p {
+                p.name = name.to_string();
+                t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(found)
+    }
+
+    /// Name faces: each becomes `person`'s, and an earlier "not them" for
+    /// it is forgotten.
+    pub fn name_faces(&self, faces: &[(String, u32)], person: u64) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut named = w.open_table(FACE_PERSON)?;
+            let mut not = w.open_table(FACE_NOT)?;
+            for (h, i) in faces {
+                named.insert((h.as_str(), *i), person)?;
+                not.remove((h.as_str(), *i, person))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// "This face is not `person`": its name is taken off, and it is never
+    /// given that name again by itself.
+    pub fn not_person(&self, hash: &str, face: u32, person: u64) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut named = w.open_table(FACE_PERSON)?;
+            if named.get((hash, face))?.map(|v| v.value()) == Some(person) {
+                named.remove((hash, face))?;
+            }
+            w.open_table(FACE_NOT)?.insert((hash, face, person), ())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Put `from`'s faces under `into` and drop the name `from`.
+    pub fn merge_people(&self, from: u64, into: u64) -> Result<()> {
+        if from == into {
+            return Ok(());
+        }
+        let w = self.db.begin_write()?;
+        {
+            let mut named = w.open_table(FACE_PERSON)?;
+            let moved: Vec<(String, u32)> = named
+                .iter()?
+                .filter_map(|e| e.ok())
+                .filter(|(_, v)| v.value() == from)
+                .map(|(k, _)| (k.value().0.to_string(), k.value().1))
+                .collect();
+            for (h, i) in &moved {
+                named.insert((h.as_str(), *i), into)?;
+            }
+            let mut not = w.open_table(FACE_NOT)?;
+            let nots: Vec<(String, u32)> = not
+                .iter()?
+                .filter_map(|e| e.ok())
+                .filter(|(k, _)| k.value().2 == from)
+                .map(|(k, _)| (k.value().0.to_string(), k.value().1))
+                .collect();
+            for (h, i) in &nots {
+                not.remove((h.as_str(), *i, from))?;
+                if !moved.iter().any(|(mh, mi)| mh == h && mi == i) {
+                    not.insert((h.as_str(), *i, into), ())?;
+                }
+            }
+            w.open_table(PEOPLE)?.remove(from)?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Drop a name: its faces are unnamed again.
+    pub fn delete_person(&self, id: u64) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut named = w.open_table(FACE_PERSON)?;
+            let gone: Vec<(String, u32)> = named
+                .iter()?
+                .filter_map(|e| e.ok())
+                .filter(|(_, v)| v.value() == id)
+                .map(|(k, _)| (k.value().0.to_string(), k.value().1))
+                .collect();
+            for (h, i) in &gone {
+                named.remove((h.as_str(), *i))?;
+            }
+            let mut not = w.open_table(FACE_NOT)?;
+            let gone: Vec<(String, u32)> = not
+                .iter()?
+                .filter_map(|e| e.ok())
+                .filter(|(k, _)| k.value().2 == id)
+                .map(|(k, _)| (k.value().0.to_string(), k.value().1))
+                .collect();
+            for (h, i) in &gone {
+                not.remove((h.as_str(), *i, id))?;
+            }
+            w.open_table(PEOPLE)?.remove(id)?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Every named face: ((content hash, face number), person id).
+    pub fn named_faces(&self) -> Result<Vec<((String, u32), u64)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(FACE_PERSON)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push(((k.value().0.to_string(), k.value().1), v.value()));
+        }
+        Ok(out)
+    }
+
+    /// Every "not them": (content hash, face number, person id).
+    pub fn not_faces(&self) -> Result<Vec<(String, u32, u64)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(FACE_NOT)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, _) = e?;
+            let (h, i, p) = k.value();
+            out.push((h.to_string(), i, p));
+        }
+        Ok(out)
+    }
+
+    /// The things in a picture as the house says they are (REQ-FIX-001).
     pub fn objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
+        Ok(self.fixes()?.apply(hash, self.raw_objects(hash)?))
+    }
+
+    /// The things the detector found in a picture, by content hash.
+    pub fn raw_objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
         let r = self.db.begin_read()?;
         let t = r.open_table(OBJECTS)?;
         match t.get(hash)? {
             Some(v) => Ok(serde_json::from_slice(v.value()).unwrap_or_default()),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Every correction of things and the kinds never in the house.
+    pub fn fixes(&self) -> Result<crate::fixes::Fixes> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(THING_FIXES)?;
+        let mut things = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            things.insert(
+                k.value().to_string(),
+                serde_json::from_slice(v.value()).unwrap_or_default(),
+            );
+        }
+        let t = r.open_table(KIND_OFF)?;
+        let mut off = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(m) = serde_json::from_slice(v.value()) {
+                off.insert(k.value(), m);
+            }
+        }
+        Ok(crate::fixes::Fixes::new(things, off))
+    }
+
+    /// Put a word about a thing found, replacing an earlier word about the
+    /// same find; with `undo`, the word number `undo` is taken out instead.
+    pub fn fix_thing(
+        &self,
+        hash: &str,
+        fix: Option<crate::fixes::ThingFix>,
+        undo: Option<usize>,
+    ) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(THING_FIXES)?;
+            let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
+                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            if let Some(i) = undo.filter(|i| *i < v.len()) {
+                v.remove(i);
+            }
+            if let Some(f) = fix {
+                crate::fixes::put(&mut v, f);
+            }
+            if v.is_empty() {
+                t.remove(hash)?;
+            } else {
+                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Mark a kind as never in the house, or take the mark off.
+    pub fn set_kind_off(&self, kind: u8, mark: Option<&crate::fixes::Mark>) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(KIND_OFF)?;
+            match mark {
+                Some(m) => {
+                    t.insert(kind, serde_json::to_vec(m)?.as_slice())?;
+                }
+                None => {
+                    t.remove(kind)?;
+                }
+            }
+        }
+        w.commit()?;
+        Ok(())
     }
 
     /// The things found in the live photos of `labels` that `keep` lets
@@ -967,6 +1384,7 @@ impl Index {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
         let objects = r.open_table(OBJECTS)?;
+        let fixes = self.fixes()?;
         let mut seen = std::collections::HashSet::new();
         // kind -> (photos, best score, its id)
         let mut by: HashMap<u8, (u64, f32, u64)> = HashMap::new();
@@ -985,8 +1403,10 @@ impl Index {
             let Some(raw) = objects.get(rec.hash.as_str())? else {
                 continue;
             };
-            let found: Vec<crate::objects::Object> =
-                serde_json::from_slice(raw.value()).unwrap_or_default();
+            let found = fixes.apply(
+                &rec.hash,
+                serde_json::from_slice(raw.value()).unwrap_or_default(),
+            );
             let mut kinds: Vec<(u8, f32)> = Vec::new();
             for o in found {
                 match kinds.iter_mut().find(|(k, _)| *k == o.kind) {
@@ -1026,9 +1446,22 @@ impl Index {
     /// Live photos (not videos) with a thumbnail whose content was not
     /// looked at with `version` yet, newest first: (id, record).
     pub fn photos_to_look(&self, version: &str) -> Result<Vec<(u64, Record)>> {
+        self.photos_not_done(LOOKED, version)
+    }
+
+    /// Like `photos_to_look`, for the faces pass.
+    pub fn photos_for_faces(&self, version: &str) -> Result<Vec<(u64, Record)>> {
+        self.photos_not_done(FACED, version)
+    }
+
+    fn photos_not_done(
+        &self,
+        done: TableDefinition<&str, &str>,
+        version: &str,
+    ) -> Result<Vec<(u64, Record)>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
-        let t = r.open_table(LOOKED)?;
+        let t = r.open_table(done)?;
         let mut out = Vec::new();
         let mut seen = std::collections::HashSet::new();
         for e in items.iter()? {

@@ -74,6 +74,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
+        // Internal: find the faces in one picture in a separate, limited
+        // process (DD-025).
+        ["faces", rest @ ..] => match lichtbild::faces::child_main(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
@@ -160,15 +166,7 @@ fn run_serve() -> Result<ExitCode> {
     let state = web::AppState::new(&cfg, idx.clone())
         .with_places(places)
         .with_auth(auth);
-    spawn_scanner(
-        cfg.clone(),
-        idx,
-        state.search.clone(),
-        state.dups.clone(),
-        state.places.clone(),
-        state.status.clone(),
-        state.space.clone(),
-    );
+    spawn_scanner(cfg.clone(), idx, &state);
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
         let app = web::router(state);
@@ -187,15 +185,18 @@ fn run_serve() -> Result<ExitCode> {
 /// Scan in one background thread: at start, then every interval. The thread
 /// lowers its own priority (on Linux nice and I/O priority are per thread,
 /// and the scan's workers inherit them), so serving stays responsive.
-fn spawn_scanner(
-    cfg: Config,
-    idx: Arc<Index>,
-    search: Arc<lichtbild::search::Search>,
-    dups: Arc<lichtbild::dups::Dups>,
-    places: Option<Arc<lichtbild::places::Places>>,
-    status: Arc<lichtbild::status::Status>,
-    space: Arc<lichtbild::embed::Space>,
-) {
+/// How often a long look pass makes what it found so far searchable.
+const REFRESH: std::time::Duration = std::time::Duration::from_secs(15 * 60);
+
+fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
+    let (search, dups, places, status, space, people) = (
+        state.search.clone(),
+        state.dups.clone(),
+        state.places.clone(),
+        state.status.clone(),
+        state.space.clone(),
+        state.people.clone(),
+    );
     use lichtbild::status::{Phase, ScanDone};
     use std::time::SystemTime;
     std::thread::spawn(move || {
@@ -233,6 +234,11 @@ fn spawn_scanner(
         if let Err(e) = space.rebuild(&idx) {
             tracing::error!("picture vectors failed: {e:#}");
         }
+        let regroup_faces = |when: &str| match people.rebuild(&idx) {
+            Ok(n) => tracing::info!("faces {when}: {n}"),
+            Err(e) => tracing::error!("faces {when} failed: {e:#}"),
+        };
+        regroup_faces("at start");
         loop {
             let since = SystemTime::now();
             status.set_phase(Phase::Scanning { since });
@@ -300,13 +306,24 @@ fn spawn_scanner(
             if cfg.vision_dir.is_some() {
                 let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
                 let since = SystemTime::now();
+                // What was found so far is searchable while the pass goes
+                // on (a long first pass takes many hours): the search index
+                // and the picture vectors are rebuilt every REFRESH.
+                let refreshed = std::cell::Cell::new(std::time::Instant::now());
                 let progress = |done: u64, total: u64, rep: &lichtbild::vision::PassReport| {
                     status.set_phase(Phase::Looking {
                         since,
                         done,
                         total,
                         report: rep.clone(),
-                    })
+                    });
+                    if refreshed.get().elapsed() >= REFRESH && done < total {
+                        refreshed.set(std::time::Instant::now());
+                        if let Err(e) = space.rebuild(&idx) {
+                            tracing::error!("picture vectors failed: {e:#}");
+                        }
+                        rebuild("while looking");
+                    }
                 };
                 progress(0, 0, &Default::default());
                 match std::env::current_exe()
@@ -325,6 +342,34 @@ fn spawn_scanner(
                     Err(e) => tracing::error!("picture vectors failed: {e:#}"),
                 }
                 rebuild("after looking");
+                // Faces (DD-025), after the look pass, until the next scan.
+                let since = SystemTime::now();
+                let refreshed = std::cell::Cell::new(std::time::Instant::now());
+                let progress = |done: u64, total: u64, rep: &lichtbild::faces::PassReport| {
+                    status.set_phase(Phase::Faces {
+                        since,
+                        done,
+                        total,
+                        report: rep.clone(),
+                    });
+                    // Faces found so far, grouped, while the pass goes on.
+                    if refreshed.get().elapsed() >= REFRESH * 2 && done < total {
+                        refreshed.set(std::time::Instant::now());
+                        regroup_faces("while looking for faces");
+                    }
+                };
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| {
+                        lichtbild::faces::run_pass(&cfg, &idx, &exe, deadline, &progress)
+                    }) {
+                    Ok(rep) if rep.looked + rep.failed > 0 => {
+                        tracing::info!("{}", rep.to_text());
+                        regroup_faces("after the faces pass");
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("faces pass failed: {e:#}"),
+                }
             }
             if cfg.scan_interval_hours == 0 {
                 status.set_phase(Phase::Idle { next: None });

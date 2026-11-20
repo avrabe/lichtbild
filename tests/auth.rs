@@ -170,11 +170,18 @@ struct Env {
     mock: Shared,
     idx: Arc<Index>,
     auth: Arc<Auth>,
+    people: Arc<lichtbild::people::People>,
+    search: Arc<lichtbild::search::Search>,
 }
 
 /// p1 belongs to subject user-1 (its email alone does not sign in); p2 to
 /// the verified email two@example.test, and p2 may also see p1.
 async fn env(public_url: &str) -> Env {
+    env_with(public_url, false).await
+}
+
+/// `env`, with the looking at photos switched on or off.
+async fn env_with(public_url: &str, vision: bool) -> Env {
     let mock = mock_provider().await;
     let fx = fixture();
     let cfg = config(&fx, &fx.data);
@@ -184,9 +191,12 @@ async fn env(public_url: &str) -> Env {
     scan::run(&cfg, &idx, &Options::default()).unwrap();
     let issuer = mock.lock().unwrap().issuer.clone();
     let auth = make_auth(&issuer, &secret, public_url, true).with_store(idx.clone());
-    let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    let mut state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    state.vision_on = vision;
     state.search.rebuild(&idx, None).unwrap();
     let auth = state.auth.clone().unwrap();
+    let people = state.people.clone();
+    let search = state.search.clone();
     let app = web::router(state);
     Env {
         _fx: fx,
@@ -194,6 +204,8 @@ async fn env(public_url: &str) -> Env {
         mock,
         idx,
         auth,
+        people,
+        search,
     }
 }
 
@@ -420,6 +432,8 @@ async fn every_route_needs_a_session_except_health_static_and_login() {
         format!("/original/{id}"),
         format!("/preview/{id}"),
         "/t/nobody".into(),
+        "/corrections".into(),
+        "/corrections.jsonl".into(),
     ];
     for uri in &routes {
         let r = req(&e.app, "GET", uri, None, false).await;
@@ -1637,4 +1651,558 @@ async fn a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
     assert!(!list.body.contains("Ferien"));
+}
+
+/// A face vector pointing mostly along `d`, a little along `e`.
+fn face_vec(d: usize, e: usize) -> Vec<i8> {
+    let mut v = vec![0i8; lichtbild::faces::DIM];
+    v[d] = 100;
+    v[e] = 25;
+    v
+}
+
+fn one_face(v: Vec<i8>) -> Vec<lichtbild::faces::Face> {
+    vec![lichtbild::faces::Face {
+        b: [0.3, 0.2, 0.2, 0.25],
+        score: 0.95,
+        v,
+    }]
+}
+
+// Names are the house's, but a viewer sees a person, their photos, their
+// face, their name in suggestions and search only through photos they may
+// see; naming and "not them" need a same-site request on a face the viewer
+// may see.
+// rivet: verifies REQ-FACE-003
+#[tokio::test]
+async fn names_are_shared_but_each_person_sees_only_their_photos_of_them() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    // X and Y (p1) show the same face; Z (p2, which p1 may not see)
+    // someone else.
+    let (x, y, z) = (&p1[0], &p1[1], &p2[0]);
+    e.idx
+        .set_faces(&x.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 1)))
+        .unwrap();
+    e.idx
+        .set_faces(&y.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 2)))
+        .unwrap();
+    e.idx
+        .set_faces(&z.1, lichtbild::faces::VERSION, &one_face(face_vec(5, 6)))
+        .unwrap();
+    let data = e._fx.data.clone();
+    for h in [&x.1, &y.1, &z.1] {
+        let p = lichtbild::faces::crop_path(&data, h, 0);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, common::jpeg(16, 16, 3)).unwrap();
+    }
+    e.people.rebuild(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+
+    // p2 sees both: the look-alikes form one group, offered for a name.
+    let page = req_with(&e.app, "GET", "/people", Some(&c2), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains("Who is this?"), "{}", page.body);
+    // p2 names the group from Y: X and Y become Oma.
+    let body = format!("item={}&face=0&name=%20Oma%20", y.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let oma = e.idx.people().unwrap()[0].0;
+    assert_eq!(e.idx.people().unwrap()[0].1.name, "Oma");
+    assert_eq!(e.idx.named_faces().unwrap().len(), 2);
+    // And Z, alone, as Opa.
+    let body = format!("item={}&face=0&one=1&name=Opa", z.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert!(r.status.is_redirection());
+    let opa = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .find(|(_, p)| p.name == "Opa")
+        .unwrap()
+        .0;
+    // Typing the same name again finds the same person, in any case.
+    let body = format!("item={}&face=0&one=1&name=oma", x.0);
+    req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert_eq!(e.idx.people().unwrap().len(), 2);
+
+    // p1 sees Oma, and nothing of Opa.
+    let page = req_with(&e.app, "GET", "/people", Some(&c1), false, &[]).await;
+    assert!(
+        page.body.contains("Oma") && !page.body.contains("Opa"),
+        "{}",
+        page.body
+    );
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body.contains(&format!("thumb/{}?", x.0)), "{}", r.body);
+    for uri in [
+        format!("/person/{opa}"),
+        format!("/face/{}/0", z.0),
+        format!("/people/{}/0", z.0),
+    ] {
+        let r = req_with(&e.app, "GET", &uri, Some(&c1), false, &[]).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c1), true, &[]).await;
+    assert!(!r.body.contains("Opa"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/suggest?q=Om", Some(&c1), true, &[]).await;
+    assert!(r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/search?q=Opa", Some(&c1), false, &[]).await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "no redirect to someone p1 has no photo of"
+    );
+    let r = req_with(&e.app, "GET", "/search?q=oma", Some(&c1), false, &[]).await;
+    assert!(r.status.is_redirection());
+    assert!(location(&r).ends_with(&format!("/person/{oma}")));
+    // p1 can neither name, rename, take off nor refuse what it cannot see.
+    for (uri, body) in [
+        (
+            "/people/name".to_string(),
+            format!("item={}&face=0&name=Zorro", z.0),
+        ),
+        (
+            "/people/not".to_string(),
+            format!("item={}&face=0&person={opa}", z.0),
+        ),
+        (format!("/person/{opa}/rename"), "name=Zorro".to_string()),
+        (format!("/person/{opa}/delete"), String::new()),
+    ] {
+        let r = req_with_body(&e.app, "POST", &uri, Some(&c1), &body, &form).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(e.idx.person(opa).unwrap().unwrap().name, "Opa");
+    // Not from another site.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let body = format!("item={}&face=0&person={oma}", x.0);
+    let r = req_with_body(&e.app, "POST", "/people/not", Some(&c1), &body, &cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // p1 says X is not Oma: the name comes off X and is not passed back.
+    let r = req_with_body(&e.app, "POST", "/people/not", Some(&c1), &body, &form).await;
+    assert!(r.status.is_redirection());
+    let x_now = e.people.in_photo(&x.1);
+    assert_ne!(x_now[0].who, lichtbild::people::Who::Person(oma));
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.body.contains(&format!("thumb/{}?", y.0)) && !r.body.contains(&format!("thumb/{}?", x.0)),
+        "{}",
+        r.body
+    ); // A photo p1 hid is no way to Oma for p1 (p2 still has Y).
+    e.idx.set_hidden("p1", y.0, true).unwrap();
+    let uri = format!("/person/{oma}");
+    let r = req_with(&e.app, "GET", &uri, Some(&c1), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = req_with(&e.app, "GET", "/people", Some(&c1), false, &[]).await;
+    assert!(!r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/suggest?q=Om", Some(&c1), true, &[]).await;
+    assert!(!r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", &uri, Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
+    // The names a name field offers are the viewer's only; a name only
+    // someone else has photos of is not joined by naming, it is a new one.
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(r.body.contains("datalist id=\"names\""), "{}", r.body);
+    assert!(
+        !r.body.contains("value=\"Opa\"") && !r.body.contains("value=\"Oma\""),
+        "{}",
+        r.body
+    );
+    let body = format!("item={}&face=0&one=1&name=Opa", x.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c1), &body, &form).await;
+    assert!(r.status.is_redirection());
+    assert!(
+        !location(&r).ends_with(&format!("/person/{opa}")),
+        "{}",
+        location(&r)
+    );
+    let named: Vec<u64> = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .filter(|(_, p)| p.name == "Opa")
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(named.len(), 2, "p1's Opa is not p2's");
+    let mine = *named.iter().find(|id| **id != opa).unwrap();
+    // Renaming p1's to "Oma", whom p1 no longer sees, does not join them.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{mine}/rename"),
+        Some(&c1),
+        "name=Oma",
+        &form,
+    )
+    .await;
+    assert!(
+        location(&r).ends_with(&format!("/person/{mine}")),
+        "{}",
+        location(&r)
+    );
+    assert!(e.idx.person(oma).unwrap().is_some());
+}
+
+/// Logged-in cookies for p1 (sees only p1) and p2 (sees p1 and p2).
+async fn two_sessions(e: &Env) -> (String, String) {
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(e, "").await else {
+        panic!("p1 login failed");
+    };
+    (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    )
+}
+
+/// Search as `c` until `done` holds for the page, for up to ten seconds
+/// (search learns a correction in the background).
+async fn search_until(e: &Env, c: &str, q: &str, done: impl Fn(&str) -> bool) -> String {
+    let mut page = String::new();
+    for _ in 0..100 {
+        page = req_with(
+            &e.app,
+            "GET",
+            &format!("/search?q={q}"),
+            Some(c),
+            false,
+            &[],
+        )
+        .await
+        .body;
+        if done(&page) {
+            return page;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("search for {q} never came right: {page}");
+}
+
+// rivet: verifies REQ-FIX-001, REQ-FIX-002
+#[tokio::test]
+async fn corrections_are_the_houses_and_seen_only_with_ones_photos() {
+    use lichtbild::objects::Object;
+    let e = env_with("https://photos.example", true).await;
+    let all = e.idx.all().unwrap();
+    let first = |l: &str| -> (u64, String) {
+        all.iter()
+            .find(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .unwrap()
+    };
+    // X (p1) has a snowboard that is not there, a dog and a misread line;
+    // Z (p2, which p1 may not see) a snowboard too.
+    let (x, z) = (first("p1"), first("p2"));
+    let board = |score: f32, bbox: [f32; 4]| Object {
+        kind: 31,
+        score,
+        bbox,
+    };
+    let look = |objects: Vec<Object>, line: Option<&str>| lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: if line.is_some() { "ok" } else { "none" }.into(),
+            model: "test".into(),
+            lines: line
+                .map(|t| lichtbild::ocr::Line {
+                    quad: [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2],
+                    block: 0,
+                    text: t.into(),
+                    conf: 0.9,
+                })
+                .into_iter()
+                .collect(),
+            docs: vec![0],
+        },
+        objects,
+        vector: vec![],
+    };
+    let dog = Object {
+        kind: 16,
+        score: 0.9,
+        bbox: [0.6, 0.5, 0.9, 0.9],
+    };
+    e.idx
+        .set_look(
+            &x.1,
+            "test",
+            &look(
+                vec![board(0.8, [0.1, 0.1, 0.4, 0.4]), dog],
+                Some("Sommerfcst"),
+            ),
+        )
+        .unwrap();
+    e.idx
+        .set_look(
+            &z.1,
+            "test",
+            &look(vec![board(0.84, [0.2, 0.2, 0.5, 0.5])], None),
+        )
+        .unwrap();
+    e.search.rebuild(&e.idx, None).unwrap();
+    let (c1, c2) = two_sessions(&e).await;
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    // A hit links to the photo, a text hit with the words to mark.
+    let has = |page: &str, id: u64| {
+        page.contains(&format!("/{id}\"")) || page.contains(&format!("/{id}?q="))
+    };
+
+    // The viewer offers to correct each find and each line.
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(v.status, StatusCode::OK);
+    assert!(v.body.contains("Something wrong?") && v.body.contains("action=\"fix/thing\""));
+    assert!(v.body.contains("action=\"fix/text\"") && v.body.contains("Sommerfcst"));
+    let p = search_until(&e, &c2, "snowboard", |p| has(p, x.0) && has(p, z.0)).await;
+    assert!(has(&p, z.0));
+
+    // p1 says X has no snowboard: gone for the whole house, Z kept.
+    let fix = |item: u64, rest: &str| format!("item={item}&n=0&back=v%2Fp1%2F{item}&{rest}");
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    // Not from another site, and not on a photo p1 may not see.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=right"),
+        &[("sec-fetch-site", "cross-site"), form[1]],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(z.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/text",
+        Some(&c1),
+        &fix(z.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    search_until(&e, &c2, "snowboard", |p| !has(p, x.0) && has(p, z.0)).await;
+    let things = req_with(&e.app, "GET", "/things", Some(&c1), false, &[])
+        .await
+        .body;
+    assert!(
+        !things.contains("Snowboard") && things.contains("Hund"),
+        "{things}"
+    );
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(v.body.contains("marked not there") && v.body.contains("No Snowboards in our house"));
+
+    // p2 says Z's snowboard is skis: two wrong snowboards teach a bar
+    // above both, and Z is found as skis.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c2),
+        &fix(z.0, "now=kind&kind=skis"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    search_until(&e, &c2, "ski", |p| has(p, z.0)).await;
+    let fixes = e.idx.fixes().unwrap();
+    assert!((fixes.bar(31) - 0.85).abs() < 1e-6, "{}", fixes.bar(31));
+    // The list and the download show each person only their photos' part.
+    let page1 = req_with(&e.app, "GET", "/corrections", Some(&c1), false, &[])
+        .await
+        .body;
+    let page2 = req_with(&e.app, "GET", "/corrections", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(
+        page1.contains(&format!("/{}\"", x.0)) && !page1.contains(&format!("/{}\"", z.0)),
+        "{page1}"
+    );
+    assert!(
+        page2.contains(&format!("/{}\"", z.0)) && page2.contains("Learned"),
+        "{page2}"
+    );
+    let dl1 = req_with(&e.app, "GET", "/corrections.jsonl", Some(&c1), false, &[]).await;
+    assert!(dl1.headers[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains("attachment"));
+    assert!(
+        dl1.body.contains(&x.1) && !dl1.body.contains(&z.1),
+        "{}",
+        dl1.body
+    );
+    assert!(dl1.body.contains("\"model\":\"snowboard\""), "{}", dl1.body);
+    assert!(
+        !dl1.body.contains("user-1") && !dl1.body.contains("example.test"),
+        "{}",
+        dl1.body
+    );
+
+    // A kind never in the house, and back.
+    let off = "kind=Hund&off=1&back=things";
+    let r = req_with_body(&e.app, "POST", "/fix/off", Some(&c1), off, &form).await;
+    assert!(r.status.is_redirection());
+    let things = req_with(&e.app, "GET", "/things", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(!things.contains("Hund"), "{things}");
+    req_with_body(
+        &e.app,
+        "POST",
+        "/fix/off",
+        Some(&c1),
+        "kind=16&back=things",
+        &form,
+    )
+    .await;
+    let things = req_with(&e.app, "GET", "/things", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(things.contains("Hund"), "{things}");
+
+    // A line read wrong is corrected, and search finds the right word.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/text",
+        Some(&c1),
+        &fix(x.0, "now=save&text=Sommerfest"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    search_until(&e, &c1, "sommerfest", |p| has(p, x.0)).await;
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(v.body.contains("read “Sommerfcst”"), "{}", v.body);
+
+    // Taken back, the snowboard is there again.
+    req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=undo"),
+        &form,
+    )
+    .await;
+    assert!(!e.idx.fixes().unwrap().things.contains_key(&x.1));
+    assert_eq!(e.idx.objects(&x.1).unwrap().len(), 2);
 }

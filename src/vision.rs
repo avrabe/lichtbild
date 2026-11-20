@@ -1,8 +1,9 @@
 //! Looking at pictures (REQ-TEXT-001, REQ-SEE-001, REQ-SEE-002, DD-023,
-//! DD-024): one child process per photo (`lichtbild look`) decodes it once
-//! and returns the text in it (ocr), the things in it (objects) and a
-//! vector of what it shows (embed). A crash or hang in a decoder or a model
-//! stays in the child. Results are stored per content hash with the
+//! DD-024): a child process (`lichtbild look`) loads the models once for a
+//! batch of photos, decodes each once and returns the text in it (ocr), the
+//! things in it (objects) and a vector of what it shows (embed). A crash or
+//! hang in a decoder or a model stays in the child and fails only the photo
+//! it was on; a new child takes the rest. Results are stored per content hash with the
 //! version of this set of models, so each photo is looked at once.
 //!
 //! All models sit in one directory (LICHTBILD_VISION_DIR), each file pinned
@@ -192,75 +193,235 @@ pub fn load_picture(path: &Path, max_bytes: u64) -> Result<RgbImage> {
 
 /// Run `exe look` on one picture, killed after `timeout`.
 pub fn run_child(exe: &Path, file: &Path, model_dir: &Path, timeout: Duration) -> Result<Look> {
-    use std::process::{Command, Stdio};
-    let mut child = Command::new(exe)
-        .arg("look")
-        .arg(model_dir)
-        .arg(file)
-        .env_clear()
-        .env("RAYON_NUM_THREADS", "4")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .context("start look")?;
-    let mut stdout = child.stdout.take().context("stdout")?;
-    let reader = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        (&mut stdout)
-            .take(16 << 20)
-            .read_to_end(&mut out)
-            .map(|_| out)
-    });
-    let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(s)) => break Some(s),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                break None;
-            }
-        }
-    };
-    let out = reader.join().map_err(|_| anyhow::anyhow!("reader"))??;
-    match status {
-        None => bail!("timeout"),
-        Some(s) if !s.success() => bail!("exit {}", s.code().unwrap_or(-1)),
-        Some(_) => Ok(serde_json::from_slice(&out).context("child output")?),
-    }
+    run_child_as(exe, "look", file, model_dir, timeout)
 }
 
-/// The `look` child: `lichtbild look <model-dir> <file>`.
-pub fn child_main(args: &[&str]) -> Result<()> {
-    let [model_dir, file] = args else {
-        bail!("usage: look <model-dir> <file>");
-    };
-    limit_self(TIME_BUDGET.as_secs() * 4);
-    let dir = Path::new(model_dir);
-    let img = load_picture(Path::new(file), 256 << 20)?;
-    let text = crate::ocr::Engine::load(dir)?.read(&img)?;
-    let objects =
-        crate::objects::Detector::new(rten::Model::load(read_pinned(dir, "objects.onnx")?)?)
-            .detect(&img)?;
-    let vector = crate::embed::ImageEncoder::new(rten::Model::load(read_pinned(
-        dir,
-        "siglip-vision.onnx",
-    )?)?)
-    .encode(&img)?;
-    serde_json::to_writer(
-        std::io::stdout().lock(),
-        &Look {
-            text,
-            objects,
-            vector,
+/// Run `exe <mode> <model_dir> <file>` (`look` or `faces`) on one picture,
+/// killed after `timeout`, and read its answer.
+pub fn run_child_as<T: serde::de::DeserializeOwned + Send + 'static>(
+    exe: &Path,
+    mode: &str,
+    file: &Path,
+    model_dir: &Path,
+    timeout: Duration,
+) -> Result<T> {
+    let mut out = None;
+    run_batch(
+        exe,
+        mode,
+        model_dir,
+        &[file.to_path_buf()],
+        timeout,
+        &mut |_, r| {
+            out = Some(r);
+            Ok(())
         },
     )?;
+    out.context("no answer")?
+}
+
+/// Photos per child: the models are read, checked and loaded once per
+/// batch (on an M4 that took as long as looking at a photo).
+pub const BATCH: usize = 32;
+
+/// One answer of a child, a line of JSON per picture.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Answer<T> {
+    Ok(T),
+    Err(String),
+}
+
+/// At most this much JSON per picture.
+const MAX_ANSWER: u64 = 16 << 20;
+
+/// Run `exe <mode> <model_dir> <files…>` and hand each picture's answer to
+/// `each` with its position, in order. A picture gets `timeout`; a child
+/// that hangs is killed, one that dies is gone, and either way that
+/// picture fails and a new child takes the rest.
+pub fn run_batch<T: serde::de::DeserializeOwned + Send + 'static>(
+    exe: &Path,
+    mode: &str,
+    model_dir: &Path,
+    files: &[std::path::PathBuf],
+    timeout: Duration,
+    each: &mut dyn FnMut(usize, Result<T>) -> Result<()>,
+) -> Result<()> {
+    use std::io::BufRead;
+    use std::process::{Command, Stdio};
+    let mut at = 0;
+    while at < files.len() {
+        // A child reads its arguments as UTF-8: a path that is not fails
+        // here, alone, and never reaches a child (where it would fail every
+        // photo before it in the batch).
+        if files[at].to_str().is_none() {
+            each(at, Err(anyhow::anyhow!("path not UTF-8")))?;
+            at += 1;
+            continue;
+        }
+        let end = files[at..]
+            .iter()
+            .position(|f| f.to_str().is_none())
+            .map_or(files.len(), |p| at + p);
+        let mut child = Command::new(exe)
+            .arg(mode)
+            .arg(model_dir)
+            .args(&files[at..end])
+            .env_clear()
+            .env("RAYON_NUM_THREADS", "4")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .with_context(|| format!("start {mode}"))?;
+        let stdout = child.stdout.take().context("stdout")?;
+        let (tx, rx) = std::sync::mpsc::channel::<Result<Answer<T>>>();
+        std::thread::spawn(move || {
+            let mut r = std::io::BufReader::new(stdout);
+            loop {
+                let mut line = Vec::new();
+                let n = match (&mut r).take(MAX_ANSWER).read_until(b'\n', &mut line) {
+                    Ok(n) => n,
+                    Err(e) => {
+                        let _ = tx.send(Err(e.into()));
+                        return;
+                    }
+                };
+                if n == 0 {
+                    return;
+                }
+                let a = if line.last() != Some(&b'\n') {
+                    Err(anyhow::anyhow!("answer too long"))
+                } else {
+                    serde_json::from_slice(&line).context("child output")
+                };
+                let bad = a.is_err();
+                if tx.send(a).is_err() || bad {
+                    return;
+                }
+            }
+        });
+        let mut broke = false;
+        while at < end {
+            match rx.recv_timeout(timeout) {
+                Ok(Ok(Answer::Ok(v))) => each(at, Ok(v))?,
+                Ok(Ok(Answer::Err(e))) => each(at, Err(anyhow::anyhow!(e)))?,
+                Ok(Err(e)) => {
+                    each(at, Err(e))?;
+                    broke = true;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    each(at, Err(anyhow::anyhow!("timeout")))?;
+                    broke = true;
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    let _ = child.kill();
+                    let code = child.wait().ok().and_then(|s| s.code()).unwrap_or(-1);
+                    each(at, Err(anyhow::anyhow!("exit {code}")))?;
+                    at += 1;
+                    break;
+                }
+            }
+            at += 1;
+            if broke {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+    }
     Ok(())
 }
 
-fn limit_self(cpu_seconds: u64) {
+/// The child's side of a batch: one answer line per file, in order.
+pub(crate) fn answer_each<T: Serialize>(
+    files: &[&str],
+    mut one: impl FnMut(&Path) -> Result<T>,
+) -> Result<()> {
+    use std::io::Write;
+    let mut out = std::io::stdout().lock();
+    for f in files {
+        let a = match one(Path::new(f)) {
+            Ok(v) => Answer::Ok(v),
+            Err(e) => Answer::Err(short_reason(&e)),
+        };
+        serde_json::to_writer(&mut out, &a)?;
+        out.write_all(b"\n")?;
+        out.flush()?;
+    }
+    Ok(())
+}
+
+/// What `in_batches` hands each photo's answer to: its position, its
+/// record, the answer.
+pub type Each<'a, T> = dyn FnMut(usize, &crate::index::Record, Result<T>) -> Result<()> + 'a;
+
+/// The photos of `todo` that still resolve inside their root (SSC-004),
+/// in batches, until `deadline`: `each` gets every photo's answer with its
+/// position in `todo`. Returns how many were left for the next pass.
+#[allow(clippy::too_many_arguments)]
+pub fn in_batches<T: serde::de::DeserializeOwned + Send + 'static>(
+    cfg: &crate::config::Config,
+    todo: &[(u64, crate::index::Record)],
+    exe: &Path,
+    mode: &str,
+    model_dir: &Path,
+    timeout: Duration,
+    deadline: Option<Instant>,
+    each: &mut Each<'_, T>,
+) -> Result<u64> {
+    for (c, chunk) in todo.chunks(BATCH).enumerate() {
+        if deadline.is_some_and(|d| Instant::now() >= d) {
+            return Ok((todo.len() - c * BATCH) as u64);
+        }
+        let mut files = Vec::new();
+        let mut at = Vec::new();
+        for (i, (_, rec)) in chunk.iter().enumerate() {
+            let Some(root) = cfg.roots.iter().find(|r| r.label == rec.label) else {
+                continue;
+            };
+            let rel = crate::index::rel_from_bytes(&rec.rel);
+            if let Ok(path) = crate::source::resolve(&root.path, &rel) {
+                files.push(path);
+                at.push(c * BATCH + i);
+            }
+        }
+        run_batch(exe, mode, model_dir, &files, timeout, &mut |k, r| {
+            let n = at[k];
+            each(n, &todo[n].1, r)
+        })?;
+    }
+    Ok(0)
+}
+
+/// The `look` child: `lichtbild look <model-dir> <file>…`, one answer
+/// line per file; the models are loaded once.
+pub fn child_main(args: &[&str]) -> Result<()> {
+    let [model_dir, files @ ..] = args else {
+        bail!("usage: look <model-dir> <file>…");
+    };
+    if files.is_empty() {
+        bail!("usage: look <model-dir> <file>…");
+    }
+    limit_self(TIME_BUDGET.as_secs() * 4 * files.len() as u64);
+    let dir = Path::new(model_dir);
+    let ocr = crate::ocr::Engine::load(dir)?;
+    let det = crate::objects::Detector::new(rten::Model::load(read_pinned(dir, "objects.onnx")?)?);
+    let enc = crate::embed::ImageEncoder::new(rten::Model::load(read_pinned(
+        dir,
+        "siglip-vision.onnx",
+    )?)?);
+    answer_each(files, |f| {
+        let img = load_picture(f, 256 << 20)?;
+        Ok(Look {
+            text: ocr.read(&img)?,
+            objects: det.detect(&img)?,
+            vector: enc.encode(&img)?,
+        })
+    })
+}
+
+pub(crate) fn limit_self(cpu_seconds: u64) {
     let set = |res, v: u64| {
         let lim = libc::rlimit {
             rlim_cur: v as libc::rlim_t,
@@ -296,7 +457,7 @@ impl PassReport {
     }
 }
 
-fn short_reason(e: &anyhow::Error) -> String {
+pub(crate) fn short_reason(e: &anyhow::Error) -> String {
     let s = e.to_string();
     let s: String = s
         .split(':')
@@ -331,42 +492,41 @@ pub fn run_pass(
     }
     let started = Instant::now();
     let mut said = Instant::now();
-    for (n, (_, rec)) in todo.into_iter().enumerate() {
-        if n > 0 && said.elapsed() >= Duration::from_secs(600) {
-            said = Instant::now();
-            tracing::info!(
-                "looked at {n} of {total} photos ({} with text, {} with things, {} failed) in {} min",
-                rep.with_text,
-                rep.with_things,
-                rep.failed,
-                started.elapsed().as_secs() / 60
-            );
-        }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
-            rep.remaining = total - n as u64;
-            break;
-        }
-        let Some(root) = cfg.roots.iter().find(|r| r.label == rec.label) else {
-            continue;
-        };
-        let rel = crate::index::rel_from_bytes(&rec.rel);
-        // SSC-004: the stored path must still resolve inside its root.
-        let Ok(path) = crate::source::resolve(&root.path, &rel) else {
-            continue;
-        };
-        match run_child(exe, &path, dir, TIME_BUDGET) {
-            Ok(look) => {
-                rep.looked += 1;
-                rep.with_text += u64::from(look.text.state == "ok");
-                rep.with_things += u64::from(!look.objects.is_empty());
-                idx.set_look(&rec.hash, version, &look)?;
+    rep.remaining = in_batches::<Look>(
+        cfg,
+        &todo,
+        exe,
+        "look",
+        dir,
+        TIME_BUDGET,
+        deadline,
+        &mut |n, rec, r| {
+            match r {
+                Ok(look) => {
+                    rep.looked += 1;
+                    rep.with_text += u64::from(look.text.state == "ok");
+                    rep.with_things += u64::from(!look.objects.is_empty());
+                    idx.set_look(&rec.hash, version, &look)?;
+                }
+                Err(e) => {
+                    rep.failed += 1;
+                    idx.set_look_failed(&rec.hash, version, &short_reason(&e))?;
+                }
             }
-            Err(e) => {
-                rep.failed += 1;
-                idx.set_look_failed(&rec.hash, version, &short_reason(&e))?;
+            progress(n as u64 + 1, total, &rep);
+            if said.elapsed() >= Duration::from_secs(600) {
+                said = Instant::now();
+                tracing::info!(
+                    "looked at {} of {total} photos ({} with text, {} with things, {} failed) in {} min",
+                    n + 1,
+                    rep.with_text,
+                    rep.with_things,
+                    rep.failed,
+                    started.elapsed().as_secs() / 60
+                );
             }
-        }
-        progress(n as u64 + 1, total, &rep);
-    }
+            Ok(())
+        },
+    )?;
     Ok(rep)
 }

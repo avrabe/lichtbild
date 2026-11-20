@@ -294,6 +294,17 @@
     if (l.panel) l.panel.addEventListener("toggle", showLayers);
   });
   viewer.addEventListener("lb-layout", showLayers);
+  // A find in "Something wrong?" lights up its box (REQ-FIX-001).
+  viewer.querySelectorAll("details.things li[data-n]").forEach(function (li) {
+    var box = viewer.querySelector(".thinglayer a[data-n=\"" + li.getAttribute("data-n") + "\"]");
+    if (!box) return;
+    function on() { box.classList.add("hot"); }
+    function off() { box.classList.remove("hot"); }
+    li.addEventListener("mouseenter", on);
+    li.addEventListener("mouseleave", off);
+    li.addEventListener("focusin", on);
+    li.addEventListener("focusout", off);
+  });
   if (img.complete) showLayers(); else img.addEventListener("load", showLayers);
   window.addEventListener("resize", showLayers);
   function apply() {

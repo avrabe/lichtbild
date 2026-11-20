@@ -113,12 +113,16 @@ jobs:
 
   # REQ-FAULT-001: every check must fail with its planted fault.
   # rivet: verifies REQ-FAULT-001
-  planted-faults:
-    name: planted faults
+  planted-faults-shard:
+    name: planted faults (${{ matrix.shard }}/3)
     runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","rust-cpu"]') || 'ubuntu-latest' }}
-    # 96 faults at about a minute each on a busy runner (one run hit 60 min
-    # at F58); each fault rebuilds and runs one test.
+    # 155 faults at 40-50 s each on a busy runner ran past 120 min in one
+    # job (stopped at F139), so each shard takes every third fault.
     timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -153,7 +157,28 @@ jobs:
         env:
           LICHTBILD_TEST_WHISPER_DIR: ${{ runner.temp }}/whisper-tiny
           LICHTBILD_TEST_VISION_DIR: ${{ runner.temp }}/vision
-        run: python3 scripts/planted_faults.py
+          SHARD: ${{ matrix.shard }}
+        # The shard's IDs come from the script's own FAULTS list, so no fault
+        # can fall between shards.
+        run: |
+          ids=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); import planted_faults as p; print(" ".join(f[0] for f in p.FAULTS[int(sys.argv[1])::3]))' "$SHARD")
+          test -n "$ids"
+          # shellcheck disable=SC2086
+          python3 scripts/planted_faults.py $ids
+
+  # The required check: green only when every shard ran and passed. It runs
+  # on failure too, because a skipped required check would count as passed.
+  planted-faults:
+    name: planted faults
+    needs: planted-faults-shard
+    if: always()
+    runs-on: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && fromJSON('["self-hosted","linux","x64","light"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - env:
+          RESULT: ${{ needs.planted-faults-shard.result }}
+        run: |
+          test "$RESULT" = success || { echo "::error::planted-fault shards: $RESULT"; exit 1; }
 
   # rivet: verifies REQ-TRACE-001
   # rivet: verifies DD-001

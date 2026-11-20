@@ -1,6 +1,9 @@
 # Test fixtures
 
-Synthetic only (REQ-PRIV-001). No photo of a person or place.
+Synthetic or public domain with a recorded source (REQ-PRIV-001). No photo
+of a place, and no person but public-domain portraits of public figures
+for the face tests (owner's decision, 2026-11-20); nothing from the
+household.
 
 - `synthetic-640x480.heic`: a generated 640x480 RGB gradient with a
   checkerboard, written as PNG by a script and converted with macOS
@@ -50,3 +53,21 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
   Latin recognition, RT-DETRv2-R18 and SigLIP multilingual (all
   Apache-2.0, ONNX) at pinned revisions and checks each file's SHA-256.
   Tests read them from `LICHTBILD_TEST_VISION_DIR`.
+- `faces/`: for tests/faces.rs, NASA photographs (works of the US
+  government, public domain), from Wikimedia Commons, scaled (portraits to
+  480 px, the group to 1024 px) and re-encoded so no EXIF or other
+  metadata is kept. The file names say only who is the same person:
+  - `pd-portrait-a1.jpg`: "Jessica Meir astronaut candidate.jpg" (NASA,
+    https://commons.wikimedia.org/wiki/File:Jessica_Meir_astronaut_candidate.jpg);
+  - `pd-portrait-a2.jpg`: "Jessica U. Meir portrait for media event.jpg"
+    (NASA, Robert Markowitz,
+    https://commons.wikimedia.org/wiki/File:Jessica_U._Meir_portrait_for_media_event.jpg);
+  - `pd-portrait-b1.jpg`: "2013 NASA Astronaut Class - Christina Koch -
+    (cropped).jpg" (NASA, James Blair,
+    https://commons.wikimedia.org/wiki/File:2013_NASA_Astronaut_Class_-_Christina_Koch_-_(cropped).jpg);
+  - `pd-group.jpg`: "2013 class of NASA astronauts.jpg", eight people,
+    both of the above among them (NASA, Robert Markowitz,
+    https://commons.wikimedia.org/wiki/File:2013_class_of_NASA_astronauts.jpg).
+- The face models are fetched by `scripts/fetch-vision-models.sh` with
+  the vision models: YuNet 2026may (opencv_zoo, MIT) and AuraFace v1
+  (fal/AuraFace-v1, Apache-2.0, its glintr100.onnx only).

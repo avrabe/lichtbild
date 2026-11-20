@@ -719,7 +719,11 @@ artifacts:
         float32 set is used, lichtbild refuses int8 at start, and the
         precision is part of the stored version so vectors never mix.
       rationale: >
-        One decode and one process per photo instead of three keeps the
+        One decode per photo, and one process per batch of 32 photos
+        that loads the models once (2026-11-20: on the Pi the look pass ran
+        at 3.4 s per photo with one child each, about half of it spent
+        reading, checking and loading models on one core; batches took the
+        M4 from 0.54 to 0.35 s per photo), instead of three, keeps the
         Pi's I/O and memory down (about 2 s per photo with OCR, 18 h of
         CPU once for 31,000 photos). Search by meaning in German finds
         pictures no file name, place or date describes, which the big
@@ -735,3 +739,97 @@ artifacts:
       - type: satisfies
         target: REQ-SEE-002
 
+  - id: DD-025
+    type: design-decision
+    title: Faces by YuNet and AuraFace in a child process; names passed along look-alikes
+    status: implemented
+    release: v0.8.0
+    description: >
+      Spike (scratchpad face-bench, 2026-11-20) on public-domain NASA
+      portraits, M4, 4 threads: YuNet 2026may finds faces in 0.012 s per
+      photo; on 32 single-face portraits (100 same-person and 396
+      other-person pairs) SFace linked 97/100 with other people up to
+      0.362, AuraFace v1 97/100 at 0.30 with other people at most 0.25
+      (p99 0.24) and kept a pair of identical twins apart (0.03). AuraFace
+      takes 0.095 s per face, SFace 0.007 s. The Pi 5 timing is measured
+      by smithy after the v0.7.0 look pass.
+    fields:
+      decision: >
+        A `faces` child, after the look pass and with its own
+        version (faces-1), so adding faces does not look at every photo
+        again: YuNet (MIT) at 640 and 1280 pixels (it finds faces of
+        about 10 to 300 pixels), faces from score 0.8 and 36 pixels wide,
+        at most 60; each turned upright onto the ArcFace 112×112 template
+        by a five-point similarity transform; AuraFace (Apache-2.0, only
+        its glintr100.onnx) gives a 512-d vector, stored as signed bytes;
+        a 160-pixel picture of each face is kept in the data directory.
+        The server links every face to its 24 closest look-alikes from a
+        cosine of 0.35 and passes names along the links (label
+        propagation): a named face keeps its name and counts double, an
+        unnamed face takes the name most of its look-alikes carry, unless
+        it was marked "not them" or is below 0.35 from the mean of that
+        person's named faces; what stays unnamed is a group. Names are
+        one table for the house (owner's decision); every page cuts faces
+        to photos the viewer may see and did not hide.
+      rationale: >
+        A face is a person only in the house: no photo or vector leaves
+        it. Naming one group of look-alikes names a person in thousands
+        of photos, and correcting one face ("not them") stays corrected.
+        Linking all faces costs n² byte dot products, a few seconds for
+        30,000 faces on four cores, and only after a pass; a name given
+        or taken only passes names again.
+      alternatives: >
+        SFace (37 MB, 13 times faster, but other people reach its
+        threshold); InsightFace's own models (not licensed for this use);
+        SCRFD (same licence); connected components or a fixed threshold
+        alone (one wrong link joins two people); looking for faces in the
+        look child (every photo looked at again).
+    links:
+      - type: satisfies
+        target: REQ-FACE-001
+      - type: satisfies
+        target: REQ-FACE-002
+      - type: satisfies
+        target: REQ-FACE-003
+
+
+  - id: DD-026
+    type: design-decision
+    title: Corrections kept beside the models' finds, applied when read
+    status: implemented
+    release: v0.8.0
+    description: >
+      The detector keeps finds from 0.7 and knows 80 COCO kinds, so a
+      house without a snowboard still gets snowboards. The owner wants
+      to say so where the mistake shows, and to refine models later.
+    fields:
+      decision: >
+        Three redb tables: corrections of things per content hash (kind,
+        box and score the model gave, what is right, who, when), kinds
+        never in the house, and corrections of text lines per content
+        hash (box, what was read, what it says). The models' results stay
+        as they were; every reader (viewer, Things page, search build,
+        narrowing) applies the corrections: a word about a find (same
+        kind, box overlap at least 0.5) wins, then a kind never in the
+        house and the kind's learned bar leave it out. The bar is
+        learned from the wrong finds, from two of a kind on: just above
+        the surest of them, at most 0.95, never above the least sure find
+        marked right. Search is rebuilt in the background after a
+        correction, at most one rebuild running and one more queued.
+      rationale: >
+        Kept apart, a correction survives a new model version and can be
+        taken back; matched by box, it still finds its find when the next
+        model puts the box a little elsewhere. A bar per kind stops the
+        same mistake in photos nobody looked at, without training
+        anything in the house. The download is the training set for a
+        later fine-tune, with no picture in it.
+      alternatives: >
+        Deleting the find from the stored results (lost at the next
+        pass, cannot be undone); one global threshold (hides good finds
+        of every other kind); fine-tuning the detector in the house (too
+        heavy for the Pi, and needs many more corrections first).
+    links:
+      - type: satisfies
+        target: REQ-FIX-001
+      - type: satisfies
+        target: REQ-FIX-002

@@ -242,7 +242,8 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
     assert_eq!(html.matches("class=\"item").count(), 240);
     assert_eq!(html.matches("<h2 class=\"year\">2023</h2>").count(), 1);
     assert_eq!(html.matches("<h3 class=\"month\">May</h3>").count(), 1);
-    assert!(html.contains("<h4 class=\"day\">2023-05-12</h4>"));
+    // A day heading opens that day alone.
+    assert!(html.contains("<h4 class=\"day\"><a href=\"days/p2?from=2023-05-12&amp;to=2023-05-12\" title=\"Only this day\">2023-05-12</a></h4>"), "{html}");
     let more = html
         .split("class=\"more\" hx-get=\"")
         .nth(1)
@@ -268,7 +269,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
     assert!(html.contains("item weak"));
     // Newest first: day headings strictly descending, on both pages.
     let days = |h: &str| -> Vec<String> {
-        h.split("<h4 class=\"day\">")
+        h.split("title=\"Only this day\">")
             .skip(1)
             .map(|x| x[..10].to_string())
             .collect()

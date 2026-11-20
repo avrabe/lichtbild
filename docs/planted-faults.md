@@ -144,6 +144,27 @@ at nice 0.
 | F133 | REQ-WEB-017 | an album nobody shared opens for others | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
 | F134 | REQ-WEB-017 | one's own shared album is listed as shared with oneself | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
 | F135 | REQ-WEB-017 | someone else's shared album offers its owner's tools | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
+| F136 | REQ-FACE-003 | faces of libraries the viewer may not see count for them | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F137 | REQ-FACE-003 | faces in photos the viewer hid count for them | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F138 | REQ-FACE-003 | a face's picture is served to anyone | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F139 | REQ-FACE-003 | "not them" is forgotten, so the name passes back | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F140 | REQ-FACE-003 | suggestions offer names with no photo the viewer may see | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F141 | REQ-FACE-003 | a name matches the beginning of a word ("Omas") | `a_name_is_taken_out_of_a_query` |
+| F142 | REQ-FACE-002 | a face marked "not them" takes the name again | `people::tests` |
+| F143 | REQ-FACE-001 | a face model with an unknown hash is accepted | `face_models_are_all_there_or_none` |
+| F144 | REQ-WEB-018 | "this day in every year" takes other days | `days_away_from_home_are_one_trip_named_by_place` |
+| F145 | REQ-WEB-018 | a day range takes days outside it | `days_away_from_home_are_one_trip_named_by_place` |
+| F146 | REQ-FACE-003 | a name field offers names the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F147 | REQ-FACE-003 | naming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F148 | REQ-FACE-003 | renaming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F150 | REQ-FACE-002 | a batch runs on past a path that is not UTF-8 | `a_bad_picture_or_a_hang_fails_alone_in_a_batch` |
+| F151 | REQ-FIX-001 | search keeps a find marked wrong | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F152 | REQ-FIX-001 | a photo the viewer may not see can be corrected | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F153 | REQ-FIX-001 | the corrections page lists others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F154 | REQ-FIX-001 | a kind never in the house is still found | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F155 | REQ-FIX-001 | wrong finds never raise their kind's bar | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F156 | REQ-FIX-002 | a corrected line is searched as first read | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F157 | REQ-FIX-001 | the download holds others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |
