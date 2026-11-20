@@ -431,6 +431,7 @@ async fn every_route_needs_a_session_except_health_static_and_login() {
         format!("/thumb/{id}"),
         format!("/original/{id}"),
         format!("/preview/{id}"),
+        format!("/captions/{id}"),
         "/t/nobody".into(),
         "/corrections".into(),
         "/corrections.jsonl".into(),

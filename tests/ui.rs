@@ -281,6 +281,49 @@ async fn the_status_page_shows_the_steps_and_what_waits() {
     );
 }
 
+// A video's transcript plays along as captions: a track on the video, and
+// WebVTT cues with times; a photo, or an unknown item, has none.
+// rivet: verifies REQ-WEB-022
+#[tokio::test]
+async fn a_video_plays_with_its_transcript_as_captions() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    assert!(
+        page.contains(&format!(
+            "<track kind=\"captions\" src=\"captions/{}\" srclang=\"de\" label=\"What is said\" default></video>",
+            e.video
+        )),
+        "{page}"
+    );
+    let (s, vtt) = get(&app, &format!("/captions/{}", e.video), false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(vtt.starts_with("WEBVTT\n"), "{vtt}");
+    assert!(
+        vtt.contains("\n00:00:01.000 --> 00:00:02.000\nWir fahren heute zum Leuchtturm, und der Leuchtturm ist hoch.\n"),
+        "{vtt}"
+    );
+    assert_eq!(vtt.matches(" --> ").count(), 2, "{vtt}");
+    let photo = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.video.is_none() && r.label == "p1")
+        .unwrap()
+        .0;
+    assert_eq!(
+        get(&app, &format!("/captions/{photo}"), false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&app, "/captions/999999", false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, page) = get(&app, &format!("/v/p1/{photo}"), false).await;
+    assert!(!page.contains("<track"), "{page}");
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

@@ -1012,6 +1012,26 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-022
+    type: requirement
+    title: A video plays with its transcript as captions
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: while a video plays, see what is said
+      without scrolling down to the transcript. A video with a transcript
+      carries it as a captions track (WebVTT, the transcript's times and
+      text, in its language), shown by default and turned off with the
+      player's own control, also in full screen and on a TV. The captions
+      are served only to whoever may see the video; a photo or an unknown
+      item has none.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-021
     type: requirement
     title: The best shot leads its series

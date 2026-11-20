@@ -204,6 +204,7 @@ pub fn router(state: AppState) -> Router {
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
+        .route("/captions/{id}", get(captions))
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
         .route("/static/{file}", get(static_file))
@@ -1732,6 +1733,94 @@ pub fn render_info(
 
 /// The viewer's photo, or a note when the original is a format browsers
 /// cannot display and no preview could be made from it.
+/// A video with a transcript gets it as captions (REQ-WEB-022): shown
+/// over the video while it plays, in full screen and on a TV too.
+fn with_captions(html: String, id: u64, tr: Option<&crate::stt::Transcript>) -> String {
+    let Some(tr) = tr.filter(|t| !t.pieces.is_empty()) else {
+        return html;
+    };
+    let lang = tr.pieces[0].lang.as_str();
+    let lang = if lang.len() <= 3 && lang.bytes().all(|b| b.is_ascii_lowercase()) {
+        lang
+    } else {
+        "und"
+    };
+    html.replacen(
+        "></video>",
+        &format!("><track kind=\"captions\" src=\"captions/{id}\" srclang=\"{lang}\" label=\"What is said\" default></video>"),
+        1,
+    )
+}
+
+/// WebVTT time: HH:MM:SS.mmm.
+fn vtt_time(s: f32) -> String {
+    let ms = (f64::from(s.max(0.0)) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
+}
+
+/// The transcript as WebVTT cues; a piece without a sensible end lasts
+/// until the next one, at most five seconds.
+pub fn vtt(tr: &crate::stt::Transcript) -> String {
+    let mut s = String::from("WEBVTT\n");
+    for (i, p) in tr.pieces.iter().enumerate() {
+        let next = tr.pieces.get(i + 1).map(|n| n.start);
+        let end = if p.end > p.start {
+            p.end
+        } else {
+            next.unwrap_or(p.start + 5.0).min(p.start + 5.0)
+        };
+        // "-->" may not appear in a cue's text.
+        let text = p.text.trim().replace("-->", "→");
+        if text.is_empty() {
+            continue;
+        }
+        s += &format!("\n{} --> {}\n{}\n", vtt_time(p.start), vtt_time(end), text);
+    }
+    s
+}
+
+/// GET /captions/{id}: a video's transcript as captions, for whoever may
+/// see the video.
+async fn captions(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+) -> Response {
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(rec) = idx.locate(id)?.filter(|r| viewer.may_see(&r.label)) else {
+            return Ok(None);
+        };
+        if rec.video.is_none() {
+            return Ok(None);
+        }
+        Ok(idx
+            .transcript(&rec.hash)?
+            .filter(|t| !t.pieces.is_empty())
+            .map(|t| vtt(&t)))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(v))) => (
+            [
+                (header::CONTENT_TYPE, "text/vtt; charset=utf-8"),
+                (header::CACHE_CONTROL, "private, no-cache"),
+            ],
+            v,
+        )
+            .into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
 pub fn photo_html(id: u64, rec: &index::Record) -> String {
     if rec.video.is_some() {
         // The original plays in the browser, seeking by range requests;
@@ -2177,15 +2266,19 @@ async fn viewer(
         taken = esc(&rec.taken_local),
         day = esc(rec.taken_local.get(..10).unwrap_or("")),
         after = id + 1,
-        photo = match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
-            // A W3C media fragment (#t=) starts the video at the hit.
-            Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
-                &format!("src=\"original/{id}\""),
-                &format!("src=\"original/{id}#t={t:.1}\""),
-                1,
-            ),
-            _ => photo_html(id, &rec),
-        },
+        photo = with_captions(
+            match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
+                // A W3C media fragment (#t=) starts the video at the hit.
+                Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
+                    &format!("src=\"original/{id}\""),
+                    &format!("src=\"original/{id}#t={t:.1}\""),
+                    1,
+                ),
+                _ => photo_html(id, &rec),
+            },
+            id,
+            transcript.as_ref(),
+        ),
         tr = transcript
             .as_ref()
             .map(|t| render_transcript(id, &who, t))

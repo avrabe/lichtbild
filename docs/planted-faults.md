@@ -181,6 +181,8 @@ at nice 0.
 | F171 | REQ-MAP-003 | a country counts its pictures twice | `the_countries_page_and_the_map_of_one_country` |
 | F172 | REQ-WEB-009 | a later step shows as done while an earlier one runs | `the_status_page_shows_the_steps_and_what_waits` |
 | F173 | REQ-WEB-009 | the People page does not say faces wait for the look pass | `the_status_page_shows_the_steps_and_what_waits` |
+| F174 | REQ-WEB-022 | the video carries no captions track | `a_video_plays_with_its_transcript_as_captions` |
+| F175 | REQ-WEB-022 | cues get the wrong end | `a_video_plays_with_its_transcript_as_captions` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

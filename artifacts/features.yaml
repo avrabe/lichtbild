@@ -386,7 +386,10 @@ artifacts:
         - A series shows its best shot first, and the others go away in one tap
         - The map shows one trip, or the months chosen on a slider
         - The countries visited are listed with their pictures, and each opens on the map
+        - What is said in a video shows over it while it plays
     links:
+      - type: satisfies
+        target: REQ-WEB-022
       - type: satisfies
         target: REQ-MAP-003
       - type: satisfies

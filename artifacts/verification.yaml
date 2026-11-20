@@ -1648,3 +1648,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-009
+
+  - id: VER-117
+    type: verification
+    title: A video's transcript is a captions track with timed WebVTT cues
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_video_plays_with_its_transcript_as_captions"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_video_plays_with_its_transcript_as_captions"
+    links:
+      - type: verifies
+        target: REQ-WEB-022
