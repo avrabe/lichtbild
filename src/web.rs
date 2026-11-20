@@ -2004,6 +2004,7 @@ async fn search(
     let idx = st.index.clone();
     let sx = st.search.clone();
     let places = st.places.clone();
+    let positions = st.positions.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
     let (kind, _) = kind_filter(sq.kind.as_deref());
@@ -2069,8 +2070,9 @@ async fn search(
             }
         }
         // What the results hold, to narrow them down (REQ-SEARCH-003).
+        let pos = positions.get(&idx)?;
         let mut held: Vec<Vec<(crate::search::Kind, String)>> = Vec::new();
-        for (_, rec) in &out {
+        for (h, rec) in &out {
             let mut terms = Vec::new();
             if let Some(y) = rec
                 .taken_local
@@ -2089,8 +2091,8 @@ async fn search(
                     }
                 }
             }
-            if let (Some(p), Some(lat), Some(lon)) = (places.as_deref(), rec.lat, rec.lon) {
-                if let Some(n) = p.nearest(lat, lon) {
+            if let (Some(p), Some(at)) = (places.as_deref(), pos.get(&h.id)) {
+                if let Some(n) = p.nearest(at.lat, at.lon) {
                     terms.push((crate::search::Kind::Place, n.label));
                 }
             }
@@ -2113,7 +2115,13 @@ async fn search(
         if hits.is_empty() && !looks.is_empty() {
             String::new()
         } else {
-            render_search(&who, &q, &hits, st.places.as_deref())
+            render_search(
+                &who,
+                &q,
+                &hits,
+                st.places.as_deref(),
+                &st.positions.get(&st.index).unwrap_or_default(),
+            )
         },
         render_looks(&who, &q, &looks)
     );
@@ -2184,6 +2192,7 @@ pub fn render_search(
     q: &str,
     hits: &[(crate::search::Hit, index::Record)],
     places: Option<&crate::places::Places>,
+    pos: &HashMap<u64, crate::place::Position>,
 ) -> String {
     let who = esc(who);
     let mut s = format!(
@@ -2207,9 +2216,10 @@ pub fn render_search(
         } else {
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
-        let place = match (places, rec.lat, rec.lon) {
-            (Some(p), Some(lat), Some(lon)) => p
-                .nearest(lat, lon)
+        // Recorded, set by hand or estimated (REQ-PLACE-002).
+        let place = match (places, pos.get(&id)) {
+            (Some(p), Some(at)) => p
+                .nearest(at.lat, at.lon)
                 .map(|n| format!(" · {}", esc(&n.label)))
                 .unwrap_or_default(),
             _ => String::new(),
