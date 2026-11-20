@@ -3509,7 +3509,7 @@ async fn hidden_page(
         let name = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
         match sort {
             "old" => out.sort_by(|a, b| (&a.1.taken_local, a.0).cmp(&(&b.1.taken_local, b.0))),
-            "name" => out.sort_by(|a, b| (name(&a.2), a.0).cmp(&(name(&b.2), b.0))),
+            "name" => out.sort_by_key(|a| (name(&a.2), a.0)),
             _ => out.sort_by(|a, b| (&b.1.taken_local, b.0).cmp(&(&a.1.taken_local, a.0))),
         }
         Ok((all, out))
