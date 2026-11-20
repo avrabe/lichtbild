@@ -142,7 +142,7 @@ pub struct Known {
 }
 
 /// One timeline entry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Item {
     pub id: u64,
     pub label: String,

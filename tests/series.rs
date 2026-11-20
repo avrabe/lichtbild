@@ -47,6 +47,23 @@ fn look(v: Vec<i8>) -> lichtbild::vision::Look {
     }
 }
 
+/// Replace the thumbnail of `hash`: a sharp checkerboard or a flat grey,
+/// so which shot of a series is best is known (REQ-WEB-021).
+fn thumb(data_dir: &std::path::Path, hash: &str, sharp: bool) {
+    let img = image::GrayImage::from_fn(64, 48, |x, y| {
+        image::Luma([if sharp && (x / 4 + y / 4) % 2 == 0 {
+            60
+        } else {
+            140
+        }])
+    });
+    let mut out = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 95)
+        .encode_image(&img)
+        .unwrap();
+    std::fs::write(scan::thumb_path(data_dir, hash), out).unwrap();
+}
+
 /// The tile of item `id`: its opening tag.
 fn tile(page: &str, id: u64) -> &str {
     let at = page.find(&format!("id=\"i{id}\"")).expect("tile");
@@ -91,6 +108,7 @@ async fn photos_taken_one_after_another_that_look_alike_are_one_series() {
         (id, rec.hash)
     };
     let mut ids = Vec::new();
+    let mut hashes = Vec::new();
     for (stamp, v) in [
         ("2020-01-02T03:04:05", &a),
         ("2020-01-02T03:04:10", &a),
@@ -102,6 +120,11 @@ async fn photos_taken_one_after_another_that_look_alike_are_one_series() {
         let (id, hash) = id_of(stamp);
         idx.set_look(&hash, "test", &look(quantize(v))).unwrap();
         ids.push(id);
+        hashes.push(hash);
+    }
+    // The newest of the series is the sharpest.
+    for (i, h) in hashes.iter().enumerate() {
+        thumb(&cfg.data_dir, h, i == 2);
     }
     let [first, second, third, later, other, after_other] = ids[..] else {
         unreachable!()
@@ -136,10 +159,97 @@ async fn photos_taken_one_after_another_that_look_alike_are_one_series() {
         assert!(!tile(&page, id).contains(" later\""), "{id}: {page}");
     }
     assert_eq!(page.matches("class=\"series\"").count(), 1, "{page}");
-    // The series ends after its last item.
+    // The series ends after its last item, with the offer to keep the best.
     let s_at = page.find(&format!("id=\"s{third}\"")).unwrap();
-    let close = s_at + page[s_at..].find("</a></span>").unwrap();
+    let close = s_at + page[s_at..].find("</a><button").unwrap();
     assert!(page[s_at..close].contains(&format!("id=\"i{first}\"")));
+    assert!(
+        page.contains(&format!("class=\"keepbest\" data-ids=\"{second},{first}\" data-best=\"{third}\">Keep the best, hide the other 2</button></span>")),
+        "{page}"
+    );
+}
+
+// The sharpest shot leads its series, the others after it in their order,
+// and the series offers to keep it and hide the others; a favourite leads
+// whatever its sharpness.
+// rivet: verifies REQ-WEB-021
+#[tokio::test]
+async fn the_best_shot_leads_its_series() {
+    let fx = fixture();
+    for (name, seed) in [
+        ("IMG_20200102_030410.jpg", 31),
+        ("IMG_20200102_030430.jpg", 32),
+    ] {
+        std::fs::write(fx.root1.join("a").join(name), jpeg(40, 30, seed)).unwrap();
+    }
+    let cfg = config(&fx, &fx.data);
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    assert!(
+        scan::run(&cfg, &idx, &Options::default())
+            .unwrap()
+            .reconciled
+    );
+    let a: Vec<f32> = (0..DIM).map(|i| (i as f32 * 0.37).sin()).collect();
+    let all = idx.all().unwrap();
+    let at = |stamp: &str| {
+        let (id, r) = all.iter().find(|(_, r)| r.taken_local == stamp).unwrap();
+        (*id, r.hash.clone())
+    };
+    let (first, second, third) = (
+        at("2020-01-02T03:04:05"),
+        at("2020-01-02T03:04:10"),
+        at("2020-01-02T03:04:30"),
+    );
+    for (_, h) in [&first, &second, &third] {
+        idx.set_look(h, "test", &look(quantize(&a))).unwrap();
+    }
+    // The oldest is the sharp one.
+    thumb(&cfg.data_dir, &first.1, true);
+    thumb(&cfg.data_dir, &second.1, false);
+    thumb(&cfg.data_dir, &third.1, false);
+    let mut state = AppState::new(&cfg, idx.clone());
+    state.vision_on = true;
+    state.space.rebuild(&idx).unwrap();
+    let app = web::router(state.clone());
+    let order = |page: &str| -> Vec<u64> {
+        page.split("id=\"i")
+            .skip(1)
+            .filter_map(|s| s.split('"').next()?.parse().ok())
+            .collect()
+    };
+    let (s, page) = get(&app, "/t/p1").await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        page.contains(&format!("<span class=\"series\" id=\"s{}\">", first.0)),
+        "{page}"
+    );
+    let ids = order(&page);
+    let pos = |id: u64| ids.iter().position(|&x| x == id).unwrap();
+    assert!(
+        pos(first.0) < pos(third.0) && pos(third.0) < pos(second.0),
+        "{ids:?}"
+    );
+    assert!(
+        page.contains(&format!(
+            "data-ids=\"{},{}\" data-best=\"{}\"",
+            third.0, second.0, first.0
+        )),
+        "{page}"
+    );
+    // The same on the day's own page.
+    let (_, day) = get(&app, "/days/p1?day=2020-01-02").await;
+    assert!(
+        day.contains(&format!("<span class=\"series\" id=\"s{}\">", first.0)),
+        "{day}"
+    );
+
+    // A favourite leads, though blurred.
+    idx.set_fav("operator", second.0, true).unwrap();
+    let (_, page) = get(&app, "/t/p1").await;
+    assert!(
+        page.contains(&format!("<span class=\"series\" id=\"s{}\">", second.0)),
+        "{page}"
+    );
 }
 
 // rivet: verifies REQ-WEB-013

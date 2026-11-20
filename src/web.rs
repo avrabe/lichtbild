@@ -68,6 +68,8 @@ pub struct AppState {
     pub people: Arc<crate::people::People>,
     /// Search rebuilt after a correction, one at a time (REQ-FIX-001).
     pub rebuild: Arc<Later>,
+    /// Thumbnail scores for the best shot of a series (REQ-WEB-021).
+    pub best: Arc<crate::best::Best>,
 }
 
 /// A search rebuild in the background that runs again, once, if asked
@@ -128,6 +130,7 @@ impl AppState {
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
             people: Arc::new(crate::people::People::default()),
             rebuild: Arc::new(Later::default()),
+            best: Arc::new(crate::best::Best::default()),
         }
     }
 
@@ -1043,6 +1046,22 @@ pub fn series(items: &[index::Item], space: Option<&crate::embed::Space>) -> Vec
     out
 }
 
+/// The series of `items` (REQ-WEB-012), each led by its best shot
+/// (REQ-WEB-021); the thumbnails are read off the async threads.
+async fn series_best(
+    st: &AppState,
+    mut items: Vec<index::Item>,
+) -> Result<(Vec<index::Item>, Vec<usize>), tokio::task::JoinError> {
+    let space = st.vision_on.then(|| st.space.clone());
+    let (best, dd) = (st.best.clone(), st.data_dir.clone());
+    tokio::task::spawn_blocking(move || {
+        let runs = series(&items, space.as_deref());
+        crate::best::best_first(&mut items, &runs, |it| best.of(&dd, it));
+        (items, runs)
+    })
+    .await
+}
+
 pub fn render_items(
     who: &str,
     items: &[index::Item],
@@ -1054,6 +1073,7 @@ pub fn render_items(
     let mut s = String::new();
     // Items of the open series still to come.
     let mut left = 0usize;
+    let mut keep = String::new();
     let mut prev = prev_day.map(str::to_string);
     let mut open = prev.is_some();
     if open {
@@ -1129,8 +1149,20 @@ pub fn render_items(
         let dur = if n >= 2 {
             left = n - 1;
             s += &format!("<span class=\"series\" id=\"s{}\">", it.id);
+            // Opened, the series offers to keep its best shot (this one,
+            // REQ-WEB-021) and hide the others for this person.
+            let others: Vec<String> = items[i + 1..(i + n).min(items.len())]
+                .iter()
+                .map(|o| o.id.to_string())
+                .collect();
+            keep = format!(
+                "<button type=\"button\" class=\"keepbest\" data-ids=\"{}\" data-best=\"{}\">Keep the best, hide {}</button>",
+                others.join(","),
+                it.id,
+                if others.len() == 1 { "the other".to_string() } else { format!("the other {}", others.len()) },
+            );
             format!(
-                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another\">{n}</span>"
+                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another, the best first\">{n}</span>"
             )
         } else {
             dur
@@ -1148,18 +1180,24 @@ pub fn render_items(
         if follows {
             left -= 1;
             if left == 0 {
+                s += &std::mem::take(&mut keep);
                 s += "</span>";
             }
         }
     }
     if left > 0 {
+        s += &keep;
         s += "</span>";
     }
     if open {
         s += "</div>\n";
     }
     if more {
-        if let (Some(last), Some(day)) = (items.last(), prev.as_deref()) {
+        // The oldest on the page: a series' best shot may have moved ahead.
+        let last = items
+            .iter()
+            .min_by(|a, b| (&a.taken_local, a.id).cmp(&(&b.taken_local, b.id)));
+        if let (Some(last), Some(day)) = (last, prev.as_deref()) {
             s += &format!(
                 "<div class=\"more\" hx-get=\"t/{who}?before={b}&amp;id={id}&amp;day={d}{kq}\" hx-trigger=\"revealed\" hx-swap=\"outerHTML\">loading…</div>\n",
                 who = esc(who),
@@ -1237,7 +1275,10 @@ async fn timeline(
     };
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
-    let runs = series(&items, st.vision_on.then_some(st.space.as_ref()));
+    let (items, runs) = match series_best(&st, items).await {
+        Ok(x) => x,
+        Err(e) => return internal(e),
+    };
     let fragment = render_items(&who, &items, &runs, cur.day.as_deref(), more, kq);
     if !full_page {
         return Html(fragment).into_response();
@@ -4617,6 +4658,7 @@ async fn days_page(
     }
     let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
     let space = st.vision_on.then(|| st.space.clone());
+    let (best, dd) = (st.best.clone(), st.data_dir.clone());
     let dq2 = dq.clone();
     type Days = (Vec<index::Item>, Vec<usize>, Option<String>, Option<String>);
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Days> {
@@ -4628,6 +4670,7 @@ async fn days_page(
             it.fav = favs.contains(&it.id);
         }
         let runs = series(&items, space.as_deref());
+        crate::best::best_first(&mut items, &runs, |it| best.of(&dd, it));
         // The days before and after with a picture the viewer would see here.
         let (mut before, mut after) = (None, None);
         if let (None, Some(f), Some(t)) = (&dq2.md, &dq2.from, &dq2.to) {

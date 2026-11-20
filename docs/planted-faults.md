@@ -170,6 +170,9 @@ at nice 0.
 | F160 | REQ-WEB-020 | the hidden list names files of a granted library | `the_hidden_list_names_only_ones_own_files` |
 | F161 | REQ-WEB-020 | "by name" sorts by date | `the_hidden_list_sorts_narrows_and_shows_several_again` |
 | F162 | REQ-WEB-020 | the word does not narrow the list | `the_hidden_list_sorts_narrows_and_shows_several_again` |
+| F163 | REQ-WEB-021 | a series keeps its newest shot first | `the_best_shot_leads_its_series` |
+| F164 | REQ-WEB-021 | a favourite does not lead its series | `the_best_shot_leads_its_series` |
+| F165 | REQ-WEB-021 | the blurriest shot counts as best | `the_best_shot_leads_its_series` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

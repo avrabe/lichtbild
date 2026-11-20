@@ -1098,3 +1098,41 @@
   });
   sync();
 })();
+
+// The best shot of a series (REQ-WEB-021): keep it, hide the others for
+// this person, with a way back.
+(function () {
+  "use strict";
+  function post(url, ids) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "ids=" + encodeURIComponent(ids)
+    }).then(function (r) { if (!r.ok) throw new Error(r.status); });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("button.keepbest");
+    if (!b) return;
+    e.preventDefault();
+    var series = b.closest(".series");
+    if (b.dataset.done) {
+      b.disabled = true;
+      post("unhide-many", b.dataset.ids).then(function () { location.reload(); },
+        function () { b.disabled = false; });
+      return;
+    }
+    b.disabled = true;
+    post("hide-many", b.dataset.ids).then(function () {
+      b.dataset.ids.split(",").forEach(function (id) {
+        var t = document.getElementById("i" + id);
+        if (t) t.hidden = true;
+      });
+      var stack = series && series.querySelector(".stack");
+      if (stack) stack.hidden = true;
+      b.dataset.done = "1";
+      b.textContent = "Hidden. Show them again";
+      b.disabled = false;
+    }, function () { b.disabled = false; b.textContent = "Could not hide, try again"; });
+  });
+})();

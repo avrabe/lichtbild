@@ -980,3 +980,15 @@ ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4p
 .hiddenlist .hid label.pick input { width: 18px; height: 18px; accent-color: var(--shu); }
 .hiddenlist .hid .fname { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .hiddenlist .hid:has(input:checked) a.item { outline: 3px solid var(--shu); outline-offset: 2px; }
+
+/* The best shot of a series (REQ-WEB-021): opened, the series offers to
+   keep it and hide the others. */
+.series:not(.open) .keepbest { display: none; }
+.keepbest {
+  align-self: stretch; width: 130px; min-height: 64px; border: 1px dashed var(--shu); border-radius: 3px; background: none; color: var(--shu);
+  font: 600 13px/1.35 var(--sans); padding: 10px; cursor: pointer;
+}
+.keepbest:hover { background: var(--shu); color: #fff8ee; }
+.keepbest:disabled { opacity: .6; cursor: default; }
+
+.item[hidden], .item .stack[hidden] { display: none; }

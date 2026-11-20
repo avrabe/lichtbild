@@ -965,6 +965,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-021
+    type: requirement
+    title: The best shot leads its series
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: similar photos grouped, ideally selecting
+      the best shot. In the timeline and on a day's page a series of
+      look-alike shots is led by the viewer's favourite among them, else
+      by the sharpest, well-exposed one; the rest follow in their order.
+      Opened, the series offers to keep the best and hide the others for
+      this person only, and to show them again.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-020
     type: requirement
     title: The hidden list sorts, narrows and shows several again

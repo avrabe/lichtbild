@@ -3,6 +3,7 @@
 //! requirements and the hazards each module guards against.
 
 pub mod auth;
+pub mod best;
 pub mod config;
 pub mod datadir;
 pub mod dups;

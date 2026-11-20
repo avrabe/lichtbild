@@ -1591,3 +1591,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-020
+
+  - id: VER-113
+    type: verification
+    title: The sharpest shot or a favourite leads its series, with the offer to hide the others
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_best_shot_leads_its_series"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series the_best_shot_leads_its_series"
+        - run: "cargo test --lib best::"
+    links:
+      - type: verifies
+        target: REQ-WEB-021
