@@ -185,6 +185,7 @@ async fn env(public_url: &str) -> Env {
     let issuer = mock.lock().unwrap().issuer.clone();
     let auth = make_auth(&issuer, &secret, public_url, true).with_store(idx.clone());
     let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    state.search.rebuild(&idx, None).unwrap();
     let auth = state.auth.clone().unwrap();
     let app = web::router(state);
     Env {
@@ -1242,6 +1243,52 @@ async fn favourites_are_kept_per_person() {
     assert!(!page.body.contains(&format!("id=\"i{}\"", mine[1])));
     e.idx.set_hidden("p1", mine[1], false).unwrap();
 
+    // In search, "♥" or "Favoriten" keeps only favourites; alone it is the
+    // Favourites page, and "Fav" is completed.
+    let year = &all
+        .iter()
+        .find(|(id, _)| *id == mine[0])
+        .unwrap()
+        .1
+        .taken_local[..4];
+    let plain = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q={year}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    let only = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q=%E2%99%A5+{year}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    let found = |page: &str| -> Vec<u64> {
+        page.split("class=\"item")
+            .skip(1)
+            .filter_map(|p| p.split("href=\"v/p1/").nth(1))
+            .filter_map(|p| p.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
+            .collect()
+    };
+    let (plain, only) = (found(&plain.body), found(&only.body));
+    assert!(plain.contains(&mine[0]), "{plain:?}");
+    assert!(
+        plain.iter().any(|id| !mine.contains(id)),
+        "the year finds others too: {plain:?}"
+    );
+    assert!(only.contains(&mine[0]), "{only:?}");
+    assert!(only.iter().all(|id| mine.contains(id)), "{only:?}");
+    let r = req_with(&e.app, "GET", "/search?q=Favoriten", Some(&c1), false, &[]).await;
+    assert!(location(&r).ends_with("/favourites"), "{}", location(&r));
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c1), false, &[]).await;
+    assert!(sug.body.contains("<b>Favoriten</b>"), "{}", sug.body);
+
     // p2 sees p1's photos but not p1's favourites.
     {
         let mut m = e.mock.lock().unwrap();
@@ -1252,6 +1299,18 @@ async fn favourites_are_kept_per_person() {
     let c2 = format!("lichtbild_session={p2}");
     let page = req_with(&e.app, "GET", "/favourites", Some(&c2), false, &[]).await;
     assert!(page.body.contains("None yet"), "{}", page.body);
+    let only = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q=%E2%99%A5+{year}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(found(&only.body).is_empty(), "{}", only.body);
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c2), false, &[]).await;
+    assert!(!sug.body.contains("Favoriten"), "{}", sug.body);
     let v = req_with(
         &e.app,
         "GET",

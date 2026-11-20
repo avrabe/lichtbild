@@ -583,6 +583,12 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
   letter-spacing: .04em; cursor: pointer;
 }
 .viewer details.info form.hidef button:hover { color: var(--kaki); }
+.viewer details.info .getrow { margin: 0 0 8px; display: flex; gap: 18px; }
+.viewer details.info .getrow a, .viewer details.info .getrow button {
+  border: 0; padding: 0; background: none; color: inherit; font: 400 13px/1.4 var(--sans);
+  letter-spacing: .04em; cursor: pointer; text-decoration: none;
+}
+.viewer details.info .getrow a:hover, .viewer details.info .getrow button:hover { color: var(--kaki); }
 @media (max-width: 600px) {
   .card .cmeta .years { display: none; }
   dl.status { grid-template-columns: 1fr; gap: 4px; }

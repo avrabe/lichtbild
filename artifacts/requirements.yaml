@@ -904,8 +904,10 @@ artifacts:
       only by a same-site request. Favourites are per person: another
       person who sees the same library never sees them. The timeline shows
       a heart on each favourite; a Favourites page lists them newest first
-      (not the hidden ones) with a slideshow of them alone. Nothing in the
-      libraries changes.
+      (not the hidden ones) with a slideshow of them alone. In search,
+      "♥" or "Favoriten" next to other words keeps only favourites, alone
+      it opens the Favourites page, and a partly typed "Fav" is suggested
+      to whoever has favourites. Nothing in the libraries changes.
     fields:
       priority: should
       category: functional

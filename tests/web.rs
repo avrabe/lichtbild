@@ -755,6 +755,15 @@ async fn viewer_info_panel_shows_date_place_and_camera() {
         assert!(page.contains(want), "info panel lacks {want:?}");
     }
     assert!(!page.contains(" style="), "inline style in viewer");
+    // The original goes along under its own name: a download, and a share
+    // button the browser shows where it can share files.
+    assert!(
+        page.contains(&format!(
+            r#"<a class="dl" href="original/{exif_id}" download="IMG_exif.jpg">"#
+        )),
+        "{page}"
+    );
+    assert!(page.contains(r#"class="share" hidden"#), "{page}");
 
     // No GPS: said so, no place.
     let (_, _, body) = get(&with_places, &format!("/v/p1/{named_id}"), false).await;

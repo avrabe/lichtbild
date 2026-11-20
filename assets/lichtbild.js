@@ -117,11 +117,12 @@
       if (h) h.click();
     }
   });
-  var x0 = null, y0 = null, t0 = 0;
+  var x0 = null, y0 = null, t0 = 0, top0 = false;
   var stage = viewer.querySelector(".stage") || viewer;
   stage.addEventListener("touchstart", function (e) {
     if (e.touches.length !== 1 || onVideo(e.target) || viewer.classList.contains("zoomed")) { x0 = null; return; }
     x0 = e.touches[0].clientX; y0 = e.touches[0].clientY; t0 = Date.now();
+    top0 = window.scrollY <= 0;
   }, { passive: true });
   stage.addEventListener("touchend", function (e) {
     if (x0 === null || viewer.classList.contains("zoomed")) { x0 = null; return; }
@@ -131,6 +132,9 @@
     // A deliberate, mostly horizontal swipe; pinch-zoom and scrolling pass.
     if (Math.abs(dx) > 50 && Math.abs(dx) > 2 * Math.abs(dy) && Date.now() - t0 < 800) {
       go(dx < 0 ? "a.next" : "a.prev");
+    } else if (top0 && dy > 90 && dy > 2 * Math.abs(dx) && Date.now() - t0 < 800) {
+      // Pulled down from the top of the page: back to the timeline.
+      go("a.back");
     }
   }, { passive: true });
 })();
@@ -160,6 +164,35 @@
       b.textContent = on ? "\u2665" : "\u2661";
       form.action = form.action.replace(on ? /\/fav\/(\d+)$/ : /\/unfav\/(\d+)$/, on ? "/unfav/$1" : "/fav/$1");
     }).catch(function () {}).then(function () { b.disabled = false; });
+  });
+})();
+
+// Share (iPad, iPhone, some desktops): the original goes to the system
+// share sheet, so it can be saved to Photos or sent. Fetching it may use
+// up the tap that allows sharing; then a second tap shares.
+(function () {
+  "use strict";
+  var b = document.querySelector(".viewer button.share");
+  if (!b || !navigator.canShare || !window.fetch) return;
+  var file = null;
+  b.hidden = false;
+  function share() {
+    navigator.share({ files: [file] }).then(function () { b.textContent = "Share\u2026"; }, function (err) {
+      b.textContent = err && err.name === "NotAllowedError" ? "Tap again to share" : "Share\u2026";
+    });
+  }
+  b.addEventListener("click", function () {
+    if (file) { share(); return; }
+    b.textContent = "Preparing\u2026";
+    fetch(b.getAttribute("data-src"), { credentials: "same-origin" }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.blob();
+    }).then(function (blob) {
+      var f = new File([blob], b.getAttribute("data-name") || "picture", { type: blob.type });
+      if (!navigator.canShare({ files: [f] })) { b.hidden = true; return; }
+      file = f;
+      share();
+    }).catch(function () { b.textContent = "Could not share"; });
   });
 })();
 
@@ -836,7 +869,7 @@
   "use strict";
   var rows = [
     ["Photo", "← →", "previous, next (or swipe)"],
-    ["Photo", "Esc", "back to the timeline"],
+    ["Photo", "Esc", "back to the timeline (or swipe down)"],
     ["Photo", "+ − 0", "zoom in, out, fit (or pinch, double tap)"],
     ["Photo", "i  t", "details, transcript"],
     ["Photo", "f", "full screen"],

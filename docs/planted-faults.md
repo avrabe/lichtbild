@@ -135,6 +135,8 @@ at nice 0.
 | F124 | REQ-WEB-016 | everyone shares one person's favourites | `favourites_are_kept_per_person` |
 | F125 | REQ-WEB-016 | a hidden favourite still shows on the Favourites page | `favourites_are_kept_per_person` |
 | F126 | REQ-WEB-016 | the timeline shows no heart on favourites | `favourites_are_kept_per_person` |
+| F127 | REQ-WEB-016 | "♥" in a search keeps every hit, not only favourites | `favourites_are_kept_per_person` |
+| F128 | REQ-WEB-016 | "Favoriten" is suggested to someone with no favourites | `favourites_are_kept_per_person` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

@@ -1918,6 +1918,19 @@ async fn viewer(
     } else {
         esc(&rec.taken_local.replace('T', " "))
     };
+    // Take the original along: a download under its own name, and the
+    // system share sheet where the browser offers one (assets/lichtbild.js
+    // shows the button), so a photo goes straight to Photos or a message.
+    let get = {
+        let name = index::rel_from_bytes(&rec.rel)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        format!(
+            "<p class=\"getrow\"><a class=\"dl\" href=\"original/{id}\" download=\"{n}\">Download</a><button type=\"button\" class=\"share\" hidden data-src=\"original/{id}\" data-name=\"{n}\">Share…</button></p>",
+            n = esc(&name)
+        )
+    };
     let hide = {
         // Back to the timeline where this item was; showing it again
         // stays in the viewer.
@@ -1959,7 +1972,7 @@ async fn viewer(
             + &render_info(&rec, &exif, st.places.as_deref(), pos.as_ref(), act)
                 .replace(
                     "</dl></details>",
-                    &format!("<div class=\"hiderow\">{hide}</div></dl></details>"),
+                    &format!("<div class=\"hiderow\">{get}{hide}</div></dl></details>"),
                 ),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
@@ -2000,11 +2013,55 @@ async fn suggest(
     let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
     let labels = viewer.labels.clone();
     let sx = st.search.clone();
-    let found = match tokio::task::spawn_blocking(move || sx.suggest(&q, &labels, 8)).await {
-        Ok(f) => f,
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    // Favourites words (REQ-WEB-016) are not in the index: the rest is
+    // completed and the word kept in front; a partly typed one is offered.
+    let (rest, fav) = crate::search::split_fav(&q);
+    let fav_word = q
+        .split_whitespace()
+        .find(|w| crate::search::split_fav(w).1)
+        .map(str::to_string);
+    let typing = !q.ends_with(char::is_whitespace);
+    let last = q.split_whitespace().last().filter(|_| typing).unwrap_or("");
+    let offer = crate::search::fav_completion(last).filter(|_| !fav);
+    let ask = if fav && !typing && !rest.is_empty() {
+        format!("{rest} ")
+    } else {
+        rest
+    };
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let n = match offer {
+            Some(_) => idx.favs(&me)?.len(),
+            None => 0,
+        };
+        let found = if fav && ask.trim().is_empty() {
+            Vec::new()
+        } else {
+            sx.suggest(&ask, &labels, 8)
+        };
+        Ok((found, n))
+    })
+    .await;
+    let (mut found, favs) = match res {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let mut h = String::new();
+    if let (Some(word), true) = (offer, favs > 0) {
+        let head = q.trim_end().strip_suffix(last).unwrap_or("");
+        h += &format!(
+            "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"your favourites\" aria-label=\"your favourites\">♥</span><span class=\"st\">{head}<b>{word}</b></span><span class=\"dim\">{favs}</span></a>",
+            q = urlencode(&format!("{head}{word}")),
+            head = esc(head),
+        );
+    }
+    if let Some(w) = fav_word {
+        for s in &mut found {
+            s.query = format!("{w} {}", s.query);
+        }
+    }
     for s in found {
         let (icon, what) = match s.kind {
             crate::search::Kind::Thing => ("◎", "thing"),
@@ -2055,10 +2112,23 @@ async fn search(
     let dups = st.dups.clone();
     let me = person(&viewer);
     let (kind, _) = kind_filter(sq.kind.as_deref());
-    let q2 = q.clone();
+    // "Favoriten" or "♥" asks for the viewer's favourites (REQ-WEB-016):
+    // the other words are searched, then only favourites are kept; alone,
+    // it is the Favourites page.
+    let (q2, fav_only) = crate::search::split_fav(&q);
+    if fav_only && q2.is_empty() {
+        return Redirect::to(&format!("{}/favourites", st.base_path)).into_response();
+    }
     let space = st.vision_on.then(|| st.space.clone());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Found> {
         let hidden = idx.hidden(&me)?;
+        let favs = if fav_only { Some(idx.favs(&me)?) } else { None };
+        // A favourite counts through any of its copies.
+        let wanted = |id: u64| {
+            favs.as_ref().is_none_or(|f| {
+                f.contains(&id) || dups.copies(id, &labels).iter().any(|c| f.contains(c))
+            })
+        };
         let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
         for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
             // A hit on a copy shows the copy the timeline shows; a hit
@@ -2072,6 +2142,9 @@ async fn search(
                     Some(best) => h.id = best,
                     None => continue,
                 }
+            }
+            if !wanted(h.id) {
+                continue;
             }
             if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
                 for s in h.speech {
@@ -2105,7 +2178,10 @@ async fn search(
                 }) else {
                     continue;
                 };
-                if out.iter().any(|(h, _)| h.id == id) || looks.iter().any(|(l, _)| *l == id) {
+                if !wanted(id)
+                    || out.iter().any(|(h, _)| h.id == id)
+                    || looks.iter().any(|(l, _)| *l == id)
+                {
                     continue;
                 }
                 if let Some(rec) = idx.locate(id)? {
@@ -2156,7 +2232,7 @@ async fn search(
                 .query(&query, &labels)?
                 .into_iter()
                 .map(|h| h.id)
-                .filter(|id| dups.shown(*id, &labels, &hidden).shown)
+                .filter(|id| dups.shown(*id, &labels, &hidden).shown && wanted(*id))
                 .filter(|id| {
                     kind.is_none_or(|v| {
                         idx.locate(*id)

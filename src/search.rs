@@ -144,6 +144,51 @@ pub struct Suggestion {
     pub items: u64,
 }
 
+/// Words that ask for the viewer's favourites (REQ-WEB-016) rather than
+/// for text in the index.
+const FAV_WORDS: [&str; 8] = [
+    "♥",
+    "♡",
+    "favoriten",
+    "favorit",
+    "favourites",
+    "favourite",
+    "favorites",
+    "favorite",
+];
+
+/// The query without the words that ask for favourites, and whether any
+/// did: "Favoriten Katze" is ("Katze", true).
+pub fn split_fav(q: &str) -> (String, bool) {
+    let mut fav = false;
+    let rest: Vec<&str> = q
+        .split_whitespace()
+        .filter(|w| {
+            let f = FAV_WORDS.contains(&fold(w).as_str());
+            fav |= f;
+            !f
+        })
+        .collect();
+    (rest.join(" "), fav)
+}
+
+/// The favourites word a partly typed last word completes to, if any
+/// ("Fav" -> "Favoriten", "favou" -> "favourites").
+pub fn fav_completion(word: &str) -> Option<&'static str> {
+    let w = fold(word);
+    if w.chars().count() < 3 {
+        return None;
+    }
+    ["favoriten", "favourites", "favorites"]
+        .into_iter()
+        .find(|f| f.starts_with(&w) && *f != w)
+        .map(|f| match f {
+            "favoriten" => "Favoriten",
+            "favourites" => "favourites",
+            _ => "favorites",
+        })
+}
+
 /// A term as plain words for a query: characters the query parser reads
 /// as operators (a leading minus, colons, quotes, brackets) become spaces.
 pub fn plain(term: &str) -> String {
@@ -762,6 +807,18 @@ mod tests {
             .join(" ")
             .contains("Ostern"));
         assert!(date_words("unknown").is_empty());
+    }
+
+    #[test]
+    fn favourites_words_are_taken_out_of_a_query() {
+        assert_eq!(split_fav("Favoriten Katze"), ("Katze".into(), true));
+        assert_eq!(split_fav("♥ Sommer 2019"), ("Sommer 2019".into(), true));
+        assert_eq!(split_fav("favourites"), (String::new(), true));
+        assert_eq!(split_fav("Katze Sofa"), ("Katze Sofa".into(), false));
+        assert_eq!(fav_completion("Fav"), Some("Favoriten"));
+        assert_eq!(fav_completion("favou"), Some("favourites"));
+        assert_eq!(fav_completion("fa"), None);
+        assert_eq!(fav_completion("Katze"), None);
     }
 
     #[test]
