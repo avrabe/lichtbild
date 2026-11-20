@@ -508,3 +508,29 @@
   // The form is sent as typed; a stale list must not cover the results.
   input.form.addEventListener("submit", close);
 })();
+
+// Series (REQ-WEB-012): the count on a tile opens the rest of its series
+// in place, and closes it again; the tile itself still opens the viewer.
+(function () {
+  "use strict";
+  function toggle(stack) {
+    var series = stack.closest(".series");
+    if (!series) return;
+    var open = series.classList.toggle("open");
+    stack.setAttribute("aria-expanded", open ? "true" : "false");
+  }
+  document.addEventListener("click", function (e) {
+    var stack = e.target.closest && e.target.closest(".stack");
+    if (!stack) return;
+    e.preventDefault();
+    e.stopPropagation();
+    toggle(stack);
+  }, true);
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    var stack = e.target.closest && e.target.closest(".stack");
+    if (!stack) return;
+    e.preventDefault();
+    toggle(stack);
+  });
+})();

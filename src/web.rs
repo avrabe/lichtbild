@@ -929,20 +929,58 @@ const MONTHS: [&str; 12] = [
 
 /// Render items grouped by year, month and day; `prev_day` is the last day
 /// already on the page, so a continuation does not repeat headings.
+/// Seconds apart at most between two pictures of one series.
+const SERIES_GAP: i64 = 120;
+
+/// For each item: how many items its series holds when it leads one
+/// (REQ-WEB-012), 0 when it belongs to the series before it, 1 when alone.
+/// A series is photos of one day, each taken at most SERIES_GAP seconds
+/// after the one before and looking at least SERIES_MIN alike.
+pub fn series(items: &[index::Item], space: Option<&crate::embed::Space>) -> Vec<usize> {
+    let mut out = vec![1; items.len()];
+    let Some(space) = space else {
+        return out;
+    };
+    let t = |it: &index::Item| {
+        chrono::NaiveDateTime::parse_from_str(&it.taken_local, "%Y-%m-%dT%H:%M:%S").ok()
+    };
+    let mut lead = 0;
+    for i in 1..items.len() {
+        let (a, b) = (&items[i - 1], &items[i]);
+        let joined = a.video_ms.is_none()
+            && b.video_ms.is_none()
+            && a.taken_local.get(..10) == b.taken_local.get(..10)
+            && matches!((t(a), t(b)), (Some(x), Some(y)) if (x - y).num_seconds().abs() <= SERIES_GAP)
+            && space
+                .alike(&a.hash, &b.hash)
+                .is_some_and(|c| c >= crate::embed::SERIES_MIN);
+        if joined {
+            out[lead] += 1;
+            out[i] = 0;
+        } else {
+            lead = i;
+        }
+    }
+    out
+}
+
 pub fn render_items(
     who: &str,
     items: &[index::Item],
+    series: &[usize],
     prev_day: Option<&str>,
     more: bool,
     kq: &str,
 ) -> String {
     let mut s = String::new();
+    // Items of the open series still to come.
+    let mut left = 0usize;
     let mut prev = prev_day.map(str::to_string);
     let mut open = prev.is_some();
     if open {
         s += "<div class=\"grid\">";
     }
-    for it in items {
+    for (i, it) in items.iter().enumerate() {
         let day = it.taken_local.get(..10).unwrap_or("").to_string();
         if prev.as_deref() != Some(day.as_str()) {
             if open {
@@ -996,8 +1034,20 @@ pub fn render_items(
         } else {
             dur
         };
+        let n = series.get(i).copied().unwrap_or(1);
+        let follows = n == 0 && left > 0;
+        let dur = if n >= 2 {
+            left = n - 1;
+            s += &format!("<span class=\"series\" id=\"s{}\">", it.id);
+            format!(
+                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another\">{n}</span>"
+            )
+        } else {
+            dur
+        };
         s += &format!(
-            "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}{vq}\" title=\"{t}\">{img}{dur}</a>",
+            "<a class=\"item{cls}{vid}{later}\" id=\"i{id}\" href=\"v/{who}/{id}{vq}\" title=\"{t}\">{img}{dur}</a>",
+            later = if follows { " later" } else { "" },
             cls = if weak { " weak" } else { "" },
             vid = if it.video_ms.is_some() { " video" } else { "" },
             id = it.id,
@@ -1005,6 +1055,15 @@ pub fn render_items(
             t = esc(&title),
             vq = viewer_query(kq),
         );
+        if follows {
+            left -= 1;
+            if left == 0 {
+                s += "</span>";
+            }
+        }
+    }
+    if left > 0 {
+        s += "</span>";
     }
     if open {
         s += "</div>\n";
@@ -1086,7 +1145,8 @@ async fn timeline(
     };
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
-    let fragment = render_items(&who, &items, cur.day.as_deref(), more, kq);
+    let runs = series(&items, st.vision_on.then_some(st.space.as_ref()));
+    let fragment = render_items(&who, &items, &runs, cur.day.as_deref(), more, kq);
     if !full_page {
         return Html(fragment).into_response();
     }

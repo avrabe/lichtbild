@@ -757,6 +757,26 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-012
+    type: requirement
+    title: Photos taken one after another that look alike show as one series
+    status: implemented
+    release: v0.7.0
+    description: >
+      In the timeline, photos of one day, each taken at most two minutes
+      after the one before and looking alike by their picture vectors
+      (cosine at least 0.92), show as one tile with a count: a burst, or
+      the same scene taken again. The count opens the rest of the series in
+      place and closes it again; the tile still opens the viewer, whose
+      arrows pass through every photo. Without picture vectors nothing is
+      grouped.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

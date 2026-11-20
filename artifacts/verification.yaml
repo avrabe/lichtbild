@@ -1258,3 +1258,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-SEARCH-002
+
+  - id: VER-090
+    type: verification
+    title: Series of photos taken one after another
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "photos_taken_one_after_another_that_look_alike_are_one_series"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series"
+    links:
+      - type: verifies
+        target: REQ-WEB-012
