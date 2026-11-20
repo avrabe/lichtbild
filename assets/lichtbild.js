@@ -408,17 +408,36 @@
   }, true);
 })();
 
-// Transcript and text in the picture: copy them, and show them below the
-// picture instead of over it (REQ-TEXT-001). The choice is kept in this
-// browser only.
+// Transcript and text in the picture: copy them; and every panel over the
+// picture (transcript, text, things, people, info) can be shown below it
+// instead (REQ-TEXT-001, REQ-WEB-023). The choice is kept in this browser
+// only.
 (function () {
   "use strict";
   var viewer = document.querySelector(".viewer");
   var under = viewer && viewer.querySelector("section.under");
   if (!under) return;
-  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".tpanel, .xpanel"));
+  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".vbar .tpanel, .vbar .xpanel, .vbar .kpanel, .vbar dl.meta"));
   if (!panels.length) return;
   var homes = panels.map(function (p) { return p.parentNode; });
+  // Panels without their own tools get a "below" button.
+  panels.forEach(function (p) {
+    if (p.querySelector(".ptools")) return;
+    var tools = document.createElement("div");
+    tools.className = "ptools";
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "place";
+    b.textContent = "Show below the photo";
+    tools.appendChild(b);
+    p.insertBefore(tools, p.firstChild);
+    p.setAttribute("data-below", "Show below the photo");
+    p.setAttribute("data-over", "Show over the photo");
+    if (!p.getAttribute("data-title")) {
+      var s = p.parentNode.querySelector("summary");
+      p.setAttribute("data-title", (s && (s.getAttribute("aria-label") || s.textContent)) || "");
+    }
+  });
   var KEY = "lichtbild.below";
   function stored() {
     try { return window.localStorage.getItem(KEY) === "1"; } catch (e) { return false; }
@@ -466,6 +485,7 @@
     under.hidden = !below;
     panels.forEach(function (p, i) {
       var label = p.querySelector("button.place");
+      homes[i].classList.toggle("moved", below);
       if (below) {
         var box = document.createElement("div");
         box.className = "ublock";
@@ -487,7 +507,8 @@
     var tools = p.querySelector(".ptools");
     if (!tools) return;
     tools.hidden = false;
-    tools.querySelector("button.copy").addEventListener("click", function (e) {
+    var cp = tools.querySelector("button.copy");
+    if (cp) cp.addEventListener("click", function (e) {
       copy(textOf(p), e.currentTarget);
     });
     tools.querySelector("button.place").addEventListener("click", function () {

@@ -387,7 +387,10 @@ artifacts:
         - The map shows one trip, or the months chosen on a slider
         - The countries visited are listed with their pictures, and each opens on the map
         - What is said in a video shows over it while it plays
+        - Nothing has to cover the photo, and several corrections can be made one after another
     links:
+      - type: satisfies
+        target: REQ-WEB-023
       - type: satisfies
         target: REQ-WEB-022
       - type: satisfies

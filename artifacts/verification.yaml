@@ -1662,3 +1662,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-022
+
+  - id: VER-118
+    type: verification
+    title: The served viewer script moves every panel below and saves corrections in place (script content, not a browser run)
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_viewer_script_moves_every_panel_below_and_saves_in_place"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_viewer_script_moves_every_panel_below_and_saves_in_place"
+    links:
+      - type: verifies
+        target: REQ-WEB-023

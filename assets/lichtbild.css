@@ -587,19 +587,19 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .lb-map .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon::before { color: var(--ink); }
 
 /* Hide, inside the info panel: a quiet text action, not a pill. */
-.viewer details.info .hiderow { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(233, 225, 209, .15); }
-.viewer details.info form.hidef { display: block; margin: 0; }
-.viewer details.info form.hidef button {
+.viewer dl.meta .hiderow { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(233, 225, 209, .15); }
+.viewer dl.meta form.hidef { display: block; margin: 0; }
+.viewer dl.meta form.hidef button {
   border: 0; padding: 0; background: none; color: var(--ink-faint); font: 400 13px/1.4 var(--sans);
   letter-spacing: .04em; cursor: pointer;
 }
-.viewer details.info form.hidef button:hover { color: var(--kaki); }
-.viewer details.info .getrow { margin: 0 0 8px; display: flex; gap: 18px; }
-.viewer details.info .getrow a, .viewer details.info .getrow button {
+.viewer dl.meta form.hidef button:hover { color: var(--kaki); }
+.viewer dl.meta .getrow { margin: 0 0 8px; display: flex; gap: 18px; }
+.viewer dl.meta .getrow a, .viewer dl.meta .getrow button {
   border: 0; padding: 0; background: none; color: inherit; font: 400 13px/1.4 var(--sans);
   letter-spacing: .04em; cursor: pointer; text-decoration: none;
 }
-.viewer details.info .getrow a:hover, .viewer details.info .getrow button:hover { color: var(--kaki); }
+.viewer dl.meta .getrow a:hover, .viewer dl.meta .getrow button:hover { color: var(--kaki); }
 @media (max-width: 600px) {
   .card .cmeta .years { display: none; }
   dl.status { grid-template-columns: 1fr; gap: 4px; }
@@ -618,9 +618,9 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .placebar button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--shu); background: var(--shu); color: #fff; cursor: pointer; }
 .placebar button:disabled { opacity: .45; cursor: default; }
 .placebar a { color: var(--ink-soft); }
-.viewer details.info .placeact { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--ink-faint); }
-.viewer details.info .placeact form { display: inline; }
-.viewer details.info .placeact button { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.viewer dl.meta .placeact { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--ink-faint); }
+.viewer dl.meta .placeact form { display: inline; }
+.viewer dl.meta .placeact button { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 
 /* Text in the picture (REQ-TEXT-001): the panel beside the transcript's,
    and the line boxes over the photo. */
@@ -657,11 +657,11 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .ptools button:hover { border-color: var(--shu); }
 .viewer.below { overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .viewer.below .stage { flex: none; height: 68vh; height: 68dvh; }
-.viewer.below details.transcript, .viewer.below details.textp { display: none; }
+.viewer.below details.transcript, .viewer.below details.textp, .viewer.below details.moved { display: none; }
 .viewer section.under { padding: 4px 22px 40px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .viewer section.under[hidden] { display: none; }
 .viewer .ublock h2 { font: 400 15px/1.2 var(--serif); letter-spacing: .1em; color: #b3a995; margin: 0 0 8px; }
-.viewer .ublock .tpanel, .viewer .ublock .xpanel {
+.viewer .ublock .tpanel, .viewer .ublock .xpanel, .viewer .ublock .kpanel, .viewer .ublock dl.meta {
   position: static; width: auto; max-height: none; box-shadow: none; background: rgba(233, 225, 209, .05);
 }
 .viewer .tpanel li { transition: background-color .2s ease; border-radius: 4px; padding: 2px 6px; margin-left: -6px; }
@@ -883,14 +883,14 @@ details.albumtools { margin: 0 0 18px; }
 details.albumtools summary { cursor: pointer; color: var(--ink-faint); font-size: 13px; }
 details.albumtools form { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; max-width: 32em; }
 details.albumtools button.danger { background: var(--shu); color: #fff; }
-.viewer details.info form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-.viewer details.info form.albumf select, .viewer details.info form.albumf input,
-.viewer details.info form.albumf button {
+.viewer dl.meta form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.viewer dl.meta form.albumf select, .viewer dl.meta form.albumf input,
+.viewer dl.meta form.albumf button {
   font: 400 13px/1.4 var(--sans); min-height: 30px; padding: 0 8px; border-radius: 6px;
   border: 1px solid rgba(233, 225, 209, .25); background: transparent; color: inherit;
 }
-.viewer details.info form.albumf button { cursor: pointer; }
-.viewer details.info form.albumf [hidden] { display: none; }
+.viewer dl.meta form.albumf button { cursor: pointer; }
+.viewer dl.meta form.albumf [hidden] { display: none; }
 
 /* People (REQ-FACE-002, REQ-FACE-003): a round face per person, and the
    faces of a photo in the viewer. */
@@ -1025,3 +1025,16 @@ ol.steps li span { overflow-wrap: anywhere; }
 }
 .viewer .fixlist li.saving { opacity: .55; }
 .viewer .fixlist li.failed { outline: 1px solid var(--shu); }
+
+/* Below the photo (REQ-WEB-023): every panel lies in the page, not over it. */
+.viewer .ublock .kpanel, .viewer .ublock dl.meta { position: static; width: auto; max-height: none; box-shadow: none; border: 0; backdrop-filter: none; }
+.viewer .ublock dl.meta .ptools { grid-column: 1 / -1; }
+.viewer dl.meta .ptools { grid-column: 1 / -1; margin: 0; }
+.viewer .ublock dl.meta {
+  margin: 0; padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 8px 16px;
+  background: rgba(233, 225, 209, .05); border-radius: 6px; font: 13px/1.5 var(--sans); letter-spacing: .02em;
+}
+.viewer .ublock dl.meta dt { color: #9a9184; font: 500 11px/1.9 var(--sans); text-transform: uppercase; letter-spacing: .16em; }
+.viewer .ublock dl.meta dd { margin: 0; color: #e9e1d1; overflow-wrap: anywhere; }
+.viewer .ublock dl.meta a { color: #e9e1d1; }
+.viewer .ublock dl.meta .hiderow, .viewer .ublock dl.meta .getrow, .viewer .ublock dl.meta form.albumf { grid-column: 1 / -1; }

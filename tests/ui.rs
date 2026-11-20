@@ -324,6 +324,30 @@ async fn a_video_plays_with_its_transcript_as_captions() {
     assert!(!page.contains("<track"), "{page}");
 }
 
+// The viewer's script ships what has no server side: every panel over the
+// photo can move below it, and a correction is saved in place, keeping the
+// other rows. (This checks the served script, not a browser run.)
+// rivet: verifies REQ-WEB-023
+#[tokio::test]
+async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (s, js) = get(&app, "/static/lichtbild.js", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        js.contains(r#"viewer.querySelectorAll(".vbar .tpanel, .vbar .xpanel, .vbar .kpanel, .vbar dl.meta")"#),
+        "every panel kind moves below"
+    );
+    assert!(js.contains(r#"var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };"#));
+    assert!(js.contains("if (mine) row.replaceWith(document.importNode(mine, true));"));
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    assert!(
+        page.contains("<section class=\"under\" hidden></section>"),
+        "{page}"
+    );
+    assert!(page.contains("<dl class=\"meta\">"), "{page}");
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

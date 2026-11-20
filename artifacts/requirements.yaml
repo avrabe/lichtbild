@@ -1012,6 +1012,28 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-023
+    type: requirement
+    title: Every panel over the photo can lie below it, and corrections save in place
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner report 2026-11-20: everything overlapping the photo should be
+      possible to move down; and changing several corrections lost what
+      was typed in the other rows. Each panel the viewer opens over the
+      photo (transcript, text, things, people, info) offers to lie below
+      the photo instead, all together, kept in the browser. A correction
+      is sent in the background and only its own row (or, for a kind
+      never in the house, its list) is replaced, so the other rows keep
+      what was typed and the panel stays open; without JavaScript the
+      forms post as before.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-022
     type: requirement
     title: A video plays with its transcript as captions
