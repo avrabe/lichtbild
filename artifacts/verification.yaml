@@ -1502,3 +1502,17 @@ artifacts:
       - type: verifies
         target: REQ-WEB-018
 
+  - id: VER-107
+    type: verification
+    title: A bad picture or a hang fails alone in a batch
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_bad_picture_or_a_hang_fails_alone_in_a_batch"
+      test-location: tests/faces.rs
+      steps:
+        - run: "cargo test --test faces a_bad_picture_or_a_hang_fails_alone_in_a_batch"
+    links:
+      - type: verifies
+        target: REQ-FACE-002
+

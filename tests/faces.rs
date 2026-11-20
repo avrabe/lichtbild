@@ -238,3 +238,70 @@ async fn the_pass_groups_people_and_a_name_finds_them() {
         "{v}"
     );
 }
+
+// Photos go to a child in batches; a picture that cannot be read fails
+// alone, and a child that takes too long is killed and the rest go to a
+// new one, each failing on its own.
+// rivet: verifies REQ-FACE-002
+#[test]
+fn a_bad_picture_or_a_hang_fails_alone_in_a_batch() {
+    let Some(m) = model() else { return };
+    let tmp = tempfile::tempdir().unwrap();
+    let files: Vec<PathBuf> = [
+        ("a.jpg", A1),
+        ("broken.jpg", &b"not a picture"[..]),
+        ("b.jpg", B1),
+    ]
+    .iter()
+    .map(|(n, d)| {
+        let p = tmp.path().join(n);
+        std::fs::write(&p, d).unwrap();
+        p
+    })
+    .collect();
+    let mut got: Vec<(usize, Result<usize, String>)> = Vec::new();
+    lichtbild::vision::run_batch::<faces::Found>(
+        Path::new(EXE),
+        "faces",
+        &m,
+        &files,
+        faces::TIME_BUDGET,
+        &mut |i, r| {
+            got.push((i, r.map(|f| f.faces.len()).map_err(|e| e.to_string())));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(got.len(), 3, "{got:?}");
+    assert_eq!(got[0], (0, Ok(1)));
+    assert!(
+        matches!(&got[1], (1, Err(e)) if e.contains("decode")),
+        "{got:?}"
+    );
+    assert_eq!(got[2], (2, Ok(1)));
+    // No time at all: every picture times out, each in its own child.
+    let mut late = Vec::new();
+    lichtbild::vision::run_batch::<faces::Found>(
+        Path::new(EXE),
+        "faces",
+        &m,
+        &files,
+        std::time::Duration::from_millis(1),
+        &mut |i, r| {
+            late.push((i, r.err().map(|e| e.to_string())));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(late.len(), 3, "{late:?}");
+    for (i, (n, e)) in late.iter().enumerate() {
+        assert_eq!(*n, i);
+        // The broken one may fail before its time is up.
+        let want: &[&str] = if i == 1 {
+            &["timeout", "decode"]
+        } else {
+            &["timeout"]
+        };
+        assert!(want.contains(&e.as_deref().unwrap_or("")), "{late:?}");
+    }
+}

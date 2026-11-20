@@ -389,16 +389,21 @@ pub fn cos(a: &[i8], b: &[i8]) -> f32 {
     dot as f32 / (n(a) * n(b))
 }
 
-/// The `faces` child: `lichtbild faces <model-dir> <file>`.
+/// The `faces` child: `lichtbild faces <model-dir> <file>…`, one answer
+/// line per file; the models are loaded once.
 pub fn child_main(args: &[&str]) -> Result<()> {
-    let [model_dir, file] = args else {
-        bail!("usage: faces <model-dir> <file>");
+    let [model_dir, files @ ..] = args else {
+        bail!("usage: faces <model-dir> <file>…");
     };
-    crate::vision::limit_self(TIME_BUDGET.as_secs() * 4);
-    let img = crate::vision::load_picture(Path::new(file), 256 << 20)?;
-    let faces = Finder::load(Path::new(model_dir))?.find(&img)?;
-    serde_json::to_writer(std::io::stdout().lock(), &faces)?;
-    Ok(())
+    if files.is_empty() {
+        bail!("usage: faces <model-dir> <file>…");
+    }
+    crate::vision::limit_self(TIME_BUDGET.as_secs() * 4 * files.len() as u64);
+    let finder = Finder::load(Path::new(model_dir))?;
+    crate::vision::answer_each(files, |f| {
+        let img = crate::vision::load_picture(f, 256 << 20)?;
+        finder.find(&img)
+    })
 }
 
 /// What one pass did.
@@ -443,45 +448,44 @@ pub fn run_pass(
     }
     let started = Instant::now();
     let mut said = Instant::now();
-    for (n, (_, rec)) in todo.into_iter().enumerate() {
-        if n > 0 && said.elapsed() >= Duration::from_secs(600) {
-            said = Instant::now();
-            tracing::info!(
-                "looked for faces in {n} of {total} photos ({} faces, {} failed) in {} min",
-                rep.faces,
-                rep.failed,
-                started.elapsed().as_secs() / 60
-            );
-        }
-        if deadline.is_some_and(|d| Instant::now() >= d) {
-            rep.remaining = total - n as u64;
-            break;
-        }
-        let Some(root) = cfg.roots.iter().find(|r| r.label == rec.label) else {
-            continue;
-        };
-        let rel = crate::index::rel_from_bytes(&rec.rel);
-        // SSC-004: the stored path must still resolve inside its root.
-        let Ok(path) = crate::source::resolve(&root.path, &rel) else {
-            continue;
-        };
-        match crate::vision::run_child_as::<Found>(exe, "faces", &path, dir, TIME_BUDGET) {
-            Ok(found) => {
-                rep.looked += 1;
-                rep.faces += found.faces.len() as u64;
-                for (n, jpeg) in found.crops.iter().enumerate() {
-                    let p = crop_path(&cfg.data_dir, &rec.hash, n as u32);
-                    crate::datadir::write_atomic(&p, jpeg)?;
+    rep.remaining = crate::vision::in_batches::<Found>(
+        cfg,
+        &todo,
+        exe,
+        "faces",
+        dir,
+        TIME_BUDGET,
+        deadline,
+        &mut |n, rec, r| {
+            match r {
+                Ok(found) => {
+                    rep.looked += 1;
+                    rep.faces += found.faces.len() as u64;
+                    for (k, jpeg) in found.crops.iter().enumerate() {
+                        let p = crop_path(&cfg.data_dir, &rec.hash, k as u32);
+                        crate::datadir::write_atomic(&p, jpeg)?;
+                    }
+                    idx.set_faces(&rec.hash, VERSION, &found.faces)?;
                 }
-                idx.set_faces(&rec.hash, VERSION, &found.faces)?;
+                Err(e) => {
+                    rep.failed += 1;
+                    idx.set_faces_failed(&rec.hash, VERSION, &crate::vision::short_reason(&e))?;
+                }
             }
-            Err(e) => {
-                rep.failed += 1;
-                idx.set_faces_failed(&rec.hash, VERSION, &crate::vision::short_reason(&e))?;
+            progress(n as u64 + 1, total, &rep);
+            if said.elapsed() >= Duration::from_secs(600) {
+                said = Instant::now();
+                tracing::info!(
+                    "looked for faces in {} of {total} photos ({} faces, {} failed) in {} min",
+                    n + 1,
+                    rep.faces,
+                    rep.failed,
+                    started.elapsed().as_secs() / 60
+                );
             }
-        }
-        progress(n as u64 + 1, total, &rep);
-    }
+            Ok(())
+        },
+    )?;
     Ok(rep)
 }
 

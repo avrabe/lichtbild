@@ -706,7 +706,8 @@ artifacts:
     release: v0.8.0
     description: >
       Owner request 2026-11-20 (next after v0.7.0). Every photo is looked
-      at for faces once, after the look pass; each face keeps its place in
+      at for faces once, after the look pass, in a separate process where a
+      picture that breaks or hangs fails alone; each face keeps its place in
       the photo, a vector and a small picture. Faces of one person, in all
       libraries, are grouped; a group of someone seen in at least two
       photos is offered for a name on a People page, biggest first.
