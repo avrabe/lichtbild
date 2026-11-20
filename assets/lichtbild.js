@@ -294,17 +294,18 @@
     if (l.panel) l.panel.addEventListener("toggle", showLayers);
   });
   viewer.addEventListener("lb-layout", showLayers);
-  // A find in "Something wrong?" lights up its box (REQ-FIX-001).
-  viewer.querySelectorAll("details.things li[data-n]").forEach(function (li) {
+  // A find in "Something wrong?" lights up its box (REQ-FIX-001); rows
+  // are replaced when a correction is saved, so this listens on the viewer.
+  function hot(e, on) {
+    var li = e.target.closest && e.target.closest("details.things li[data-n]");
+    if (!li) return;
     var box = viewer.querySelector(".thinglayer a[data-n=\"" + li.getAttribute("data-n") + "\"]");
-    if (!box) return;
-    function on() { box.classList.add("hot"); }
-    function off() { box.classList.remove("hot"); }
-    li.addEventListener("mouseenter", on);
-    li.addEventListener("mouseleave", off);
-    li.addEventListener("focusin", on);
-    li.addEventListener("focusout", off);
-  });
+    if (box) box.classList.toggle("hot", on);
+  }
+  viewer.addEventListener("mouseover", function (e) { hot(e, true); });
+  viewer.addEventListener("mouseout", function (e) { hot(e, false); });
+  viewer.addEventListener("focusin", function (e) { hot(e, true); });
+  viewer.addEventListener("focusout", function (e) { hot(e, false); });
   if (img.complete) showLayers(); else img.addEventListener("load", showLayers);
   window.addEventListener("resize", showLayers);
   function apply() {
@@ -1134,5 +1135,59 @@
       b.textContent = "Hidden. Show them again";
       b.disabled = false;
     }, function () { b.disabled = false; b.textContent = "Could not hide, try again"; });
+  });
+})();
+
+// Corrections (REQ-FIX-001, REQ-FIX-002) are saved in place: only the row
+// that was sent changes, so what was typed in the other rows stays, and the
+// panel stays open. Without JavaScript the forms post and come back.
+(function () {
+  "use strict";
+  var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };
+  function key(form) {
+    var n = form.elements.n;
+    return form.getAttribute("action") + "#" + (n ? n.value : "");
+  }
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    var action = form.getAttribute && form.getAttribute("action");
+    if (!KINDS[action] || !window.fetch || !window.DOMParser) return;
+    e.preventDefault();
+    var body = new URLSearchParams(new FormData(form));
+    if (e.submitter && e.submitter.name) body.append(e.submitter.name, e.submitter.value);
+    var row = form.closest("li") || form;
+    row.classList.add("saving");
+    fetch(action, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.text();
+    }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      if (action === "fix/off") {
+        // A whole kind changed: every row of the list and every box.
+        var list = form.closest("details.fix");
+        var fresh = list && doc.querySelector("details.things details.fix");
+        if (fresh) { list.innerHTML = fresh.innerHTML; list.open = true; }
+      } else {
+        var k = key(form), mine = null;
+        doc.querySelectorAll("form[action=\"" + action + "\"]").forEach(function (f) {
+          if (!mine && key(f) === k) mine = f.closest("li") || f;
+        });
+        if (mine) row.replaceWith(document.importNode(mine, true));
+        else row.classList.remove("saving");
+      }
+      // The boxes over the photo follow: a find left out is gone.
+      document.querySelectorAll(".thinglayer a[data-n]").forEach(function (a) {
+        var b = doc.querySelector(".thinglayer a[data-n=\"" + a.getAttribute("data-n") + "\"]");
+        if (b) a.className = b.className;
+      });
+    }).catch(function () {
+      row.classList.remove("saving");
+      row.classList.add("failed");
+    });
   });
 })();

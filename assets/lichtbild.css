@@ -1023,3 +1023,5 @@ ol.steps li span { overflow-wrap: anywhere; }
   ol.steps li { grid-template-columns: 1fr auto; }
   ol.steps li span { grid-column: 1 / -1; }
 }
+.viewer .fixlist li.saving { opacity: .55; }
+.viewer .fixlist li.failed { outline: 1px solid var(--shu); }
