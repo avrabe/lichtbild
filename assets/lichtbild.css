@@ -238,6 +238,17 @@ h4.day {
 .viewer .vbar a:hover { color: var(--shu); }
 .viewer .when { color: #9a9184; font-variant-numeric: tabular-nums; }
 .viewer .weakdate { color: #d99a4e; }
+/* Phones: the bar stays one line. The back arrow alone, the date without
+   seconds-wrapping, and its source only as colour. */
+@media (max-width: 600px) {
+  .viewer .vbar { gap: 6px; padding: 10px 10px; align-items: center; }
+  .viewer .vbar a.back .lbl { display: none; }
+  .viewer .vbar a.back { font-size: 20px; padding: 0 6px 0 2px; }
+  .viewer .vbar a.when { white-space: nowrap; font-size: 12px; letter-spacing: .04em; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .viewer .vbar a.when .weakdate { display: none; }
+  .viewer .vbar a.when:has(.weakdate) { color: #d99a4e; }
+  .viewer .vbar summary { padding: 0 5px; }
+}
 .viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; position: relative; padding: 0 24px 24px; touch-action: pan-y pinch-zoom; }
 .viewer .photo { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; border-radius: 2px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
 .viewer .prev, .viewer .next {
@@ -689,6 +700,18 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .thinglayer a.hot { display: block; z-index: 2; border-color: var(--shu); background: rgba(200, 69, 45, .2); }
 .viewer .thinglayer a.gone.hot { border-style: dashed; }
 .viewer details.things li[data-n]:hover, .viewer details.things li[data-n]:focus-within { color: #fff; }
+/* The bar's panels hang from the bar's right edge, not from their own icon:
+   on an iPad the ◎ sits at the left, and a panel right-aligned to it ran off
+   the screen and over the photo. On phones they are a sheet at the bottom. */
+.viewer .vbar details.transcript, .viewer .vbar details.textp, .viewer .vbar details.things { position: static; }
+.viewer .vbar .tpanel, .viewer .vbar .xpanel, .viewer .vbar .kpanel {
+  right: 18px; top: 52px; z-index: 30; max-height: calc(100vh - 90px); max-height: calc(100dvh - 90px);
+}
+@media (max-width: 600px) {
+  .viewer .vbar .tpanel, .viewer .vbar .xpanel, .viewer .vbar .kpanel {
+    position: fixed; left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; max-height: 60vh; max-height: 60dvh;
+  }
+}
 section.looks { margin-top: 28px; }
 
 /* Things (REQ-SEE-001): a tile per kind with its surest photo. */

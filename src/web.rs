@@ -2119,7 +2119,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <a class=\"when\" href=\"days/{w}?from={day}&amp;to={day}#i{id}\" title=\"All pictures of this day\">{when}</a>{tr}{textp}{things}{faces}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\" aria-label=\"Timeline\">←<span class=\"lbl\"> Timeline</span></a> <a class=\"when\" href=\"days/{w}?from={day}&amp;to={day}#i{id}\" title=\"All pictures of this day\">{when}</a>{tr}{textp}{things}{faces}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
