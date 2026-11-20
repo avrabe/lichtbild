@@ -788,10 +788,19 @@
       opts.innerHTML + '<option value="new">New album\u2026</option></select>' +
       '<input type="text" class="selname" maxlength="80" placeholder="Album name" aria-label="Name of the new album" hidden>' +
       '<button type="button" class="seladd" hidden>Add</button>' : '') +
+    '<button type="button" class="selshow">\u25b6 Slideshow</button>' +
     '<button type="button" class="selhide">Hide for me</button>' +
     '<button type="button" class="selcancel">Cancel</button>';
   document.body.appendChild(bar);
   var count = bar.querySelector(".seln"), hideBtn = bar.querySelector(".selhide");
+  // A slideshow of the chosen pictures (REQ-WEB-026), in this timeline.
+  bar.querySelector(".selshow").addEventListener("click", function () {
+    var list = chosen();
+    if (!list.length) return;
+    var own = document.querySelector('.thead a[href^="show/"]');
+    var who = own ? own.getAttribute("href").split("?")[0].slice(5) : "all";
+    window.location.href = "show/" + who + "?ids=" + encodeURIComponent(list.join(","));
+  });
   var favBtn = bar.querySelector(".selfav");
   var pick = bar.querySelector(".selalbum"), nameIn = bar.querySelector(".selname");
   var addBtn = bar.querySelector(".seladd"), outBtn = bar.querySelector(".selout");

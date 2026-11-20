@@ -1705,3 +1705,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-025
+
+  - id: VER-121
+    type: verification
+    title: A slideshow shows only the chosen photos of the timeline's libraries
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_of_the_chosen_pictures"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_slideshow_of_the_chosen_pictures"
+    links:
+      - type: verifies
+        target: REQ-WEB-026

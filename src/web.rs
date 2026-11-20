@@ -1913,6 +1913,9 @@ pub struct ShowQuery {
     from: Option<String>,
     to: Option<String>,
     md: Option<String>,
+    /// Only these items, chosen in a timeline (REQ-WEB-026): ids
+    /// separated by commas.
+    ids: Option<String>,
 }
 
 /// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
@@ -1965,7 +1968,14 @@ async fn show(
             md: sq.md.clone(),
             ..Default::default()
         };
+        let chosen: Option<std::collections::HashSet<u64>> = sq.ids.as_deref().map(|s| {
+            s.split(',')
+                .filter_map(|i| i.trim().parse().ok())
+                .take(SHOW_MAX)
+                .collect()
+        });
         let favs = match (sq.fav, sq.album) {
+            _ if chosen.is_some() => chosen,
             _ if dq.valid() => Some(
                 day_items(&idx, &dups, &labels, &hidden, &dq, true)?
                     .into_iter()

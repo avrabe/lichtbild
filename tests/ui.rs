@@ -427,6 +427,49 @@ async fn answers_are_timed_by_route() {
     assert!(!row.contains(&e.video.to_string()), "an id in {row}");
 }
 
+// A slideshow of the chosen pictures: only those, only photos, only of the
+// timeline's libraries; the selection bar offers it.
+// rivet: verifies REQ-WEB-026
+#[tokio::test]
+async fn a_slideshow_of_the_chosen_pictures() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let all = e.idx.all().unwrap();
+    let photo = |l: &str| {
+        all.iter()
+            .find(|(_, r)| r.label == l && r.video.is_none() && !r.missing && r.thumb == "ok")
+            .unwrap()
+            .0
+    };
+    let (p1, p2) = (photo("p1"), photo("p2"));
+    let slides = |page: &str| -> Vec<u64> {
+        page.split("<li data-src")
+            .skip(1)
+            .filter_map(|s| {
+                let at = s.find("data-href=\"v/")? + 13;
+                let rest = &s[at..];
+                let rest = &rest[rest.find('/')? + 1..];
+                rest[..rest.find('"')?].parse().ok()
+            })
+            .collect()
+    };
+    let (s, page) = get(&app, &format!("/show/p1?ids={p1},{p2},{}", e.video), false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(slides(&page), vec![p1], "{page}");
+    let (_, page) = get(&app, &format!("/show/all?ids={p2}%2C{p1}"), false).await;
+    let mut both = slides(&page);
+    both.sort();
+    let mut want = vec![p1, p2];
+    want.sort();
+    assert_eq!(both, want, "{page}");
+    let (_, page) = get(&app, "/show/p1?ids=nonsense", false).await;
+    assert!(slides(&page).is_empty(), "{page}");
+    let (_, js) = get(&app, "/static/lichtbild.js", false).await;
+    assert!(js.contains(
+        r#"window.location.href = "show/" + who + "?ids=" + encodeURIComponent(list.join(","));"#
+    ));
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

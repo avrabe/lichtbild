@@ -390,7 +390,10 @@ artifacts:
         - Nothing has to cover the photo, and several corrections can be made one after another
         - Day or night by a switch in the menu
         - How quickly pages answer is a number on the status page, with the slow ones named
+        - A slideshow of just the pictures chosen
     links:
+      - type: satisfies
+        target: REQ-WEB-026
       - type: satisfies
         target: REQ-WEB-025
       - type: satisfies

@@ -1012,6 +1012,26 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-026
+    type: requirement
+    title: A slideshow of the chosen pictures
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: a slideshow of the pictures selected. The
+      selection bar of a timeline offers a slideshow of the chosen
+      pictures: only those, only photos, only of that timeline's
+      libraries and not hidden; anything else in the list is left out.
+      On a TV it plays through the device's own screen mirroring
+      (AirPlay); casting to other receivers would need a script from
+      another host, which the same-origin rule does not allow.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-025
     type: requirement
     title: How quickly the server answers is measured and shown
