@@ -955,3 +955,14 @@ ul.fixlist button, form.fixadd button {
 }
 ul.fixlist button:hover, form.fixadd button:hover { border-color: var(--shu); }
 ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; display: block; }
+
+/* Days (REQ-WEB-019): the day before and after, and a picker for any day. */
+.daynav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; font: 500 14px/1.3 var(--sans); }
+.daynav a { color: var(--ink); text-decoration: none; padding: 6px 2px; }
+.daynav a:hover { color: var(--shu); }
+.daynav form.daypick { display: flex; gap: 6px; align-items: center; margin: 0; }
+.daynav form.daypick label { color: var(--ink-faint); }
+.daynav form.daypick input, .daynav form.daypick button {
+  font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--ink-faint); background: var(--paper-2); color: var(--ink);
+}
+.daynav form.daypick button { cursor: pointer; }

@@ -535,6 +535,48 @@ impl Index {
         Ok(out)
     }
 
+    /// The oldest item taken at or after `from` (a "taken" prefix such as
+    /// "YYYY-MM-DDT99") that `keep` accepts: the next day for the days page.
+    pub fn first_from(
+        &self,
+        labels: &[String],
+        from: &str,
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<Option<Item>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let pick = |id: u64| -> Result<Option<Item>> {
+            let Some(raw) = items.get(id)? else {
+                return Ok(None);
+            };
+            let rec = decode(raw.value())?;
+            Ok(keep(id, &rec).then(|| Item::of(id, rec)))
+        };
+        match labels {
+            [] => {}
+            [one] => {
+                let t = r.open_table(BY_ROOT)?;
+                for e in t.range((one.as_str(), from, 0)..(one.as_str(), TAKEN_MAX, 0))? {
+                    if let Some(it) = pick(e?.0.value().2)? {
+                        return Ok(Some(it));
+                    }
+                }
+            }
+            many => {
+                let t = r.open_table(BY_TIME)?;
+                for e in t.range((from, 0)..(TAKEN_MAX, 0))? {
+                    let (k, v) = e?;
+                    if many.iter().any(|l| l == v.value()) {
+                        if let Some(it) = pick(k.value().1)? {
+                            return Ok(Some(it));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(None)
+    }
+
     /// Items taken on `month_day` ("MM-DD") in earlier years than `year`,
     /// in the libraries `labels`, newest first: (id, record).
     pub fn on_this_day(

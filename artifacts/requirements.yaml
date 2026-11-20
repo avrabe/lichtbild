@@ -965,6 +965,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-019
+    type: requirement
+    title: From a day to the days before and after, or any day
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: on the day view, choose any day and browse
+      forwards and backwards. A day (or a trip's days) links to the
+      nearest earlier and later day with a picture the viewer would see
+      there (one copy each, nothing hidden, only their libraries), and a
+      date picker opens any day; ← and → step a day. A malformed date is
+      refused.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-018
     type: requirement
     title: A trip, a day, or this day in every year is shown alone

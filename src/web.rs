@@ -1778,7 +1778,7 @@ async fn show(
         from: sq.from.clone(),
         to: sq.to.clone(),
         md: sq.md.clone(),
-        title: None,
+        ..Default::default()
     };
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
         let hidden = idx.hidden(&me)?;
@@ -1788,7 +1788,7 @@ async fn show(
             from: sq.from.clone(),
             to: sq.to.clone(),
             md: sq.md.clone(),
-            title: None,
+            ..Default::default()
         };
         let favs = match (sq.fav, sq.album) {
             _ if dq.valid() => Some(
@@ -4410,6 +4410,8 @@ pub struct DaysQuery {
     md: Option<String>,
     /// A heading for the page (a trip's places).
     title: Option<String>,
+    /// One day, YYYY-MM-DD, from the date picker: the same as from=to=day.
+    day: Option<String>,
 }
 
 fn is_day(s: &str) -> bool {
@@ -4521,42 +4523,60 @@ async fn days_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath(who): UrlPath<String>,
-    Query(dq): Query<DaysQuery>,
+    Query(mut dq): Query<DaysQuery>,
 ) -> Response {
     let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
+    if let Some(d) = dq.day.take() {
+        dq.from = Some(d.clone());
+        dq.to = Some(d);
+        dq.md = None;
+    }
     if !dq.valid() {
         return (StatusCode::BAD_REQUEST, "which days?").into_response();
     }
     let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
     let space = st.vision_on.then(|| st.space.clone());
     let dq2 = dq.clone();
-    let res =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<index::Item>, Vec<usize>)> {
-            let hidden = idx.hidden(&me)?;
-            let favs = idx.favs(&me)?;
-            let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
-            for it in &mut items {
-                it.copies = dups.shown(it.id, &labels, &hidden).copies;
-                it.fav = favs.contains(&it.id);
-            }
-            let runs = series(&items, space.as_deref());
-            Ok((items, runs))
-        })
-        .await;
-    let (items, runs) = match res {
+    type Days = (Vec<index::Item>, Vec<usize>, Option<String>, Option<String>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Days> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+        for it in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
+        }
+        let runs = series(&items, space.as_deref());
+        // The days before and after with a picture the viewer would see here.
+        let (mut before, mut after) = (None, None);
+        if let (None, Some(f), Some(t)) = (&dq2.md, &dq2.from, &dq2.to) {
+            let shown = |id: u64, _: &index::Record| dups.shown(id, &labels, &hidden).shown;
+            before = idx
+                .timeline_where(&labels, Some((f.as_str(), 0)), 1, shown)?
+                .pop()
+                .and_then(|it| it.taken_local.get(..10).map(str::to_string));
+            after = idx
+                .first_from(&labels, &format!("{t}T99"), shown)?
+                .and_then(|it| it.taken_local.get(..10).map(str::to_string));
+        }
+        Ok((items, runs, before, after))
+    })
+    .await;
+    let (items, runs, before, after) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let head = esc(&dq.heading());
     let w = esc(&who);
+    let nav = day_nav(&w, &dq, before.as_deref(), after.as_deref());
     let body = if items.is_empty() {
-        format!("<h1>{head}</h1><p class=\"dim\">No pictures from these days.</p>")
+        format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline days\">\n{}</div>\n{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
@@ -4564,6 +4584,35 @@ async fn days_page(
         )
     };
     page_for(&st, "lichtbild days", &body).into_response()
+}
+
+/// Earlier and later day with pictures, and a date picker for any day
+/// (REQ-WEB-019). `before` and `after` are YYYY-MM-DD.
+fn day_nav(w: &str, dq: &DaysQuery, before: Option<&str>, after: Option<&str>) -> String {
+    let day = |d: &str| {
+        long_date(&format!("{d}T00:00"))
+            .trim_end_matches(", 00:00")
+            .to_string()
+    };
+    let link = |d: Option<&str>, rel: &str, arrow_first: bool| match d {
+        Some(d) => {
+            let (d, label) = (esc(d), esc(&day(d)));
+            let text = if arrow_first {
+                format!("‹ {label}")
+            } else {
+                format!("{label} ›")
+            };
+            format!("<a rel=\"{rel}\" href=\"days/{w}?from={d}&amp;to={d}\">{text}</a>")
+        }
+        None => "<span></span>".to_string(),
+    };
+    let value = dq.from.as_deref().filter(|_| dq.md.is_none()).unwrap_or("");
+    format!(
+        "<nav class=\"daynav\">{}<form class=\"daypick\" method=\"get\" action=\"days/{w}\"><label>Day <input type=\"date\" name=\"day\" value=\"{}\" required></label><button type=\"submit\">Go</button></form>{}</nav>\n",
+        link(before, "prev", true),
+        esc(value),
+        link(after, "next", false),
+    )
 }
 
 // ---- People (REQ-FACE-002, REQ-FACE-003, DD-025) ----

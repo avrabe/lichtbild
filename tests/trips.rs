@@ -36,6 +36,7 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 
 // rivet: verifies REQ-TRIP-001
 // rivet: verifies REQ-WEB-018
+// rivet: verifies REQ-WEB-019
 #[tokio::test]
 async fn days_away_from_home_are_one_trip_named_by_place() {
     let fx = fixture();
@@ -114,6 +115,25 @@ async fn days_away_from_home_are_one_trip_named_by_place() {
     let (_, day) = get(&app, "/days/all?from=2021-07-05&to=2021-07-05").await;
     assert_eq!(day.matches("class=\"item").count(), 2, "{day}");
     assert!(day.contains("<h1>5 July 2021</h1>"), "{day}");
+    // From a day to the days before and after that have pictures (4 July
+    // has none), and any day by the date picker.
+    assert!(
+        day.contains(
+            "<a rel=\"prev\" href=\"days/all?from=2021-07-03&amp;to=2021-07-03\">‹ 3 July 2021</a>"
+        ),
+        "{day}"
+    );
+    assert!(
+        day.contains("<a rel=\"next\" href=\"days/all?from=2021-07-10&amp;to=2021-07-10\">10 July 2021 ›</a>"),
+        "{day}"
+    );
+    assert!(day.contains("name=\"day\" value=\"2021-07-05\""), "{day}");
+    let (s, picked) = get(&app, "/days/all?day=2021-07-05").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(picked.matches("class=\"item").count(), 2, "{picked}");
+    assert!(picked.contains("<h1>5 July 2021</h1>"), "{picked}");
+    let (s, _) = get(&app, "/days/all?day=5.7.2021").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
     let (_, md) = get(&app, "/days/all?md=06-25").await;
     assert_eq!(md.matches("class=\"item").count(), 3, "{md}");
     let (s, _) = get(&app, "/days/all?from=2021-07-05&to=nonsense").await;

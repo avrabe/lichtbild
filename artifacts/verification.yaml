@@ -1548,3 +1548,17 @@ artifacts:
         target: REQ-FIX-001
       - type: verifies
         target: REQ-FIX-002
+
+  - id: VER-110
+    type: verification
+    title: A day links to the days before and after with pictures, and the picker opens any day
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "days_away_from_home_are_one_trip_named_by_place"
+      test-location: tests/trips.rs
+      steps:
+        - run: "cargo test --test trips days_away_from_home_are_one_trip_named_by_place"
+    links:
+      - type: verifies
+        target: REQ-WEB-019

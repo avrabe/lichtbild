@@ -1063,3 +1063,15 @@
     open();
   });
 })();
+
+// Days (REQ-WEB-019): picking a date goes there; ←/→ step a day.
+(function () {
+  const pick = document.querySelector('form.daypick input[type=date]');
+  if (!pick) return;
+  pick.addEventListener('change', () => { if (pick.value) pick.form.submit(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const a = document.querySelector(e.key === 'ArrowLeft' ? '.daynav a[rel=prev]' : e.key === 'ArrowRight' ? '.daynav a[rel=next]' : null);
+    if (a) { e.preventDefault(); location.href = a.href; }
+  });
+})();
