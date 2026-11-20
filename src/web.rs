@@ -128,6 +128,7 @@ pub fn router(state: AppState) -> Router {
         .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
         .route("/things", get(things_page))
+        .route("/trips", get(trips_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -512,6 +513,7 @@ fn app_menu(st: &AppState) -> String {
          <ul>\
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
+         <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
          <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
@@ -793,6 +795,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
+             <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
@@ -2956,6 +2959,101 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     }
     body += "</section>";
     page_for(&st, "lichtbild things", &body).into_response()
+}
+
+/// "3–9 July 2021", "30 June – 2 July 2021", "30 December 2021 – 2 January
+/// 2022".
+fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    let m = |d: chrono::NaiveDate| MONTHS[d.month0() as usize];
+    if a == b {
+        format!("{} {} {}", a.day(), m(a), a.year())
+    } else if a.year() != b.year() {
+        format!(
+            "{} {} {} – {} {} {}",
+            a.day(),
+            m(a),
+            a.year(),
+            b.day(),
+            m(b),
+            b.year()
+        )
+    } else if a.month() != b.month() {
+        format!("{} {} – {} {} {}", a.day(), m(a), b.day(), m(b), b.year())
+    } else {
+        format!("{}–{} {} {}", a.day(), b.day(), m(b), b.year())
+    }
+}
+
+/// GET /trips: days away from home, grouped and named by place
+/// (REQ-TRIP-001); a trip opens the timeline at its last day.
+async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let (pc, places) = (st.positions.clone(), st.places.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let hidden = idx.hidden(&me)?;
+        let items: Vec<(u64, index::Record)> = idx
+            .all()?
+            .into_iter()
+            .filter(|(id, r)| {
+                !r.missing && labels.contains(&r.label) && dups.shown(*id, &labels, &hidden).shown
+            })
+            .collect();
+        let pos = pc.get(&idx)?;
+        let trips = crate::trips::find(&items, &pos, places.as_deref());
+        let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
+        Ok(trips
+            .into_iter()
+            .map(|t| {
+                let h = hashes.get(&t.cover).cloned().unwrap_or_default();
+                (t, h)
+            })
+            .collect::<Vec<_>>())
+    })
+    .await;
+    let trips = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let mut body = String::from(
+        "<h1>Trips</h1><p class=\"dim\">Days on which your pictures were taken more than 50 km from home, one after another. Home is where most days of pictures were taken. A trip opens the timeline at its last day.</p>",
+    );
+    if trips.is_empty() {
+        body += "<p>No trips found yet. Trips come from the positions of pictures: recorded, estimated from neighbours or set by hand.</p>";
+        return page_for(&st, "lichtbild trips", &body).into_response();
+    }
+    body += "<section class=\"thingtiles trips\">";
+    for (t, hash) in &trips {
+        let title = match t.places.as_slice() {
+            [] => "Away".to_string(),
+            [one] => one.clone(),
+            [one, two] => format!("{one} and {two}"),
+            [one, rest @ ..] => format!("{one} and {} more places", rest.len()),
+        };
+        body += &format!(
+            "<a class=\"thing\" href=\"t/{w}?before={end}T99&amp;id=0\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small></a>",
+            w = esc(&who),
+            end = t.end.format("%Y-%m-%d"),
+            id = t.cover,
+            h = esc(hash.get(..12).unwrap_or("")),
+            title = esc(&title),
+            n = t.items,
+            when = esc(&day_span(t.start, t.end)),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild trips", &body).into_response()
 }
 
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);

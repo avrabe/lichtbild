@@ -292,6 +292,7 @@ artifacts:
         - On the iPad, a slideshow runs from any photo with the screen kept on
         - Searching "Hund" offers "2021 (12)" and "Katze (3)" to narrow down
         - Twenty screenshots are chosen and hidden in one go, and the undo brings them back
+        - A holiday shows on the Trips page under the town visited, with its days
     links:
       - type: satisfies
         target: REQ-SEARCH-002
@@ -305,3 +306,5 @@ artifacts:
         target: REQ-WEB-014
       - type: satisfies
         target: REQ-SEARCH-004
+      - type: satisfies
+        target: REQ-TRIP-001

@@ -244,7 +244,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
     assert_eq!(html.matches("<h3 class=\"month\">May</h3>").count(), 1);
     assert!(html.contains("<h4 class=\"day\">2023-05-12</h4>"));
     let more = html
-        .split("hx-get=\"")
+        .split("class=\"more\" hx-get=\"")
         .nth(1)
         .expect("no continuation")
         .split('"')
@@ -284,7 +284,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
         let page = String::from_utf8(body).unwrap();
         total += page.matches("class=\"item").count();
         from_p1 += page.matches("2021-06-15").count();
-        match page.split("hx-get=\"").nth(1) {
+        match page.split("class=\"more\" hx-get=\"").nth(1) {
             Some(rest) => {
                 uri = format!("/{}", rest.split('"').next().unwrap().replace("&amp;", "&"))
             }

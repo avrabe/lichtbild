@@ -1330,3 +1330,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-SEARCH-004
+
+  - id: VER-095
+    type: verification
+    title: Days away from home are one trip, named by place
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "days_away_from_home_are_one_trip_named_by_place"
+      test-location: tests/trips.rs
+      steps:
+        - run: "cargo test --test trips"
+    links:
+      - type: verifies
+        target: REQ-TRIP-001

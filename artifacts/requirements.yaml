@@ -852,6 +852,27 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-TRIP-001
+    type: requirement
+    title: Trips are found from where pictures were taken
+    status: implemented
+    release: v0.7.0
+    description: >
+      A Trips page lists the times away from home, newest first: days whose
+      pictures (by their recorded, hand-set or estimated positions) were
+      taken more than 50 km from home, at most two days apart, with no day
+      at home between, holding at least three items. Home is the place with
+      the most days of pictures. Each trip shows its places (most days
+      first), its days, how many items it holds and a photo, and opens the
+      timeline at its last day. Only items the viewer may see and has not
+      hidden count; nothing leaves the house.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy
