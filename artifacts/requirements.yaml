@@ -797,6 +797,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-SEARCH-003
+    type: requirement
+    title: Search results offer terms that narrow them down
+    status: implemented
+    release: v0.7.0
+    description: >
+      Above four or more results, the results page offers the things found
+      in them, their places and their years that some but not all results
+      hold, with how many hold each: up to four things, three places and
+      four years, the most held first. Each is a link to the query with the
+      term added, keeping the photo/video filter; terms already in the
+      query are not offered.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

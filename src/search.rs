@@ -144,6 +144,61 @@ pub struct Suggestion {
     pub items: u64,
 }
 
+/// A term that narrows results down (REQ-SEARCH-003), and how many of
+/// them hold it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Narrow {
+    pub kind: Kind,
+    pub term: String,
+    pub items: usize,
+}
+
+/// Results at least, before narrowing is offered.
+pub const NARROW_FROM: usize = 4;
+
+/// The terms that split the results of `q`: held by some but not all of
+/// them, not already in the query; up to four things, four years and three
+/// places, the most held first. `held` lists each result's terms.
+pub fn narrow(q: &str, held: &[Vec<(Kind, String)>]) -> Vec<Narrow> {
+    if held.len() < NARROW_FROM {
+        return Vec::new();
+    }
+    let typed: HashSet<String> = q.split_whitespace().map(fold).collect();
+    let mut count: HashMap<(Kind, String), usize> = HashMap::new();
+    for terms in held {
+        let mut once: HashSet<&(Kind, String)> = HashSet::new();
+        for t in terms {
+            if once.insert(t) {
+                *count.entry(t.clone()).or_default() += 1;
+            }
+        }
+    }
+    let mut all: Vec<Narrow> = count
+        .into_iter()
+        .filter(|((_, term), n)| {
+            *n < held.len()
+                && !term
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| !w.is_empty())
+                    .all(|w| typed.contains(&fold(w)))
+        })
+        .map(|((kind, term), items)| Narrow { kind, term, items })
+        .collect();
+    all.sort_by(|a, b| {
+        a.kind
+            .cmp(&b.kind)
+            .then(b.items.cmp(&a.items))
+            .then(a.term.cmp(&b.term))
+    });
+    let mut per: HashMap<Kind, usize> = HashMap::new();
+    all.retain(|n| {
+        let c = per.entry(n.kind).or_default();
+        *c += 1;
+        *c <= if n.kind == Kind::Place { 3 } else { 4 }
+    });
+    all
+}
+
 /// A term search knows, with how many items of each library hold it.
 struct Known {
     kind: Kind,
@@ -537,5 +592,46 @@ pub fn read_snippet(text: &str, q: &str) -> String {
     match s.char_indices().nth(160) {
         Some((i, _)) => format!("{}…", &s[..i]),
         None => s,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrowing_offers_terms_that_split_the_results() {
+        let t = |k: Kind, s: &str| (k, s.to_string());
+        let held = vec![
+            vec![t(Kind::Date, "2021"), t(Kind::Thing, "Hund")],
+            vec![
+                t(Kind::Date, "2021"),
+                t(Kind::Thing, "Hund"),
+                t(Kind::Thing, "Katze"),
+            ],
+            vec![t(Kind::Date, "2022"), t(Kind::Thing, "Hund")],
+            vec![t(Kind::Date, "2022"), t(Kind::Place, "Neustadt, Nord")],
+        ];
+        let n = narrow("hund", &held);
+        let got: Vec<(&str, usize)> = n.iter().map(|n| (n.term.as_str(), n.items)).collect();
+        // "Hund" is typed; things first, then places, then years.
+        assert_eq!(
+            got,
+            [
+                ("Katze", 1),
+                ("Neustadt, Nord", 1),
+                ("2021", 2),
+                ("2022", 2)
+            ]
+        );
+        // Few results get none; a term every result holds narrows nothing.
+        assert!(narrow("x", &held[..3]).is_empty());
+        let same = vec![vec![t(Kind::Date, "2021")]; 5];
+        assert!(narrow("x", &same).is_empty());
+    }
+
+    #[test]
+    fn folding_matches_the_index() {
+        assert_eq!(fold("Mädchen Straße CAFÉ"), "madchen strasse cafe");
     }
 }

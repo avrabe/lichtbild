@@ -730,3 +730,14 @@ html.showing, html.showing body { overflow: hidden; }
 @media (prefers-reduced-motion: reduce) {
   .show img.slide, .show .sbar { transition: none; }
 }
+
+/* Narrowing search results down (REQ-SEARCH-003). */
+.narrow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 4px 0 14px; }
+.narrow a {
+  display: inline-flex; align-items: center; gap: 5px; padding: 6px 12px; min-height: 36px;
+  border: 1px solid var(--line); border-radius: 18px; color: var(--ink); text-decoration: none;
+  font-size: 14px; background: var(--paper);
+}
+.narrow a:hover, .narrow a:focus-visible { border-color: var(--ai); background: var(--paper-2); }
+.narrow a span[aria-hidden] { color: var(--ai); }
+.narrow .n { color: var(--ink-faint); font-size: 12px; }

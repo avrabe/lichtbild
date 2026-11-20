@@ -1286,3 +1286,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-013
+
+  - id: VER-092
+    type: verification
+    title: Narrowing search results down
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "search_results_offer_terms_that_narrow_them_down"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui search_results_offer_terms_that_narrow_them_down"
+        - run: "cargo test --lib search::tests::narrowing_offers_terms_that_split_the_results"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-003

@@ -122,6 +122,8 @@ at nice 0.
 | F111 | REQ-WEB-012 | photos that do not look alike join a series | `photos_taken_one_after_another_that_look_alike_are_one_series` |
 | F112 | REQ-WEB-013 | the slideshow shows videos | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
 | F113 | REQ-WEB-013 | the slideshow shows every photo of a series | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
+| F114 | REQ-SEARCH-003 | a term every result holds is offered to narrow down | `narrowing_offers_terms_that_split_the_results` |
+| F115 | REQ-SEARCH-003 | narrowing drops the photo/video filter | `search_results_offer_terms_that_narrow_them_down` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

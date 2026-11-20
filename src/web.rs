@@ -1932,13 +1932,13 @@ pub struct SearchQuery {
     kind: Option<String>,
 }
 
-/// GET /search?q=: one search box over transcripts, places, dates and
-/// names (REQ-SEARCH-001), in the viewer's libraries only.
-/// Search results: exact hits with their records, and pictures that look
-/// like the words (REQ-SEE-002).
+/// Search results: exact hits with their records, pictures that look like
+/// the words (REQ-SEE-002), and terms that narrow them down
+/// (REQ-SEARCH-003).
 type Found = (
     Vec<(crate::search::Hit, index::Record)>,
     Vec<(u64, index::Record)>,
+    Vec<crate::search::Narrow>,
 );
 
 /// Completions for the search box as it is typed (REQ-SEARCH-002): only
@@ -1980,6 +1980,8 @@ async fn suggest(
     ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(h)).into_response()
 }
 
+/// GET /search?q=: one search box over transcripts, places, dates and
+/// names (REQ-SEARCH-001), in the viewer's libraries only.
 async fn search(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -1998,6 +2000,7 @@ async fn search(
     };
     let idx = st.index.clone();
     let sx = st.search.clone();
+    let places = st.places.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
     let (kind, _) = kind_filter(sq.kind.as_deref());
@@ -2062,17 +2065,47 @@ async fn search(
                 }
             }
         }
-        Ok((out, looks))
+        // What the results hold, to narrow them down (REQ-SEARCH-003).
+        let mut held: Vec<Vec<(crate::search::Kind, String)>> = Vec::new();
+        for (_, rec) in &out {
+            let mut terms = Vec::new();
+            if let Some(y) = rec
+                .taken_local
+                .get(..4)
+                .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+            {
+                terms.push((crate::search::Kind::Date, y.to_string()));
+            }
+            if rec.video.is_none() {
+                let mut kinds: Vec<u8> = idx.objects(&rec.hash)?.iter().map(|o| o.kind).collect();
+                kinds.sort_unstable();
+                kinds.dedup();
+                for k in kinds {
+                    if let Some((_, de, _)) = crate::objects::KINDS.get(k as usize) {
+                        terms.push((crate::search::Kind::Thing, de.to_string()));
+                    }
+                }
+            }
+            if let (Some(p), Some(lat), Some(lon)) = (places.as_deref(), rec.lat, rec.lon) {
+                if let Some(n) = p.nearest(lat, lon) {
+                    terms.push((crate::search::Kind::Place, n.label));
+                }
+            }
+            held.push(terms);
+        }
+        let narrow = crate::search::narrow(&q2, &held);
+        Ok((out, looks, narrow))
     })
     .await;
-    let (hits, looks) = match res {
+    let (hits, looks, narrow) = match res {
         Ok(Ok(h)) => h,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let body = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         kind_switch(&format!("search?q={}", esc(&q)), kind),
+        render_narrow(&q, &narrow, sq_kind_query(kind)),
         // No exact hit but look-alikes: their heading says enough.
         if hits.is_empty() && !looks.is_empty() {
             String::new()
@@ -2082,6 +2115,41 @@ async fn search(
         render_looks(&who, &q, &looks)
     );
     page_for(&st, "lichtbild search", &body).into_response()
+}
+
+/// `&kind=…` for a link that keeps the photo/video filter.
+fn sq_kind_query(kind: Option<bool>) -> &'static str {
+    match kind {
+        Some(true) => "&amp;kind=video",
+        Some(false) => "&amp;kind=photo",
+        None => "",
+    }
+}
+
+/// Terms that narrow the results down (REQ-SEARCH-003), each a link to
+/// the query with it added.
+pub fn render_narrow(q: &str, narrow: &[crate::search::Narrow], kq: &str) -> String {
+    if narrow.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "<nav class=\"narrow\" aria-label=\"Narrow down\"><span class=\"dim\">Narrow down:</span>",
+    );
+    for n in narrow {
+        let icon = match n.kind {
+            crate::search::Kind::Thing => "◎",
+            crate::search::Kind::Place => "⌖",
+            crate::search::Kind::Date => "◷",
+            crate::search::Kind::Word => "❝",
+        };
+        s += &format!(
+            "<a href=\"search?q={q}{kq}\"><span aria-hidden=\"true\">{icon}</span> {term} <span class=\"n\">{c}</span></a>",
+            q = urlencode(&format!("{} {}", q.trim(), n.term)),
+            term = esc(&n.term),
+            c = n.items,
+        );
+    }
+    s + "</nav>"
 }
 
 /// Pictures that look like what was searched (REQ-SEE-002): tiles, best
