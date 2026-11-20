@@ -1,5 +1,5 @@
-//! Words (REQ-WORDS-001): what was said in the viewer's videos, as a cloud
-//! of the words most videos share. Common German and English words are
+//! Words (REQ-WORDS-001): what was said in the viewer's videos and written
+//! in their pictures, as a cloud of the words most of them share. Common German and English words are
 //! left out, so what remains are names, places and things. Read from the
 //! stored transcripts, scoped to the libraries the viewer may see.
 
@@ -335,11 +335,11 @@ const STOP: &[&str] = &[
     "let",
 ];
 
-/// One word of the cloud: how many videos say it, how often in all.
+/// One word of the cloud: in how many pictures and videos, how often in all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word {
     pub word: String,
-    pub videos: u64,
+    pub items: u64,
     pub times: u64,
 }
 
@@ -353,26 +353,36 @@ fn words_of(text: &str) -> impl Iterator<Item = String> + '_ {
         })
 }
 
-/// The `limit` words most videos share, in the libraries `labels`.
+/// The `limit` words most pictures and videos share, in the libraries
+/// `labels`: what was said in the videos and the text read in the pictures
+/// (REQ-TEXT-001).
 pub fn cloud(idx: &Index, labels: &[String], limit: usize) -> Result<Vec<Word>> {
     let stop: HashSet<&str> = STOP.iter().copied().collect();
-    let mut videos: HashMap<String, u64> = HashMap::new();
+    let mut items: HashMap<String, u64> = HashMap::new();
     let mut times: HashMap<String, u64> = HashMap::new();
     let mut seen_hash = HashSet::new();
     for (_, rec) in idx.all()? {
-        if rec.missing || rec.video.is_none() || !labels.contains(&rec.label) {
+        if rec.missing || !labels.contains(&rec.label) {
             continue;
         }
-        // A video in two libraries (or twice) counts once.
+        // The same content in two libraries (or twice) counts once.
         if !seen_hash.insert(rec.hash.clone()) {
             continue;
         }
-        let Some(tr) = idx.transcript(&rec.hash)? else {
-            continue;
+        let texts: Vec<String> = if rec.video.is_some() {
+            match idx.transcript(&rec.hash)? {
+                Some(tr) => tr.pieces.into_iter().map(|p| p.text).collect(),
+                None => continue,
+            }
+        } else {
+            match idx.text(&rec.hash)? {
+                Some(t) => t.lines.into_iter().map(|l| l.text).collect(),
+                None => continue,
+            }
         };
         let mut here = HashSet::new();
-        for p in &tr.pieces {
-            for w in words_of(&p.text) {
+        for text in &texts {
+            for w in words_of(text) {
                 if stop.contains(w.as_str()) {
                     continue;
                 }
@@ -381,20 +391,20 @@ pub fn cloud(idx: &Index, labels: &[String], limit: usize) -> Result<Vec<Word>> 
             }
         }
         for w in here {
-            *videos.entry(w).or_default() += 1;
+            *items.entry(w).or_default() += 1;
         }
     }
-    let mut out: Vec<Word> = videos
+    let mut out: Vec<Word> = items
         .into_iter()
-        .map(|(word, v)| Word {
+        .map(|(word, n)| Word {
             times: times.get(&word).copied().unwrap_or(0),
             word,
-            videos: v,
+            items: n,
         })
         .collect();
     out.sort_by(|a, b| {
-        (b.videos, b.times)
-            .cmp(&(a.videos, a.times))
+        (b.items, b.times)
+            .cmp(&(a.items, a.times))
             .then_with(|| a.word.cmp(&b.word))
     });
     out.truncate(limit);

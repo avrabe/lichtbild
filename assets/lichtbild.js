@@ -176,9 +176,50 @@
   if (!img) return;
 
   var scale = 1, tx = 0, ty = 0;
+  // Boxes over the photo (REQ-TEXT-001, REQ-SEE-001): lines of text and
+  // things found, each layer shown while its panel is open (text also
+  // while the panels sit below the picture); they follow the zoom.
+  var layers = Array.prototype.map.call(viewer.querySelectorAll(".boxlayer"), function (layer) {
+    return { el: layer, panel: viewer.querySelector("details." + layer.getAttribute("data-for")) };
+  });
+  function placeLayer(layer) {
+    var W = img.offsetWidth, H = img.offsetHeight;
+    layer.style.left = img.offsetLeft + "px";
+    layer.style.top = img.offsetTop + "px";
+    layer.style.width = W + "px";
+    layer.style.height = H + "px";
+    layer.style.transform = img.style.transform;
+    layer.querySelectorAll("a[data-quad]").forEach(function (a) {
+      var q = a.getAttribute("data-quad").split(",").map(Number);
+      // Corners: top left, top right, bottom right, bottom left.
+      var x0 = q[0] * W, y0 = q[1] * H, x1 = q[2] * W, y1 = q[3] * H, x3 = q[6] * W, y3 = q[7] * H;
+      var w = Math.hypot(x1 - x0, y1 - y0), h = Math.hypot(x3 - x0, y3 - y0);
+      a.style.left = x0 + "px";
+      a.style.top = y0 + "px";
+      a.style.width = w + "px";
+      a.style.height = h + "px";
+      a.style.transform = "rotate(" + Math.atan2(y1 - y0, x1 - x0) + "rad)";
+    });
+  }
+  function showLayers() {
+    layers.forEach(function (l) {
+      var below = viewer.classList.contains("below") && l.el.getAttribute("data-for") === "textp";
+      l.el.hidden = !(below || (l.panel && l.panel.open));
+      if (!l.el.hidden) placeLayer(l.el);
+    });
+  }
+  layers.forEach(function (l) {
+    if (l.panel) l.panel.addEventListener("toggle", showLayers);
+  });
+  viewer.addEventListener("lb-layout", showLayers);
+  if (img.complete) showLayers(); else img.addEventListener("load", showLayers);
+  window.addEventListener("resize", showLayers);
   function apply() {
     img.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + scale + ")";
     viewer.classList.toggle("zoomed", scale > 1.001);
+    layers.forEach(function (l) {
+      if (!l.el.hidden) l.el.style.transform = img.style.transform;
+    });
   }
   function maxScale() {
     // At least 4x, and enough to show every pixel of the original.
@@ -271,5 +312,164 @@
       else checked = false;
     }, function () { checked = false; });
   }, true);
+})();
+
+// Transcript and text in the picture: copy them, and show them below the
+// picture instead of over it (REQ-TEXT-001). The choice is kept in this
+// browser only.
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  var under = viewer && viewer.querySelector("section.under");
+  if (!under) return;
+  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".tpanel, .xpanel"));
+  if (!panels.length) return;
+  var homes = panels.map(function (p) { return p.parentNode; });
+  var KEY = "lichtbild.below";
+  function stored() {
+    try { return window.localStorage.getItem(KEY) === "1"; } catch (e) { return false; }
+  }
+  function store(v) {
+    try { window.localStorage.setItem(KEY, v ? "1" : "0"); } catch (e) { /* private mode */ }
+  }
+  function textOf(p) {
+    if (p.classList.contains("tpanel")) {
+      return Array.prototype.map.call(p.querySelectorAll("li"), function (li) {
+        return li.textContent.trim();
+      }).join("\n");
+    }
+    return Array.prototype.map.call(p.querySelectorAll(":scope > p:not(.dim), section > p"), function (para) {
+      return Array.prototype.map.call(para.querySelectorAll("span"), function (s) { return s.textContent; }).join("\n");
+    }).join("\n\n");
+  }
+  function copy(text, button) {
+    function done(ok) {
+      var was = "Copy";
+      button.textContent = ok ? "Copied" : "Select and copy by hand";
+      setTimeout(function () { button.textContent = was; }, 1600);
+    }
+    // The clipboard API needs a secure context; plain http (a house
+    // address) falls back to a selected text area.
+    if (navigator.clipboard && window.isSecureContext) {
+      navigator.clipboard.writeText(text).then(function () { done(true); }, function () { done(false); });
+      return;
+    }
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.select();
+    ta.setSelectionRange(0, text.length);
+    var ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) { ok = false; }
+    document.body.removeChild(ta);
+    done(ok);
+  }
+  function setBelow(below) {
+    viewer.classList.toggle("below", below);
+    under.hidden = !below;
+    panels.forEach(function (p, i) {
+      var label = p.querySelector("button.place");
+      if (below) {
+        var box = document.createElement("div");
+        box.className = "ublock";
+        var h = document.createElement("h2");
+        h.textContent = p.getAttribute("data-title") || "";
+        box.appendChild(h);
+        box.appendChild(p);
+        under.appendChild(box);
+        if (label) label.textContent = p.getAttribute("data-over") || "Show over";
+      } else {
+        homes[i].appendChild(p);
+        if (label) label.textContent = p.getAttribute("data-below") || "Show below";
+      }
+    });
+    if (!below) under.textContent = "";
+    viewer.dispatchEvent(new Event("lb-layout"));
+  }
+  panels.forEach(function (p) {
+    var tools = p.querySelector(".ptools");
+    if (!tools) return;
+    tools.hidden = false;
+    tools.querySelector("button.copy").addEventListener("click", function (e) {
+      copy(textOf(p), e.currentTarget);
+    });
+    tools.querySelector("button.place").addEventListener("click", function () {
+      var below = !viewer.classList.contains("below");
+      store(below);
+      setBelow(below);
+    });
+  });
+  if (stored()) setBelow(true);
+})();
+
+// Transcript: while the video plays, mark the line being said; in the
+// floating panel, keep it in view (below the video the page is not moved).
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  var video = viewer && viewer.querySelector("video");
+  var panel = viewer && viewer.querySelector(".tpanel");
+  if (!video || !panel) return;
+  var stamps = Array.prototype.map.call(panel.querySelectorAll("a.ts[data-t]"), function (a) {
+    return { t: parseFloat(a.getAttribute("data-t")) || 0, li: a.closest("li") };
+  });
+  if (!stamps.length) return;
+  var current = null;
+  function mark() {
+    var now = video.currentTime, found = null;
+    for (var i = 0; i < stamps.length && stamps[i].t <= now + 0.25; i++) found = stamps[i].li;
+    if (found === current) return;
+    panel.querySelectorAll("li.now").forEach(function (li) { li.classList.remove("now"); });
+    current = found;
+    if (!current) return;
+    current.classList.add("now");
+    var floating = !viewer.classList.contains("below") && panel.scrollHeight > panel.clientHeight;
+    if (floating) {
+      var top = current.offsetTop - panel.clientHeight / 3;
+      panel.scrollTo({ top: Math.max(0, top), behavior: "smooth" });
+    }
+  }
+  video.addEventListener("timeupdate", mark);
+  video.addEventListener("seeked", mark);
+})();
+
+// A search hit's time (?t=): start the video there. The #t= media fragment
+// on the source is not enough on iPad Safari, which loads nothing before
+// the first tap on play; so seek as soon as the video allows, and at the
+// latest when it starts. The transcript opens at that line.
+(function () {
+  "use strict";
+  var viewer = document.querySelector(".viewer");
+  var video = viewer && viewer.querySelector("video");
+  if (!video) return;
+  var t = parseFloat(new URLSearchParams(window.location.search).get("t"));
+  if (!(t > 0)) return;
+  var pending = true;
+  function seek() {
+    if (!pending) return;
+    if (Math.abs(video.currentTime - t) > 0.5) {
+      try { video.currentTime = t; } catch (e) { return; }
+    }
+    pending = false;
+  }
+  ["loadedmetadata", "canplay", "play"].forEach(function (ev) {
+    video.addEventListener(ev, seek);
+  });
+  if (video.readyState >= 1) seek();
+  var details = viewer.querySelector("details.transcript");
+  if (details && !viewer.classList.contains("below")) details.open = true;
+  // Mark the line now, before the video has loaded.
+  var best = null;
+  viewer.querySelectorAll(".tpanel a.ts[data-t]").forEach(function (a) {
+    if ((parseFloat(a.getAttribute("data-t")) || 0) <= t + 0.25) best = a.closest("li");
+  });
+  if (best) {
+    best.classList.add("now");
+    var panel = best.closest(".tpanel");
+    if (panel && panel.scrollHeight > panel.clientHeight) panel.scrollTop = Math.max(0, best.offsetTop - panel.clientHeight / 3);
+  }
 })();
 

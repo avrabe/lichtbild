@@ -1171,3 +1171,77 @@ artifacts:
       - type: verifies
         target: REQ-WEB-010
 
+  - id: VER-084
+    type: verification
+    title: The reader finds lines, blocks and documents
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_reader_finds_lines_blocks_and_documents"
+      test-location: tests/vision.rs
+      steps:
+        - run: "cargo test --test vision the_reader_finds_lines_blocks_and_documents"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001
+
+  - id: VER-085
+    type: verification
+    title: What was seen is stored, searched and shown
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "what_was_seen_is_stored_searched_and_shown"
+      test-location: tests/vision.rs
+      steps:
+        - run: "cargo test --test vision what_was_seen_is_stored_searched_and_shown"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001
+
+  - id: VER-086
+    type: verification
+    title: No model reads nothing and a wrong one is refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "no_model_reads_nothing_and_a_wrong_one_is_refused"
+      test-location: tests/vision.rs
+      steps:
+        - run: "cargo test --test vision no_model_reads_nothing_and_a_wrong_one_is_refused"
+    links:
+      - type: verifies
+        target: REQ-TEXT-001
+
+  - id: VER-087
+    type: verification
+    title: Things and what a picture shows are found
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "things_and_what_a_picture_shows_are_found"
+      test-location: tests/vision.rs
+      steps:
+        - run: "cargo test --test vision things_and_what_a_picture_shows_are_found"
+    links:
+      - type: verifies
+        target: REQ-SEE-001
+      - type: verifies
+        target: REQ-SEE-002
+
+  - id: VER-088
+    type: verification
+    title: Things and what pictures show, stored, searched and shown
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "what_was_seen_is_stored_searched_and_shown"
+      test-location: tests/vision.rs
+      steps:
+        - run: "cargo test --test vision what_was_seen_is_stored_searched_and_shown"
+    links:
+      - type: verifies
+        target: REQ-SEE-001
+      - type: verifies
+        target: REQ-SEE-002
+

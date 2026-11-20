@@ -112,6 +112,7 @@ async fn every_page_has_the_app_menu() {
         "/search?q=x",
         "/status",
         "/words",
+        "/things",
         "/map",
         "/hidden",
         "/duplicates",
@@ -129,7 +130,15 @@ async fn every_page_has_the_app_menu() {
             header.contains(r#"<details class="appmenu">"#),
             "{uri}: {header}"
         );
-        for href in ["./", "map", "words", "hidden", "duplicates", "status"] {
+        for href in [
+            "./",
+            "map",
+            "things",
+            "words",
+            "hidden",
+            "duplicates",
+            "status",
+        ] {
             assert!(
                 header.contains(&format!(r#"<a href="{href}">"#)),
                 "{uri}: {href}"
@@ -216,7 +225,7 @@ async fn words_come_from_the_viewers_videos_without_common_words() {
     // Said twice in one video: once for "videos", twice for "times".
     let w = lichtbild::words::cloud(&e.idx, &["p1".into()], 10).unwrap();
     let lt = w.iter().find(|w| w.word == "leuchtturm").unwrap();
-    assert_eq!((lt.videos, lt.times), (1, 2));
+    assert_eq!((lt.items, lt.times), (1, 2));
     // p2 holds no video: its cloud is empty.
     assert!(lichtbild::words::cloud(&e.idx, &["p2".into()], 10)
         .unwrap()

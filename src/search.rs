@@ -31,7 +31,14 @@ pub struct Hit {
     pub label: String,
     /// Transcript lines that matched: (second, text).
     pub speech: Vec<(f32, String)>,
+    /// The text read in the picture matched (REQ-TEXT-001): the lines
+    /// that hold a query word, or the first ones.
+    pub read: Option<String>,
 }
+
+/// Marks a document of text read in a picture (`t` of transcript lines
+/// is their second, of an item's own words -1).
+const READ_T: f64 = -2.0;
 
 struct Fields {
     id: Field,
@@ -147,9 +154,22 @@ impl Search {
                 f.id => id,
                 f.label => rec.label.as_str(),
                 f.t => -1.0f64,
-                f.text => item_words(&rec, pos.get(&id).map(|p| (p.lat, p.lon)), places),
+                f.text => item_words(&rec, pos.get(&id).map(|p| (p.lat, p.lon)), places)
+                    + " "
+                    + &crate::objects::words(&idx.objects(&rec.hash)?),
             ))?;
             docs += 1;
+            if rec.video.is_none() {
+                if let Some(t) = idx.text(&rec.hash)?.filter(|t| t.state == "ok") {
+                    w.add_document(doc!(
+                        f.id => id,
+                        f.label => rec.label.as_str(),
+                        f.t => READ_T,
+                        f.text => t.plain(),
+                    ))?;
+                    docs += 1;
+                }
+            }
             if rec.video.is_some() {
                 if let Some(tr) = idx.transcript(&rec.hash)? {
                     for p in tr.pieces {
@@ -239,14 +259,50 @@ impl Search {
                         id,
                         label,
                         speech: Vec::new(),
+                        read: None,
                     });
                     out.last_mut().expect("just pushed")
                 }
             };
             if t >= 0.0 && hit.speech.len() < 3 {
                 hit.speech.push((t as f32, text));
+            } else if t == READ_T && hit.read.is_none() {
+                hit.read = Some(read_snippet(&text, q));
             }
         }
         Ok(out)
+    }
+}
+
+/// The lines of `text` that hold a word of `q` (case and accents ignored
+/// roughly), at most three; else the first line. At most 160 characters.
+pub fn read_snippet(text: &str, q: &str) -> String {
+    let words: Vec<String> = q
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| w.chars().count() >= 2)
+        .collect();
+    let lines: Vec<&str> = text
+        .lines()
+        .filter(|l| {
+            let l = l.to_lowercase();
+            words.iter().any(|w| l.contains(w.as_str()))
+        })
+        .take(3)
+        .collect();
+    let s = if lines.is_empty() {
+        text.lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or("")
+            .to_string()
+    } else {
+        lines.join(" … ")
+    };
+    match s.char_indices().nth(160) {
+        Some((i, _)) => format!("{}…", &s[..i]),
+        None => s,
     }
 }

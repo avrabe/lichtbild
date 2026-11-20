@@ -33,6 +33,15 @@ const BY_TIME: TableDefinition<(&str, u64), &str> = TableDefinition::new("by_tim
 /// Content hash -> transcript JSON (crate::stt::Transcript), so a moved or
 /// renamed video keeps its transcript (REQ-MEDIA-004).
 const TRANSCRIPTS: TableDefinition<&str, &[u8]> = TableDefinition::new("transcripts");
+/// Text read from pictures (REQ-TEXT-001): content hash -> JSON `ocr::Text`.
+const TEXTS: TableDefinition<&str, &[u8]> = TableDefinition::new("texts");
+/// Things in pictures (REQ-SEE-001): content hash -> JSON `[objects::Object]`.
+const OBJECTS: TableDefinition<&str, &[u8]> = TableDefinition::new("objects");
+/// What pictures show (REQ-SEE-002): content hash -> embed::DIM signed bytes.
+const VECTORS: TableDefinition<&str, &[u8]> = TableDefinition::new("vectors");
+/// Which pictures were looked at: content hash -> vision::VERSION, or
+/// "<version> failed (<reason>)".
+const LOOKED: TableDefinition<&str, &str> = TableDefinition::new("looked");
 /// Content hash -> (difference hash of the thumbnail, has one): the
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
@@ -163,6 +172,10 @@ impl Index {
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
             w.open_table(PLACED)?;
+            w.open_table(TEXTS)?;
+            w.open_table(OBJECTS)?;
+            w.open_table(VECTORS)?;
+            w.open_table(LOOKED)?;
         }
         w.commit()?;
         Ok(Index {
@@ -657,6 +670,211 @@ impl Index {
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// The text read from a picture, by content hash.
+    pub fn text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXTS)?;
+        match t.get(hash)? {
+            Some(v) => Ok(Some(
+                serde_json::from_slice(v.value()).context("corrupt text")?,
+            )),
+            None => Ok(None),
+        }
+    }
+
+    pub fn set_text(&self, hash: &str, text: &crate::ocr::Text) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(TEXTS)?;
+            t.insert(hash, serde_json::to_vec(text)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Store what the look child found in a picture.
+    pub fn set_look(&self, hash: &str, version: &str, look: &crate::vision::Look) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(TEXTS)?
+                .insert(hash, serde_json::to_vec(&look.text)?.as_slice())?;
+            w.open_table(OBJECTS)?
+                .insert(hash, serde_json::to_vec(&look.objects)?.as_slice())?;
+            let v: Vec<u8> = look.vector.iter().map(|b| *b as u8).collect();
+            if v.len() == crate::embed::DIM {
+                w.open_table(VECTORS)?.insert(hash, v.as_slice())?;
+            }
+            w.open_table(LOOKED)?.insert(hash, version)?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Mark a picture the look child failed on, so it is not tried again
+    /// with this version.
+    pub fn set_look_failed(&self, hash: &str, version: &str, reason: &str) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mark = format!("{version} failed ({reason})");
+            w.open_table(LOOKED)?.insert(hash, mark.as_str())?;
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// The things found in a picture, by content hash.
+    pub fn objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(OBJECTS)?;
+        match t.get(hash)? {
+            Some(v) => Ok(serde_json::from_slice(v.value()).unwrap_or_default()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The things found in the live photos of `labels` that `keep` lets
+    /// through, by kind: (kind, photos, the id of the photo with the
+    /// surest find), most photos first. Each content counts once.
+    pub fn things(
+        &self,
+        labels: &[String],
+        keep: impl Fn(u64) -> bool,
+    ) -> Result<Vec<(u8, u64, u64)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let objects = r.open_table(OBJECTS)?;
+        let mut seen = std::collections::HashSet::new();
+        // kind -> (photos, best score, its id)
+        let mut by: HashMap<u8, (u64, f32, u64)> = HashMap::new();
+        for e in items.iter()? {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            let id = k.value();
+            if rec.missing
+                || rec.video.is_some()
+                || !labels.contains(&rec.label)
+                || !keep(id)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            let Some(raw) = objects.get(rec.hash.as_str())? else {
+                continue;
+            };
+            let found: Vec<crate::objects::Object> =
+                serde_json::from_slice(raw.value()).unwrap_or_default();
+            let mut kinds: Vec<(u8, f32)> = Vec::new();
+            for o in found {
+                match kinds.iter_mut().find(|(k, _)| *k == o.kind) {
+                    Some((_, s)) => *s = s.max(o.score),
+                    None => kinds.push((o.kind, o.score)),
+                }
+            }
+            for (kind, score) in kinds {
+                let t = by.entry(kind).or_insert((0, 0.0, id));
+                t.0 += 1;
+                if score > t.1 {
+                    (t.1, t.2) = (score, id);
+                }
+            }
+        }
+        let mut out: Vec<(u8, u64, u64)> =
+            by.into_iter().map(|(k, (n, _, id))| (k, n, id)).collect();
+        out.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        Ok(out)
+    }
+
+    /// Every stored picture vector: (content hash, signed bytes).
+    pub fn embeddings(&self) -> Result<Vec<(String, Vec<i8>)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(VECTORS)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push((
+                k.value().to_string(),
+                v.value().iter().map(|b| *b as i8).collect(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Live photos (not videos) with a thumbnail whose content was not
+    /// looked at with `version` yet, newest first: (id, record).
+    pub fn photos_to_look(&self, version: &str) -> Result<Vec<(u64, Record)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let t = r.open_table(LOOKED)?;
+        let mut out = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        for e in items.iter()? {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            if rec.missing
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            let done = match t.get(rec.hash.as_str())? {
+                Some(v) => v.value().split(' ').next() == Some(version),
+                None => false,
+            };
+            if !done {
+                out.push((k.value(), rec));
+            }
+        }
+        out.sort_by(|a, b| b.1.taken_local.cmp(&a.1.taken_local));
+        Ok(out)
+    }
+
+    /// Live photos (by content) in `labels`, how many were looked at with
+    /// `version`, how many of those hold text, and how many things.
+    pub fn look_counts(&self, labels: &[String], version: &str) -> Result<(u64, u64, u64, u64)> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let looked = r.open_table(LOOKED)?;
+        let texts = r.open_table(TEXTS)?;
+        let objects = r.open_table(OBJECTS)?;
+        let mut seen = std::collections::HashSet::new();
+        let (mut photos, mut done, mut with_text, mut with_things) = (0, 0, 0, 0);
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.missing
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !labels.contains(&rec.label)
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            photos += 1;
+            let h = rec.hash.as_str();
+            if looked
+                .get(h)?
+                .is_some_and(|v| v.value().split(' ').next() == Some(version))
+            {
+                done += 1;
+                if let Some(v) = texts.get(h)? {
+                    if serde_json::from_slice::<crate::ocr::Text>(v.value())
+                        .is_ok_and(|t| t.state == "ok")
+                    {
+                        with_text += 1;
+                    }
+                }
+                if let Some(v) = objects.get(h)? {
+                    if serde_json::from_slice::<Vec<crate::objects::Object>>(v.value())
+                        .is_ok_and(|o| !o.is_empty())
+                    {
+                        with_things += 1;
+                    }
+                }
+            }
+        }
+        Ok((photos, done, with_text, with_things))
     }
 
     /// Live videos whose content has no transcript from `model` yet,

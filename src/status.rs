@@ -20,6 +20,12 @@ pub enum Phase {
         total: u64,
         report: PassReport,
     },
+    Looking {
+        since: SystemTime,
+        done: u64,
+        total: u64,
+        report: crate::vision::PassReport,
+    },
     Idle {
         next: Option<SystemTime>,
     },
@@ -51,6 +57,8 @@ pub struct Snapshot {
     pub phase: Phase,
     pub last_scan: Option<ScanDone>,
     pub last_pass: Option<PassDone>,
+    /// When the last look pass ended.
+    pub last_read: Option<SystemTime>,
     /// (groups, items in them)
     pub duplicates: Option<(usize, usize)>,
     pub search_docs: usize,
@@ -69,6 +77,7 @@ impl Default for Status {
                 phase: Phase::Starting,
                 last_scan: None,
                 last_pass: None,
+                last_read: None,
                 duplicates: None,
                 search_docs: 0,
             }),
@@ -94,6 +103,10 @@ impl Status {
             ended: SystemTime::now(),
             report,
         });
+    }
+
+    pub fn look_done(&self, _report: crate::vision::PassReport) {
+        self.inner.lock().expect("status lock").last_read = Some(SystemTime::now());
     }
 
     pub fn set_duplicates(&self, groups: usize, items: usize) {

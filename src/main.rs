@@ -68,6 +68,12 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
         },
+        // Internal: look at one picture (text, things, what it shows) in a
+        // separate, limited process (DD-023, DD-024).
+        ["look", rest @ ..] => match lichtbild::vision::child_main(rest) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(_) => ExitCode::from(1),
+        },
         ["decode-keyframe"] => match lichtbild::video::keyframe_child() {
             Ok(()) => ExitCode::SUCCESS,
             Err(_) => ExitCode::from(1),
@@ -161,6 +167,7 @@ fn run_serve() -> Result<ExitCode> {
         state.dups.clone(),
         state.places.clone(),
         state.status.clone(),
+        state.space.clone(),
     );
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async {
@@ -187,6 +194,7 @@ fn spawn_scanner(
     dups: Arc<lichtbild::dups::Dups>,
     places: Option<Arc<lichtbild::places::Places>>,
     status: Arc<lichtbild::status::Status>,
+    space: Arc<lichtbild::embed::Space>,
 ) {
     use lichtbild::status::{Phase, ScanDone};
     use std::time::SystemTime;
@@ -222,6 +230,9 @@ fn spawn_scanner(
         };
         regroup("at start");
         rebuild("at start");
+        if let Err(e) = space.rebuild(&idx) {
+            tracing::error!("picture vectors failed: {e:#}");
+        }
         loop {
             let since = SystemTime::now();
             status.set_phase(Phase::Scanning { since });
@@ -283,6 +294,37 @@ fn spawn_scanner(
                     Err(e) => tracing::error!("transcription pass failed: {e:#}"),
                 }
                 rebuild("after transcription");
+            }
+            // Looking at photos (text, things, what they show), after the
+            // transcripts, until the next scan.
+            if cfg.vision_dir.is_some() {
+                let deadline = (cfg.scan_interval_hours > 0).then(|| started + interval);
+                let since = SystemTime::now();
+                let progress = |done: u64, total: u64, rep: &lichtbild::vision::PassReport| {
+                    status.set_phase(Phase::Looking {
+                        since,
+                        done,
+                        total,
+                        report: rep.clone(),
+                    })
+                };
+                progress(0, 0, &Default::default());
+                match std::env::current_exe()
+                    .map_err(anyhow::Error::from)
+                    .and_then(|exe| {
+                        lichtbild::vision::run_pass(&cfg, &idx, &exe, deadline, &progress)
+                    }) {
+                    Ok(rep) => {
+                        tracing::info!("{}", rep.to_text());
+                        status.look_done(rep);
+                    }
+                    Err(e) => tracing::error!("look pass failed: {e:#}"),
+                }
+                match space.rebuild(&idx) {
+                    Ok(n) => tracing::info!("{n} picture vectors"),
+                    Err(e) => tracing::error!("picture vectors failed: {e:#}"),
+                }
+                rebuild("after looking");
             }
             if cfg.scan_interval_hours == 0 {
                 status.set_phase(Phase::Idle { next: None });

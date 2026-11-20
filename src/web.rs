@@ -56,6 +56,12 @@ pub struct AppState {
     pub positions: Arc<crate::place::Cache>,
     /// The speech model's name, when transcripts are on.
     pub transcribe_model: Option<String>,
+    /// Photos are looked at: text, things, what they show (DD-023, DD-024).
+    pub vision_on: bool,
+    /// The version results are stored with.
+    pub vision_version: String,
+    /// Picture vectors and the query encoder (REQ-SEE-002).
+    pub space: Arc<crate::embed::Space>,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
 }
@@ -83,6 +89,9 @@ impl AppState {
             status: Arc::new(crate::status::Status::default()),
             transcribe_model: cfg.transcribe.as_ref().map(|t| t.model.to_string()),
             positions: Arc::new(crate::place::Cache::default()),
+            vision_on: cfg.vision_dir.is_some(),
+            vision_version: cfg.vision_version.clone(),
+            space: Arc::new(crate::embed::Space::with_dir(cfg.vision_dir.as_deref())),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
         }
     }
@@ -114,6 +123,7 @@ pub fn router(state: AppState) -> Router {
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
+        .route("/things", get(things_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -498,7 +508,8 @@ fn app_menu(st: &AppState) -> String {
          <ul>\
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
-         <li><a href=\"words\"><b>Words</b><span>What was said in videos</span></a></li>\
+         <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
+         <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
          <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
@@ -585,6 +596,20 @@ pub fn kind_filter(kind: Option<&str>) -> (Option<bool>, &'static str) {
         Some("photo") => (Some(false), "&amp;kind=photo"),
         _ => (None, ""),
     }
+}
+
+/// Percent-encode a query value (RFC 3986 unreserved characters stay).
+pub fn urlencode(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                o.push(b as char)
+            }
+            _ => o += &format!("%{b:02X}"),
+        }
+    }
+    o
 }
 
 /// The filter's suffix ("&amp;kind=video") as the query of a viewer link
@@ -764,7 +789,8 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
-             <a href=\"words\"><b>Words</b><span>What was said in videos</span></a>\
+             <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
+             <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
     page_for(&st, "lichtbild", &body).into_response()
 }
@@ -1129,6 +1155,8 @@ pub struct ViewerQuery {
     t: Option<f32>,
     /// The timeline's photo/video filter (REQ-WEB-010).
     kind: Option<String>,
+    /// A search: lines of read text holding its words are marked.
+    q: Option<String>,
 }
 
 /// A video's transcript as a panel of timed lines; a click on a time seeks
@@ -1142,7 +1170,7 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
     langs.dedup();
     let mut s = format!(
         "<details class=\"transcript\"><summary title=\"Transcript (t)\" aria-label=\"Transcript\">≡</summary>\
-         <div class=\"tpanel\"><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
+         <div class=\"tpanel\" data-title=\"What is said\" data-below=\"Show below the video\" data-over=\"Show over the video\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the video</button></div><p class=\"dim\">Transcript ({}{}), made in the house by {}</p><ol>",
         esc(&langs.join(", ")),
         if tr.partial { ", first 30 minutes" } else { "" },
         esc(&tr.model)
@@ -1158,6 +1186,146 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
     }
     s += "</ol></div></details>";
     s
+}
+
+/// The text read in a picture (REQ-TEXT-001): a panel with the text by
+/// document and block, to read and copy, and a layer of line boxes over
+/// the picture (placed by assets/lichtbild.js from the corners in
+/// `data-quad`; a tap searches for the line). Lines holding a word of `q`
+/// are marked, and then the layer shows from the start.
+pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String) {
+    if text.state != "ok" || text.lines.is_empty() {
+        return (String::new(), String::new());
+    }
+    let words: Vec<String> = q
+        .unwrap_or("")
+        .split_whitespace()
+        .map(|w| {
+            w.trim_matches(|c: char| !c.is_alphanumeric())
+                .to_lowercase()
+        })
+        .filter(|w| w.chars().count() >= 2)
+        .collect();
+    let hit = |t: &str| {
+        let t = t.to_lowercase();
+        !words.is_empty() && words.iter().any(|w| t.contains(w.as_str()))
+    };
+    let any_hit = text.lines.iter().any(|l| hit(&l.text));
+    let docs = text.documents();
+    let mut panel = format!(
+        "<details class=\"textp\"{open}><summary title=\"Text in the picture\" aria-label=\"Text in the picture\">Aa</summary>\
+         <div class=\"xpanel\" data-title=\"Text in the picture\" data-below=\"Show below the picture\" data-over=\"Show over the picture\"><div class=\"ptools\" hidden><button type=\"button\" class=\"copy\">Copy</button><button type=\"button\" class=\"place\">Show below the picture</button></div><p class=\"dim\">Text read in this picture, in the house{many}. A line on the picture searches for it.</p>",
+        open = if any_hit { " open" } else { "" },
+        many = if docs > 1 { format!("; {docs} separate documents") } else { String::new() },
+    );
+    let mut layer = String::from(
+        "<div class=\"boxlayer textlayer\" data-for=\"textp\" hidden aria-hidden=\"true\">",
+    );
+    let mut cur_doc = None;
+    let mut cur_block = None;
+    for l in &text.lines {
+        let doc = text.docs.get(l.block as usize).copied().unwrap_or(0);
+        if cur_block != Some(l.block) {
+            if cur_block.is_some() {
+                panel += "</p>";
+            }
+            if docs > 1 && cur_doc != Some(doc) {
+                if cur_doc.is_some() {
+                    panel += "</section>";
+                }
+                panel += &format!("<section class=\"doc\"><h3>Document {}</h3>", doc + 1);
+                cur_doc = Some(doc);
+            }
+            panel += "<p>";
+            cur_block = Some(l.block);
+        } else {
+            panel += "<br>";
+        }
+        let cls = if hit(&l.text) { " class=\"hit\"" } else { "" };
+        panel += &format!("<span{cls}>{}</span>", esc(&l.text));
+        let quad: Vec<String> = l.quad.iter().map(|v| format!("{v:.4}")).collect();
+        layer += &format!(
+            "<a{cls} href=\"search?q={q}\" data-quad=\"{quad}\" title=\"{t}\"></a>",
+            q = esc(&urlencode(&l.text)),
+            quad = quad.join(","),
+            t = esc(&l.text),
+        );
+    }
+    panel += "</p>";
+    if docs > 1 {
+        panel += "</section>";
+    }
+    panel += "</div></details>";
+    layer += "</div>";
+    (panel, layer)
+}
+
+/// The things found in a picture (REQ-SEE-001) and the pictures that look
+/// like it (REQ-SEE-002): a panel with a chip per kind (a tap searches for
+/// it) and a strip of look-alikes, and a layer of boxes over the picture
+/// while the panel is open.
+pub fn render_things(
+    who: &str,
+    objects: &[crate::objects::Object],
+    similar: &[(u64, index::Record)],
+) -> (String, String) {
+    if objects.is_empty() && similar.is_empty() {
+        return (String::new(), String::new());
+    }
+    let mut kinds: Vec<(u8, usize)> = Vec::new();
+    for o in objects {
+        match kinds.iter_mut().find(|(k, _)| *k == o.kind) {
+            Some((_, n)) => *n += 1,
+            None => kinds.push((o.kind, 1)),
+        }
+    }
+    let mut panel = String::from(
+        "<details class=\"things\"><summary title=\"Things in the picture\" aria-label=\"Things in the picture\">◎</summary><div class=\"kpanel\">",
+    );
+    if !kinds.is_empty() {
+        panel += "<p class=\"dim\">Found in this picture, in the house. A thing searches for it.</p><p class=\"chips\">";
+        for (k, n) in &kinds {
+            let (_, one, many) = crate::objects::KINDS[*k as usize];
+            let label = if *n > 1 {
+                format!("{n} {many}")
+            } else {
+                one.to_string()
+            };
+            panel += &format!(
+                "<a class=\"chip\" href=\"search?q={q}\">{l}</a>",
+                q = esc(&urlencode(one)),
+                l = esc(&label)
+            );
+        }
+        panel += "</p>";
+    }
+    if !similar.is_empty() {
+        panel += "<h3>Looks like this</h3><div class=\"simstrip\">";
+        for (id, rec) in similar {
+            panel += &format!(
+                "<a href=\"v/{who}/{id}\" title=\"{t}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"></a>",
+                who = esc(who),
+                t = esc(&rec.taken_local.replace('T', " ")),
+                h = esc(rec.hash.get(..12).unwrap_or("")),
+            );
+        }
+        panel += "</div>";
+    }
+    panel += "</div></details>";
+    let mut layer = String::from(
+        "<div class=\"boxlayer thinglayer\" data-for=\"things\" hidden aria-hidden=\"true\">",
+    );
+    for o in objects {
+        let [x0, y0, x1, y1] = o.bbox;
+        let name = o.name();
+        layer += &format!(
+            "<a href=\"search?q={q}\" data-quad=\"{x0:.4},{y0:.4},{x1:.4},{y0:.4},{x1:.4},{y1:.4},{x0:.4},{y1:.4}\" title=\"{n}\"><span>{n}</span></a>",
+            q = esc(&urlencode(name)),
+            n = esc(name),
+        );
+    }
+    layer += "</div>";
+    (panel, layer)
 }
 
 /// The copies of a picture the viewer may see (REQ-DUP-001): which is
@@ -1462,6 +1630,60 @@ async fn viewer(
         .ok()
         .and_then(|r| r.ok())
         .flatten();
+    // Text read in the picture, if any.
+    let (idx3, hash) = (st.index.clone(), rec.hash.clone());
+    let read = if rec.video.is_none() {
+        tokio::task::spawn_blocking(move || idx3.text(&hash))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .flatten()
+    } else {
+        None
+    };
+    let (textp, layer) = read
+        .as_ref()
+        .map(|t| render_text(t, vq.q.as_deref()))
+        .unwrap_or_default();
+    // Things in it, and pictures that look like it (one copy each, nothing
+    // hidden, in this timeline's libraries).
+    let (things, thinglayer) = if rec.video.is_none() && st.vision_on {
+        let (idx4, space, dups, hash, me) = (
+            st.index.clone(),
+            st.space.clone(),
+            st.dups.clone(),
+            rec.hash.clone(),
+            person(&viewer),
+        );
+        let labels = scope(&viewer, &who).unwrap_or_default();
+        let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            let objects = idx4.objects(&hash)?;
+            let hidden = idx4.hidden(&me)?;
+            let mut similar = Vec::new();
+            for (ids, _) in space.similar(&hash, &labels, 40) {
+                let Some(id) = ids
+                    .into_iter()
+                    .find(|i| dups.shown(*i, &labels, &hidden).shown)
+                else {
+                    continue;
+                };
+                if let Some(r) = idx4.locate(id)? {
+                    similar.push((id, r));
+                }
+                if similar.len() >= 12 {
+                    break;
+                }
+            }
+            Ok((objects, similar))
+        })
+        .await;
+        match res {
+            Ok(Ok((o, s))) => render_things(&who, &o, &s),
+            _ => Default::default(),
+        }
+    } else {
+        Default::default()
+    };
     let mine = owned(st.auth.is_some(), &viewer).contains(&rec.label) && rec.lat.is_none();
     let act = mine.then_some((id, st.map.pmtiles.is_some(), true));
     let w = esc(&who);
@@ -1502,8 +1724,9 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
-         <div class=\"stage\">{prev}{photo}{next}</div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
+         <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         after = id + 1,
@@ -1542,6 +1765,13 @@ pub struct SearchQuery {
 
 /// GET /search?q=: one search box over transcripts, places, dates and
 /// names (REQ-SEARCH-001), in the viewer's libraries only.
+/// Search results: exact hits with their records, and pictures that look
+/// like the words (REQ-SEE-002).
+type Found = (
+    Vec<(crate::search::Hit, index::Record)>,
+    Vec<(u64, index::Record)>,
+);
+
 async fn search(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -1564,53 +1794,108 @@ async fn search(
     let me = person(&viewer);
     let (kind, _) = kind_filter(sq.kind.as_deref());
     let q2 = q.clone();
-    let res = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<Vec<(crate::search::Hit, index::Record)>> {
-            let hidden = idx.hidden(&me)?;
-            let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
-            for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
-                // A hit on a copy shows the copy the timeline shows; a hit
-                // on something hidden, with no copy shown, is left out.
-                if !dups.shown(h.id, &labels, &hidden).shown {
-                    match dups
-                        .copies(h.id, &labels)
-                        .into_iter()
-                        .find(|c| dups.shown(*c, &labels, &hidden).shown)
-                    {
-                        Some(best) => h.id = best,
-                        None => continue,
-                    }
-                }
-                if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
-                    for s in h.speech {
-                        if prev.speech.len() < 3 && !prev.speech.contains(&s) {
-                            prev.speech.push(s);
-                        }
-                    }
-                    continue;
-                }
-                if let Some(rec) = idx
-                    .locate(h.id)?
-                    .filter(|r| kind.is_none_or(|v| r.video.is_some() == v))
+    let space = st.vision_on.then(|| st.space.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Found> {
+        let hidden = idx.hidden(&me)?;
+        let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
+        for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
+            // A hit on a copy shows the copy the timeline shows; a hit
+            // on something hidden, with no copy shown, is left out.
+            if !dups.shown(h.id, &labels, &hidden).shown {
+                match dups
+                    .copies(h.id, &labels)
+                    .into_iter()
+                    .find(|c| dups.shown(*c, &labels, &hidden).shown)
                 {
-                    out.push((h, rec));
+                    Some(best) => h.id = best,
+                    None => continue,
                 }
             }
-            Ok(out)
-        },
-    )
+            if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
+                for s in h.speech {
+                    if prev.speech.len() < 3 && !prev.speech.contains(&s) {
+                        prev.speech.push(s);
+                    }
+                }
+                continue;
+            }
+            if let Some(rec) = idx
+                .locate(h.id)?
+                .filter(|r| kind.is_none_or(|v| r.video.is_some() == v))
+            {
+                out.push((h, rec));
+            }
+        }
+        // Pictures that show what the words describe (REQ-SEE-002),
+        // after the exact hits; photos only, so not under "Videos".
+        let mut looks: Vec<(u64, index::Record)> = Vec::new();
+        if let Some(space) = space.filter(|_| kind != Some(true) && q2.trim().chars().count() >= 3)
+        {
+            for (ids, _) in space.search(&q2, &labels, 120)? {
+                let shown = ids
+                    .iter()
+                    .copied()
+                    .find(|id| dups.shown(*id, &labels, &hidden).shown);
+                let Some(id) = shown.or_else(|| {
+                    ids.iter()
+                        .flat_map(|i| dups.copies(*i, &labels))
+                        .find(|c| dups.shown(*c, &labels, &hidden).shown)
+                }) else {
+                    continue;
+                };
+                if out.iter().any(|(h, _)| h.id == id) || looks.iter().any(|(l, _)| *l == id) {
+                    continue;
+                }
+                if let Some(rec) = idx.locate(id)? {
+                    looks.push((id, rec));
+                }
+                if looks.len() >= 60 {
+                    break;
+                }
+            }
+        }
+        Ok((out, looks))
+    })
     .await;
-    let hits = match res {
+    let (hits, looks) = match res {
         Ok(Ok(h)) => h,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let body = format!(
-        "{}{}",
+        "{}{}{}",
         kind_switch(&format!("search?q={}", esc(&q)), kind),
-        render_search(&who, &q, &hits, st.places.as_deref())
+        // No exact hit but look-alikes: their heading says enough.
+        if hits.is_empty() && !looks.is_empty() {
+            String::new()
+        } else {
+            render_search(&who, &q, &hits, st.places.as_deref())
+        },
+        render_looks(&who, &q, &looks)
     );
     page_for(&st, "lichtbild search", &body).into_response()
+}
+
+/// Pictures that look like what was searched (REQ-SEE-002): tiles, best
+/// first.
+pub fn render_looks(who: &str, q: &str, looks: &[(u64, index::Record)]) -> String {
+    if looks.is_empty() {
+        return String::new();
+    }
+    let mut s = format!(
+        "<section class=\"looks\"><h2 class=\"rhead\">Pictures that look like \u{201c}{}\u{201d}</h2><div class=\"grid\">",
+        esc(q)
+    );
+    for (id, rec) in looks {
+        s += &format!(
+            "<a class=\"item\" href=\"v/{who}/{id}\" title=\"{t}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"></a>",
+            who = esc(who),
+            t = esc(&rec.taken_local.replace('T', " ")),
+            h = esc(rec.hash.get(..12).unwrap_or("")),
+        );
+    }
+    s += "</div></section>";
+    s
 }
 
 /// The results page: each item as a tile with its date, place and the
@@ -1629,7 +1914,7 @@ pub fn render_search(
         q = esc(q)
     );
     if q.trim().is_empty() {
-        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, places, dates (2021, Juli, July) and file names.</p></section>".into();
+        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, the text in pictures, things (Katze, Fahrrad), places, dates (2021, Juli, July) and file names, or describe a picture in your own words (\u{201c}Kinder am Strand\u{201d}).</p></section>".into();
     }
     for (h, rec) in hits {
         let id = h.id;
@@ -1661,8 +1946,18 @@ pub fn render_search(
         if !lines.is_empty() {
             lines = format!("<ul class=\"said\">{lines}</ul>");
         }
+        // Text read in the picture: the matching lines, and the picture
+        // opens with them marked.
+        let mut href = format!("v/{who}/{id}");
+        if let Some(r) = &h.read {
+            lines += &format!(
+                "<p class=\"readhit\"><span class=\"dim\">in the picture:</span> {}</p>",
+                esc(r)
+            );
+            href += &format!("?q={}", esc(&urlencode(q)));
+        }
         s += &format!(
-            "<div class=\"result\"><a class=\"item{vid}\" href=\"v/{who}/{id}\">{img}</a>\
+            "<div class=\"result\"><a class=\"item{vid}\" href=\"{href}\">{img}</a>\
              <div class=\"rmeta\"><span class=\"when\">{when}</span>{place}{lines}</div></div>",
             vid = if rec.video.is_some() { " video" } else { "" },
             when = esc(&rec.taken_local.replace('T', " ")),
@@ -2047,6 +2342,20 @@ async fn status_page(
         }
         None => None,
     };
+    let read_counts = if st.vision_on {
+        let (idx, labels, version) = (
+            st.index.clone(),
+            viewer.labels.clone(),
+            st.vision_version.clone(),
+        );
+        match tokio::task::spawn_blocking(move || idx.look_counts(&labels, &version)).await {
+            Ok(Ok(c)) => Some(c),
+            Ok(Err(e)) => return internal(e),
+            Err(e) => return internal(e),
+        }
+    } else {
+        None
+    };
     let positions = {
         let (pc, idx, labels) = (
             st.positions.clone(),
@@ -2088,11 +2397,28 @@ async fn status_page(
             ),
             "busy",
         ),
+        Phase::Looking {
+            since,
+            done,
+            total,
+            report,
+        } => (
+            format!(
+                "Looking at photos: {done} of {total} done ({} with text, {} with things, {} failed), since {}",
+                report.with_text,
+                report.with_things,
+                report.failed,
+                relative(*since, now)
+            ),
+            "busy",
+        ),
         Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
         Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
     };
     let progress = match &s.phase {
-        Phase::Transcribing { done, total, .. } if *total > 0 => {
+        Phase::Transcribing { done, total, .. } | Phase::Looking { done, total, .. }
+            if *total > 0 =>
+        {
             format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
         }
         _ => String::new(),
@@ -2142,6 +2468,23 @@ async fn status_page(
                 }
             ),
             _ => "off (no speech model configured)".into(),
+        },
+    ));
+    rows.push((
+        "Photos looked at",
+        match read_counts {
+            Some((photos, done, with, things)) => format!(
+                "{done} of {photos} photos looked at: {with} with text, {things} with things <span class=\"dim\">({})</span>{}",
+                esc(&st.vision_version),
+                match s.last_read {
+                    Some(t) => format!(
+                        "<br><span class=\"dim\">last pass ended {}</span>",
+                        relative(t, now)
+                    ),
+                    None => String::new(),
+                }
+            ),
+            None => "off (no vision models configured)".into(),
         },
     ));
     let c = positions;
@@ -2203,6 +2546,58 @@ async fn status_page(
     page_for(&st, "lichtbild status", &format!("<h1>Status</h1>{list}")).into_response()
 }
 
+/// GET /things: the kinds of thing found in the viewer's photos, each with
+/// how many photos show it and the photo with the surest find; a tile
+/// searches for it (REQ-SEE-001).
+async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let hidden = idx.hidden(&me)?;
+        let things = idx.things(&labels, |id| dups.shown(id, &labels, &hidden).shown)?;
+        let mut out = Vec::new();
+        for (kind, n, id) in things {
+            if let Some(rec) = idx.locate(id)? {
+                out.push((kind, n, id, rec));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    let things = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<h1>Things</h1><p class=\"dim\">What is in your photos, found in the house. A thing shows the photos with it.</p>",
+    );
+    if things.is_empty() {
+        body += if st.vision_on {
+            "<p>Nothing found yet. Photos are looked at in the background after each scan.</p>"
+        } else {
+            "<p>Off: the operator sets <code>LICHTBILD_VISION_DIR</code> to the vision models.</p>"
+        };
+        return page_for(&st, "lichtbild things", &body).into_response();
+    }
+    body += "<section class=\"thingtiles\">";
+    for (kind, n, id, rec) in &things {
+        let (_, one, many) = crate::objects::KINDS[*kind as usize];
+        body += &format!(
+            "<a class=\"thing\" href=\"search?q={q}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{name}</b><i>{n}</i></span></a>",
+            q = esc(&urlencode(one)),
+            h = esc(rec.hash.get(..12).unwrap_or("")),
+            name = esc(many),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild things", &body).into_response()
+}
+
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);
 /// a word searches for it.
 async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
@@ -2215,13 +2610,13 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
         Err(e) => return internal(e),
     };
     let mut body = String::from(
-        "<h1>Words</h1><p class=\"dim\">What was said in your videos: the larger a word, the more videos say it. Common words are left out. A word searches for it.</p>",
+        "<h1>Words</h1><p class=\"dim\">What was said in your videos and written in your pictures: the larger a word, the more of them hold it. Common words are left out. A word searches for it.</p>",
     );
     if words.is_empty() {
-        body += "<p>No transcripts yet. They are made in the background after each scan.</p>";
+        body += "<p>No words yet. Transcripts and the text in pictures are made in the background after each scan.</p>";
         return page_for(&st, "lichtbild words", &body).into_response();
     }
-    let top_v = words.iter().map(|w| w.videos).max().unwrap_or(1).max(1) as f64;
+    let top_v = words.iter().map(|w| w.items).max().unwrap_or(1).max(1) as f64;
     let top_t = words.iter().map(|w| w.times).max().unwrap_or(1).max(1) as f64;
     // Sizes 1 to 6 on a log scale: mostly how many videos say a word, partly
     // how often (so a cloud of few videos still varies). The order mixes big
@@ -2229,7 +2624,7 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     let mut cloud: Vec<(u8, &crate::words::Word)> = words
         .iter()
         .map(|w| {
-            let v = (w.videos as f64).ln_1p() / top_v.ln_1p();
+            let v = (w.items as f64).ln_1p() / top_v.ln_1p();
             let t = (w.times as f64).ln_1p() / top_t.ln_1p();
             let r = if top_v > 1.0 { 0.7 * v + 0.3 * t } else { t };
             (1 + (r * 5.0).round() as u8, w)
@@ -2239,9 +2634,9 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     body += "<div class=\"cloud\">";
     for (size, w) in cloud {
         body += &format!(
-            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"{v} videos, {t} times\">{word}</a>",
+            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"in {v} pictures and videos, {t} times\">{word}</a>",
             q = esc(&w.word),
-            v = w.videos,
+            v = w.items,
             t = w.times,
             word = esc(&w.word)
         );

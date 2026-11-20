@@ -36,4 +36,17 @@ Synthetic only (REQ-PRIV-001). No photo of a person or place.
   `scripts/fetch-test-model.sh <dir>` downloads Whisper tiny q8_0 (MIT
   weights, converted by lmz/candle-whisper) at a pinned revision and checks
   each file's SHA-256; tests read it from `LICHTBILD_TEST_WHISPER_DIR`.
-
+- `text/two-letters.png`: two sheets of paper on a table, one with a
+  heading and three lines, one with two lines, in German with ä ö ü ß and
+  €. The sentences were written for lichtbild. They are drawn with Atkinson
+  Hyperlegible Next (SIL Open Font License 1.1) by a one-off program, for
+  tests/ocr.rs.
+- `vision/cc0-cat-on-sofa.jpg`: a black cat curled up on a sofa, by Salwa
+  Farwaneh Dameh, from Wikimedia Commons ("Black cat curled up on a sofa",
+  CC0 1.0, public domain dedication), scaled to 960 px and re-encoded so
+  no EXIF or other metadata is kept; for tests/vision.rs.
+- The vision models for tests are not in the repository either:
+  `scripts/fetch-vision-models.sh <dir>` downloads PaddleOCR detection and
+  Latin recognition, RT-DETRv2-R18 and SigLIP multilingual (all
+  Apache-2.0, ONNX) at pinned revisions and checks each file's SHA-256.
+  Tests read them from `LICHTBILD_TEST_VISION_DIR`.

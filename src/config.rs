@@ -65,6 +65,12 @@ pub struct Config {
     /// Transcripts of videos (REQ-MEDIA-004); None when no model is
     /// configured.
     pub transcribe: Option<Transcribe>,
+    /// The vision model directory, checked (DD-023, DD-024); None: photos
+    /// are not looked at.
+    pub vision_dir: Option<PathBuf>,
+    /// The version results are stored with (vision::version); empty when
+    /// photos are not looked at.
+    pub vision_version: String,
     /// The world map's PMTiles file and glyph/sprite directory
     /// (REQ-MAP-001); canonical paths, each optional.
     pub map: MapFiles,
@@ -150,6 +156,7 @@ struct FileConfig {
     places: PlacesFiles,
     #[serde(default)]
     transcribe: TranscribeFiles,
+    vision_dir: Option<PathBuf>,
     #[serde(default)]
     map: MapFiles,
     public_url: Option<String>,
@@ -177,6 +184,7 @@ pub struct Settings {
     pub allowed_hosts: Vec<String>,
     pub places: PlacesFiles,
     pub transcribe: TranscribeFiles,
+    pub vision_dir: Option<PathBuf>,
     pub map: MapFiles,
     pub public_url: Option<String>,
     pub oidc: OidcFile,
@@ -270,6 +278,9 @@ impl Settings {
                 .filter(|l| !l.is_empty())
                 .collect();
         }
+        if let Some(v) = get("LICHTBILD_VISION_DIR") {
+            s.vision_dir = Some(PathBuf::from(v));
+        }
         if let Some(v) = get("LICHTBILD_PLACES") {
             s.places.cities = Some(PathBuf::from(v));
         }
@@ -313,6 +324,7 @@ impl Settings {
         if f.transcribe != TranscribeFiles::default() {
             self.transcribe = f.transcribe;
         }
+        self.vision_dir = f.vision_dir.or(self.vision_dir.take());
         if f.places != PlacesFiles::default() {
             self.places = f.places;
         }
@@ -463,6 +475,12 @@ impl Settings {
                 }),
                 None => None,
             },
+            // Checked at startup too: a wrong file stops the server.
+            vision_version: match &self.vision_dir {
+                Some(dir) => crate::vision::version(crate::vision::check(dir)?),
+                None => String::new(),
+            },
+            vision_dir: self.vision_dir,
             oidc,
             people: self.people,
             nav_html: nav_html(self.nav_file.as_deref(), self.nav_self.as_deref())?,
