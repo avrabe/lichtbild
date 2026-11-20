@@ -192,9 +192,21 @@ pub fn load_picture(path: &Path, max_bytes: u64) -> Result<RgbImage> {
 
 /// Run `exe look` on one picture, killed after `timeout`.
 pub fn run_child(exe: &Path, file: &Path, model_dir: &Path, timeout: Duration) -> Result<Look> {
+    run_child_as(exe, "look", file, model_dir, timeout)
+}
+
+/// Run `exe <mode> <model_dir> <file>` (`look` or `faces`), killed after
+/// `timeout`, and read its JSON answer.
+pub fn run_child_as<T: serde::de::DeserializeOwned>(
+    exe: &Path,
+    mode: &str,
+    file: &Path,
+    model_dir: &Path,
+    timeout: Duration,
+) -> Result<T> {
     use std::process::{Command, Stdio};
     let mut child = Command::new(exe)
-        .arg("look")
+        .arg(mode)
         .arg(model_dir)
         .arg(file)
         .env_clear()
@@ -203,7 +215,7 @@ pub fn run_child(exe: &Path, file: &Path, model_dir: &Path, timeout: Duration) -
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .context("start look")?;
+        .with_context(|| format!("start {mode}"))?;
     let mut stdout = child.stdout.take().context("stdout")?;
     let reader = std::thread::spawn(move || {
         let mut out = Vec::new();
@@ -260,7 +272,7 @@ pub fn child_main(args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn limit_self(cpu_seconds: u64) {
+pub(crate) fn limit_self(cpu_seconds: u64) {
     let set = |res, v: u64| {
         let lim = libc::rlimit {
             rlim_cur: v as libc::rlim_t,
@@ -296,7 +308,7 @@ impl PassReport {
     }
 }
 
-fn short_reason(e: &anyhow::Error) -> String {
+pub(crate) fn short_reason(e: &anyhow::Error) -> String {
     let s = e.to_string();
     let s: String = s
         .split(':')

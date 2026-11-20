@@ -64,6 +64,8 @@ pub struct AppState {
     pub space: Arc<crate::embed::Space>,
     /// The world map's files and positions cache (REQ-MAP-001).
     pub map: Arc<crate::map::MapState>,
+    /// Faces and the names given to them (REQ-FACE-002, REQ-FACE-003).
+    pub people: Arc<crate::people::People>,
 }
 
 impl AppState {
@@ -93,6 +95,7 @@ impl AppState {
             vision_version: cfg.vision_version.clone(),
             space: Arc::new(crate::embed::Space::with_dir(cfg.vision_dir.as_deref())),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
+            people: Arc::new(crate::people::People::default()),
         }
     }
 
@@ -135,6 +138,15 @@ pub fn router(state: AppState) -> Router {
         .route("/album/{id}/rename", axum::routing::post(album_rename))
         .route("/album/{id}/delete", axum::routing::post(album_delete))
         .route("/album/{id}/share", axum::routing::post(album_share))
+        .route("/days/{who}", get(days_page))
+        .route("/people", get(people_page))
+        .route("/people/{item}/{face}", get(group_page))
+        .route("/people/name", axum::routing::post(people_name))
+        .route("/people/not", axum::routing::post(people_not))
+        .route("/person/{id}", get(person_page))
+        .route("/person/{id}/rename", axum::routing::post(person_rename))
+        .route("/person/{id}/delete", axum::routing::post(person_delete))
+        .route("/face/{item}/{face}", get(face_crop))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
@@ -526,6 +538,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
+         <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
          <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
@@ -707,6 +720,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     let me = person(&viewer);
     let labels = viewer.labels.clone();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let md_today = today.get(5..10).unwrap_or("").to_string();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Home> {
         let counts = idx.counts()?;
         let hidden = idx.hidden(&me)?;
@@ -796,7 +810,11 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
         } else {
             viewer.labels[0].clone()
         };
-        body += "<section class=\"otd\"><h2>On this day</h2><div class=\"strip\">";
+        body += &format!(
+            "<section class=\"otd\"><h2><a href=\"days/{w}?md={md}\" title=\"Every picture of this day, in every year\">On this day</a></h2><div class=\"strip\">",
+            w = esc(&who),
+            md = esc(&md_today),
+        );
         for (id, r) in &otd {
             body += &format!(
                 "<a class=\"item\" href=\"v/{who}/{id}\" title=\"{t}\">{img}<span class=\"year\">{y}</span></a>",
@@ -811,6 +829,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     body += "<nav class=\"tiles\">\
              <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
              <a href=\"albums\"><b>Albums</b><span>Your own collections</span></a>\
+             <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
@@ -1021,7 +1040,11 @@ pub fn render_items(
                 let name = MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("");
                 s += &format!("<h3 class=\"month\">{name}</h3>\n");
             }
-            s += &format!("<h4 class=\"day\">{}</h4>\n<div class=\"grid\">", esc(&day));
+            s += &format!(
+                "<h4 class=\"day\"><a href=\"days/{w}?from={d}&amp;to={d}\" title=\"Only this day\">{d}</a></h4>\n<div class=\"grid\">",
+                w = esc(who),
+                d = esc(&day)
+            );
             open = true;
             prev = Some(day);
         }
@@ -1654,6 +1677,12 @@ pub struct ShowQuery {
     fav: Option<u8>,
     /// Only this album of theirs (REQ-WEB-017), each picture shown.
     album: Option<u64>,
+    /// Only photos of this person (REQ-FACE-003).
+    person: Option<u64>,
+    /// Only these days (a trip, a day, this day in every year).
+    from: Option<String>,
+    to: Option<String>,
+    md: Option<String>,
 }
 
 /// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
@@ -1688,10 +1717,36 @@ async fn show(
     let space = st.vision_on.then(|| st.space.clone());
     let fav_only = sq.fav.is_some();
     let album = sq.album;
+    let of = sq.person;
+    let people = st.people.clone();
+    let days = DaysQuery {
+        from: sq.from.clone(),
+        to: sq.to.clone(),
+        md: sq.md.clone(),
+        title: None,
+    };
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
         let hidden = idx.hidden(&me)?;
-        // A chosen set: favourites, or one of this person's albums.
+        // A chosen set: favourites, one of this person's albums, or the
+        // photos of someone.
+        let dq = DaysQuery {
+            from: sq.from.clone(),
+            to: sq.to.clone(),
+            md: sq.md.clone(),
+            title: None,
+        };
         let favs = match (sq.fav, sq.album) {
+            _ if dq.valid() => Some(
+                day_items(&idx, &dups, &labels, &hidden, &dq, true)?
+                    .into_iter()
+                    .map(|i| i.id)
+                    .collect(),
+            ),
+            _ if sq.person.is_some() => {
+                let who = crate::people::Who::Person(sq.person.unwrap_or_default());
+                let (items, _) = photos_of(&idx, &people, &labels, &me, who)?;
+                Some(items.into_iter().map(|i| i.id).collect())
+            }
             (_, Some(a)) => match seen_album(&idx, a, &me)? {
                 Some(_) => Some(idx.album_items(a)?),
                 None => return Ok(Vec::new()),
@@ -1747,6 +1802,8 @@ async fn show(
         Err(e) => return internal(e),
     };
     let back = match (album, slides.first()) {
+        _ if days.valid() => format!("days/{}?{}", esc(&who), days.query()),
+        _ if of.is_some() => format!("person/{}", of.unwrap_or_default()),
         (Some(a), _) => format!("album/{a}"),
         _ if fav_only => "favourites".to_string(),
         (None, Some((id, _, _))) => format!("v/{}/{id}", esc(&who)),
@@ -1921,6 +1978,20 @@ async fn viewer(
     } else {
         Default::default()
     };
+    // Who is in it (REQ-FACE-003).
+    let faces = if rec.video.is_none() && !st.people.is_empty() {
+        let (idx5, people, hash, back) = (
+            st.index.clone(),
+            st.people.clone(),
+            rec.hash.clone(),
+            format!("v/{who}/{id}{vqs}"),
+        );
+        tokio::task::spawn_blocking(move || render_faces(&idx5, &people, id, &hash, &back))
+            .await
+            .unwrap_or_default()
+    } else {
+        String::new()
+    };
     let mine = owned(st.auth.is_some(), &viewer).contains(&rec.label) && rec.lat.is_none();
     let act = mine.then_some((id, st.map.pmtiles.is_some(), true));
     let w = esc(&who);
@@ -1984,11 +2055,12 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <a class=\"when\" href=\"days/{w}?from={day}&amp;to={day}#i{id}\" title=\"All pictures of this day\">{when}</a>{tr}{textp}{things}{faces}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
+        day = esc(rec.taken_local.get(..10).unwrap_or("")),
         after = id + 1,
         photo = match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
             // A W3C media fragment (#t=) starts the video at the hit.
@@ -2069,7 +2141,36 @@ async fn suggest(
         (true, true) if !rest.is_empty() => format!("{rest} "),
         (true, _) => rest,
     };
+    let people = st.people.clone();
+    let typed = last.to_lowercase();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // Names of people the viewer has photos of (REQ-FACE-003), that
+        // the word being typed begins, with how many photos.
+        let mut names: Vec<(String, usize)> = Vec::new();
+        if typed.chars().count() >= 2 && !people.is_empty() {
+            let hidden = idx.hidden(&me)?;
+            let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+            for (id, p) in idx.people()? {
+                if !p
+                    .name
+                    .split_whitespace()
+                    .any(|w| w.to_lowercase().starts_with(&typed))
+                {
+                    continue;
+                }
+                let n = seen
+                    .iter()
+                    .filter(|f| f.face.who == crate::people::Who::Person(id))
+                    .map(|f| f.face.key.0.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len();
+                if n > 0 {
+                    names.push((p.name, n));
+                }
+            }
+            names.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+            names.truncate(3);
+        }
         // As many as the Favourites page shows: in these libraries and
         // not hidden.
         let n = match offer {
@@ -2085,10 +2186,10 @@ async fn suggest(
         } else {
             sx.suggest(&ask, &labels, 8)
         };
-        Ok((found, n))
+        Ok((found, n, names))
     })
     .await;
-    let (mut found, favs) = match res {
+    let (mut found, favs, names) = match res {
         Ok(Ok(f)) => f,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -2100,6 +2201,15 @@ async fn suggest(
             "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"your favourites\" aria-label=\"your favourites\">♥</span><span class=\"st\">{head}<b>{word}</b></span><span class=\"dim\">{favs}</span></a>",
             q = urlencode(&format!("{head}{word}")),
             head = esc(head),
+        );
+    }
+    for (name, n) in &names {
+        let head = q.trim_end().strip_suffix(last).unwrap_or("");
+        h += &format!(
+            "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"person\" aria-label=\"person\">☺</span><span class=\"st\">{head}<b>{name}</b></span><span class=\"dim\">{n}</span></a>",
+            q = urlencode(&format!("{head}{name}")),
+            head = esc(head),
+            name = esc(name),
         );
     }
     if let Some(w) = fav_word {
@@ -2164,14 +2274,70 @@ async fn search(
     if fav_only && q2.is_empty() {
         return Redirect::to(&format!("{}/favourites", st.base_path)).into_response();
     }
+    // A person's name asks for their photos (REQ-FACE-003): only names
+    // of people the viewer has photos of; the other words are searched
+    // in those photos. Alone, it is the person's page.
+    let of = {
+        let (idx, people, labels, me, q2) = (
+            st.index.clone(),
+            st.people.clone(),
+            labels.clone(),
+            me.clone(),
+            q2.clone(),
+        );
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            if people.is_empty() {
+                return Ok((q2, None));
+            }
+            let hidden = idx.hidden(&me)?;
+            let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+            let names: Vec<(u64, String)> = idx
+                .people()?
+                .into_iter()
+                .filter(|(id, _)| {
+                    seen.iter()
+                        .any(|f| f.face.who == crate::people::Who::Person(*id))
+                })
+                .map(|(id, p)| (id, p.name))
+                .collect();
+            let (rest, pid) = crate::search::split_name(&q2, &names);
+            let hashes = pid.map(|p| {
+                seen.iter()
+                    .filter(|f| f.face.who == crate::people::Who::Person(p))
+                    .map(|f| f.face.key.0.clone())
+                    .collect::<std::collections::HashSet<String>>()
+            });
+            Ok((rest, pid.zip(hashes)))
+        })
+        .await
+    };
+    let (q2, of) = match of {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    if let Some((pid, _)) = &of {
+        if q2.is_empty() {
+            return Redirect::to(&format!("{}/person/{pid}", st.base_path)).into_response();
+        }
+    }
     let space = st.vision_on.then(|| st.space.clone());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Found> {
         let hidden = idx.hidden(&me)?;
         let favs = if fav_only { Some(idx.favs(&me)?) } else { None };
-        // A favourite counts through any of its copies.
+        let in_photo = |id: u64, hs: &std::collections::HashSet<String>| {
+            idx.locate(id)
+                .ok()
+                .flatten()
+                .is_some_and(|r| hs.contains(&r.hash))
+        };
+        // A favourite counts through any of its copies; so does a photo of
+        // the person asked for.
         let wanted = |id: u64| {
             favs.as_ref().is_none_or(|f| {
                 f.contains(&id) || dups.copies(id, &labels).iter().any(|c| f.contains(c))
+            }) && of.as_ref().is_none_or(|(_, hs)| {
+                in_photo(id, hs) || dups.copies(id, &labels).iter().any(|c| in_photo(*c, hs))
             })
         };
         let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
@@ -3560,11 +3726,31 @@ async fn status_page(
             ),
             "busy",
         ),
+        Phase::Faces {
+            since,
+            done,
+            total,
+            report,
+        } => (
+            if everything {
+                format!(
+                    "Looking for faces: {done} of {total} photos done ({} faces, {} failed), since {}",
+                    report.faces,
+                    report.failed,
+                    relative(*since, now)
+                )
+            } else {
+                format!("Looking for faces, since {}", relative(*since, now))
+            },
+            "busy",
+        ),
         Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
         Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
     };
     let progress = match &s.phase {
-        Phase::Transcribing { done, total, .. } | Phase::Looking { done, total, .. }
+        Phase::Transcribing { done, total, .. }
+        | Phase::Looking { done, total, .. }
+        | Phase::Faces { done, total, .. }
             if *total > 0 =>
         {
             format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
@@ -3812,7 +3998,7 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
         "all".to_string()
     };
     let mut body = String::from(
-        "<h1>Trips</h1><p class=\"dim\">Days on which your pictures were taken more than 50 km from home, one after another. Home is where most days of pictures were taken. A trip opens the timeline at its last day.</p>",
+        "<h1>Trips</h1><p class=\"dim\">Days on which your pictures were taken more than 50 km from home, one after another. Home is where most days of pictures were taken. A trip opens its pictures alone, with a slideshow.</p>",
     );
     if trips.is_empty() {
         body += "<p>No trips found yet. Trips come from the positions of pictures: recorded, estimated from neighbours or set by hand.</p>";
@@ -3827,9 +4013,11 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
             [one, rest @ ..] => format!("{one} and {} more places", rest.len()),
         };
         body += &format!(
-            "<a class=\"thing\" href=\"t/{w}?before={end}T99&amp;id=0\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small></a>",
+            "<a class=\"thing\" href=\"days/{w}?from={start}&amp;to={end}&amp;title={tq}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small></a>",
             w = esc(&who),
+            start = t.start.format("%Y-%m-%d"),
             end = t.end.format("%Y-%m-%d"),
+            tq = urlencode(&title),
             id = t.cover,
             h = esc(hash.get(..12).unwrap_or("")),
             title = esc(&title),
@@ -4140,6 +4328,752 @@ pub fn embedded_assets() -> [(&'static str, &'static str); 4] {
         ("lichtbild.js", JS),
         ("map.js", crate::map::MAP_JS),
     ]
+}
+
+// ---- Days (a trip, a day, or one day in every year) ----
+
+#[derive(Deserialize, Default, Clone)]
+pub struct DaysQuery {
+    /// First and last day, YYYY-MM-DD (both included).
+    from: Option<String>,
+    to: Option<String>,
+    /// One day of the year in every year, MM-DD.
+    md: Option<String>,
+    /// A heading for the page (a trip's places).
+    title: Option<String>,
+}
+
+fn is_day(s: &str) -> bool {
+    s.len() == 10
+        && s.bytes().enumerate().all(|(i, b)| {
+            if i == 4 || i == 7 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+}
+
+fn is_month_day(s: &str) -> bool {
+    s.len() == 5
+        && s.bytes().enumerate().all(|(i, b)| {
+            if i == 2 {
+                b == b'-'
+            } else {
+                b.is_ascii_digit()
+            }
+        })
+}
+
+impl DaysQuery {
+    /// Whether a picture taken at `taken` (local "YYYY-MM-DDTHH...") is in.
+    fn holds(&self, taken: &str) -> bool {
+        let day = taken.get(..10).unwrap_or("");
+        match (&self.md, &self.from, &self.to) {
+            (Some(md), _, _) => day.get(5..10) == Some(md.as_str()),
+            (None, Some(f), Some(t)) => day >= f.as_str() && day <= t.as_str(),
+            _ => false,
+        }
+    }
+
+    fn valid(&self) -> bool {
+        match (&self.md, &self.from, &self.to) {
+            (Some(md), _, _) => is_month_day(md),
+            (None, Some(f), Some(t)) => is_day(f) && is_day(t) && f <= t,
+            _ => false,
+        }
+    }
+
+    /// The query again, for links (slideshow).
+    fn query(&self) -> String {
+        match (&self.md, &self.from, &self.to) {
+            (Some(md), _, _) => format!("md={}", urlencode(md)),
+            (None, Some(f), Some(t)) => format!("from={}&amp;to={}", urlencode(f), urlencode(t)),
+            _ => String::new(),
+        }
+    }
+
+    fn heading(&self) -> String {
+        let day = |d: &str| {
+            long_date(&format!("{d}T00:00"))
+                .trim_end_matches(", 00:00")
+                .to_string()
+        };
+        if let Some(t) = self.title.as_deref().filter(|t| !t.trim().is_empty()) {
+            return t.chars().take(120).collect();
+        }
+        match (&self.md, &self.from, &self.to) {
+            (Some(md), _, _) => {
+                let m: usize = md.get(..2).and_then(|m| m.parse().ok()).unwrap_or(0);
+                let d: u32 = md.get(3..).and_then(|d| d.parse().ok()).unwrap_or(0);
+                format!(
+                    "{d} {} in every year",
+                    MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("")
+                )
+            }
+            (None, Some(f), Some(t)) if f == t => day(f),
+            (None, Some(f), Some(t)) => format!("{} – {}", day(f), day(t)),
+            _ => String::new(),
+        }
+    }
+}
+
+/// The pictures of a day range the viewer may see, one copy each, nothing
+/// hidden, newest first.
+fn day_items(
+    idx: &index::Index,
+    dups: &crate::dups::Dups,
+    labels: &[String],
+    hidden: &std::collections::HashSet<u64>,
+    dq: &DaysQuery,
+    photos_only: bool,
+) -> anyhow::Result<Vec<index::Item>> {
+    let before = match (&dq.md, &dq.to) {
+        (None, Some(t)) => Some(format!("{t}T99")),
+        _ => None,
+    };
+    let mut items = idx.timeline_where(
+        labels,
+        before.as_deref().map(|b| (b, 0)),
+        usize::MAX,
+        |id, rec| {
+            dq.holds(&rec.taken_local)
+                && (!photos_only || rec.video.is_none())
+                && dups.shown(id, labels, hidden).shown
+        },
+    )?;
+    items.truncate(SET_MAX);
+    Ok(items)
+}
+
+/// GET /days/{who}?from=&to= (a trip, a day) or ?md= (this day in every
+/// year): just those pictures, as a timeline, with a slideshow.
+async fn days_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(who): UrlPath<String>,
+    Query(dq): Query<DaysQuery>,
+) -> Response {
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    if !dq.valid() {
+        return (StatusCode::BAD_REQUEST, "which days?").into_response();
+    }
+    let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
+    let space = st.vision_on.then(|| st.space.clone());
+    let dq2 = dq.clone();
+    let res =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<index::Item>, Vec<usize>)> {
+            let hidden = idx.hidden(&me)?;
+            let favs = idx.favs(&me)?;
+            let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+            for it in &mut items {
+                it.copies = dups.shown(it.id, &labels, &hidden).copies;
+                it.fav = favs.contains(&it.id);
+            }
+            let runs = series(&items, space.as_deref());
+            Ok((items, runs))
+        })
+        .await;
+    let (items, runs) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let head = esc(&dq.heading());
+    let w = esc(&who);
+    let body = if items.is_empty() {
+        format!("<h1>{head}</h1><p class=\"dim\">No pictures from these days.</p>")
+    } else {
+        format!(
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline days\">\n{}</div>\n{albums}",
+            render_items(&who, &items, &runs, None, false, ""),
+            n = set_count(items.len()),
+            q = dq.query(),
+            albums = album_template(&albums_of(&st, person(&viewer)).await),
+        )
+    };
+    page_for(&st, "lichtbild days", &body).into_response()
+}
+
+// ---- People (REQ-FACE-002, REQ-FACE-003, DD-025) ----
+
+/// A face the viewer may see, with one item holding its photo.
+struct SeenFace {
+    face: crate::people::FaceInfo,
+    item: u64,
+}
+
+/// The faces whose photo is in a library the viewer may see and not hidden
+/// by them; a photo in several places is held by its lowest item id.
+fn seen_faces(
+    idx: &index::Index,
+    people: &crate::people::People,
+    labels: &[String],
+    hidden: &std::collections::HashSet<u64>,
+) -> anyhow::Result<Vec<SeenFace>> {
+    let mut at: HashMap<String, u64> = HashMap::new();
+    for (id, r) in idx.all()? {
+        if r.missing || r.video.is_some() || !labels.contains(&r.label) || hidden.contains(&id) {
+            continue;
+        }
+        at.entry(r.hash)
+            .and_modify(|e| *e = (*e).min(id))
+            .or_insert(id);
+    }
+    Ok(people
+        .all()
+        .into_iter()
+        .filter_map(|f| at.get(&f.key.0).map(|&item| SeenFace { face: f, item }))
+        .collect())
+}
+
+/// The face with number `k` in item `item`, if the viewer may see the item.
+fn face_at(
+    idx: &index::Index,
+    people: &crate::people::People,
+    viewer: &Viewer,
+    item: u64,
+    k: u32,
+) -> anyhow::Result<Option<(index::Record, crate::people::FaceInfo)>> {
+    let Some(rec) = idx.locate(item)?.filter(|r| viewer.may_see(&r.label)) else {
+        return Ok(None);
+    };
+    let f = people
+        .in_photo(&rec.hash)
+        .into_iter()
+        .find(|f| f.key.1 == k);
+    Ok(f.map(|f| (rec, f)))
+}
+
+/// A person's or group's tile: the best face to show (one someone named,
+/// then the largest).
+fn cover(faces: &[&SeenFace]) -> Option<(u64, u32)> {
+    faces
+        .iter()
+        .max_by(|a, b| {
+            (a.face.named, a.face.b[2] * a.face.b[3])
+                .partial_cmp(&(b.face.named, b.face.b[2] * b.face.b[3]))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|f| (f.item, f.face.key.1))
+}
+
+fn face_img(item: u64, k: u32) -> String {
+    format!("<img class=\"face\" src=\"face/{item}/{k}\" loading=\"lazy\" alt=\"\" width=\"80\" height=\"80\">")
+}
+
+/// Photos with this many faces of one unnamed group or more are offered
+/// for naming.
+const GROUP_MIN: usize = 2;
+/// At most this many unnamed groups on the people page.
+const GROUPS_MAX: usize = 48;
+
+/// GET /people: the named people the viewer has photos of, then groups of
+/// one unnamed person each, biggest first, to be named.
+async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    type Tile = (String, String, usize, Option<(u64, u32)>);
+    let res =
+        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Tile>, Vec<Tile>, usize)> {
+            let hidden = idx.hidden(&me)?;
+            let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+            let names: HashMap<u64, String> = idx
+                .people()?
+                .into_iter()
+                .map(|(id, p)| (id, p.name))
+                .collect();
+            let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
+            for f in &seen {
+                by.entry(f.face.who).or_default().push(f);
+            }
+            let photos = |v: &[&SeenFace]| {
+                v.iter()
+                    .map(|f| f.face.key.0.as_str())
+                    .collect::<std::collections::HashSet<_>>()
+                    .len()
+            };
+            let (mut named, mut groups, mut singles) = (Vec::new(), Vec::new(), 0);
+            for (who, v) in &by {
+                match who {
+                    crate::people::Who::Person(p) => {
+                        let Some(name) = names.get(p) else { continue };
+                        named.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                    }
+                    crate::people::Who::Group(_) => {
+                        let n = photos(v);
+                        if n < GROUP_MIN {
+                            singles += 1;
+                            continue;
+                        }
+                        let c = cover(v);
+                        let href = c
+                            .map(|(i, k)| format!("people/{i}/{k}"))
+                            .unwrap_or_default();
+                        groups.push((href, String::new(), n, c));
+                    }
+                }
+            }
+            named.sort_by(|a, b| {
+                b.2.cmp(&a.2)
+                    .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+            });
+            groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+            groups.truncate(GROUPS_MAX);
+            Ok((named, groups, singles))
+        })
+        .await;
+    let (named, groups, singles) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from("<h1>People</h1>");
+    if named.is_empty() && groups.is_empty() {
+        body += if st.people.is_empty() {
+            "<p class=\"dim\">No faces yet. With the face models in the vision directory, lichtbild looks for faces after it has looked at the photos.</p>"
+        } else {
+            "<p class=\"dim\">No one twice yet in the photos you see.</p>"
+        };
+    }
+    let tiles = |rows: &[Tile], label: &str| -> String {
+        let mut o = String::from("<section class=\"thingtiles people\">");
+        for (href, name, n, c) in rows {
+            let img = c.map(|(i, k)| face_img(i, k)).unwrap_or_default();
+            let name = if name.is_empty() {
+                format!("<b class=\"dim\">{label}</b>")
+            } else {
+                format!("<b>{}</b>", esc(name))
+            };
+            o += &format!(
+                "<a class=\"thing person\" href=\"{href}\">{img}<span>{name}<i>{n}</i></span></a>"
+            );
+        }
+        o + "</section>"
+    };
+    if !named.is_empty() {
+        body += &tiles(&named, "");
+    }
+    if !groups.is_empty() {
+        body += "<h2>Who is this?</h2><p class=\"dim\">The same face in several photos. Give it a name, and lichtbild finds that person in the others too. Names are the same for everyone in the house.</p>";
+        body += &tiles(&groups, "Name?");
+    }
+    if singles > 0 {
+        body += &format!("<p class=\"dim\">{singles} more faces were seen in one photo each.</p>");
+    }
+    page_for(&st, "lichtbild people", &body).into_response()
+}
+
+/// The photos holding faces of `who` that the viewer may see, as items.
+fn photos_of(
+    idx: &index::Index,
+    people: &crate::people::People,
+    labels: &[String],
+    me: &str,
+    who: crate::people::Who,
+) -> anyhow::Result<(Vec<index::Item>, usize)> {
+    let hidden = idx.hidden(me)?;
+    let favs = idx.favs(me)?;
+    let seen = seen_faces(idx, people, labels, &hidden)?;
+    let ids: std::collections::BTreeSet<u64> = seen
+        .iter()
+        .filter(|f| f.face.who == who)
+        .map(|f| f.item)
+        .collect();
+    let mut items = idx.items_of(ids, labels, |id, _| !hidden.contains(&id))?;
+    let total = items.len();
+    items.truncate(SET_MAX);
+    for it in &mut items {
+        it.fav = favs.contains(&it.id);
+    }
+    Ok((items, total))
+}
+
+/// GET /person/{id}: the photos of a named person the viewer may see.
+async fn person_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+) -> Response {
+    let who = default_who(&viewer);
+    let labels = viewer.labels.clone();
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Option<(index::Person, Vec<index::Item>, usize)>> {
+            let Some(p) = idx.person(pid)? else {
+                return Ok(None);
+            };
+            let (items, total) =
+                photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(pid))?;
+            // A name with no photo the viewer may see does not exist for them.
+            if items.is_empty() {
+                return Ok(None);
+            }
+            Ok(Some((p, items, total)))
+        },
+    )
+    .await;
+    let (p, items, total) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let ones = vec![1; items.len()];
+    let name = esc(&p.name);
+    let w = esc(&who);
+    let manage = format!(
+        "<details class=\"albumtools\"><summary>Rename or take the name off</summary>\
+         <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
+         <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
+    );
+    let body = format!(
+        "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        render_items(&who, &items, &ones, None, false, ""),
+        n = set_count(total),
+        albums = album_template(&albums_of(&st, person(&viewer)).await),
+    );
+    page_for(&st, "lichtbild person", &body).into_response()
+}
+
+/// The names already given, for a name field's suggestions.
+fn names_list(idx: &index::Index) -> String {
+    let mut names: Vec<String> = idx
+        .people()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, p)| p.name)
+        .collect();
+    names.sort_by_key(|n| n.to_lowercase());
+    names.dedup();
+    let opts: String = names
+        .iter()
+        .map(|n| format!("<option value=\"{}\">", esc(n)))
+        .collect();
+    format!("<datalist id=\"names\">{opts}</datalist>")
+}
+
+/// GET /people/{item}/{face}: the unnamed group this face belongs to, to
+/// be named; a named face's person page instead.
+async fn group_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath((item, k)): UrlPath<(u64, u32)>,
+) -> Response {
+    let who = default_who(&viewer);
+    let labels = viewer.labels.clone();
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let v2 = viewer.clone();
+    type Group = (crate::people::Who, Vec<index::Item>, usize, String);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Group>> {
+        let Some((_, f)) = face_at(&idx, &people, &v2, item, k)? else {
+            return Ok(None);
+        };
+        if let crate::people::Who::Person(_) = f.who {
+            return Ok(Some((f.who, Vec::new(), 0, String::new())));
+        }
+        let (items, total) = photos_of(&idx, &people, &labels, &me, f.who)?;
+        Ok(Some((f.who, items, total, names_list(&idx))))
+    })
+    .await;
+    let (g, items, total, names) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such face").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    if let crate::people::Who::Person(p) = g {
+        return Redirect::to(&format!("{}/person/{p}", st.base_path)).into_response();
+    }
+    let ones = vec![1; items.len()];
+    let body = format!(
+        "<div class=\"thead\">{img}<h1>Who is this?</h1><span class=\"dim\">{n}</span></div>\
+         <form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\">\
+         <input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Name\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button>{names}</form>\
+         <p class=\"dim\">The name goes to every photo here, and to this person in other photos as lichtbild finds them. Everyone in the house sees the name.</p>\
+         <div class=\"timeline group\">\n{}</div>",
+        render_items(&who, &items, &ones, None, false, ""),
+        img = face_img(item, k),
+        n = set_count(total),
+    );
+    page_for(&st, "lichtbild who is this", &body).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct NameForm {
+    item: u64,
+    face: u32,
+    name: Option<String>,
+    /// Name only this face, not its whole group.
+    one: Option<String>,
+    /// For "not them": the person.
+    person: Option<u64>,
+    back: Option<String>,
+}
+
+/// The person with this name (any case), or a new one.
+fn person_named(idx: &index::Index, name: &str, by: &str) -> anyhow::Result<u64> {
+    let low = name.to_lowercase();
+    if let Some((id, _)) = idx
+        .people()?
+        .into_iter()
+        .find(|(_, p)| p.name.to_lowercase() == low)
+    {
+        return Ok(id);
+    }
+    idx.create_person(name, by, now_secs())
+}
+
+/// POST /people/name: give a name to a face and, unless `one` is set, to
+/// every face of its group the viewer may see.
+async fn people_name(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<NameForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "a name is needed").into_response();
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    let one = f.one.is_some();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<u64>> {
+        let Some((_, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(None);
+        };
+        let keys: Vec<crate::people::Key> = if one {
+            vec![face.key.clone()]
+        } else {
+            let hidden = idx.hidden(&me)?;
+            seen_faces(&idx, &people, &labels, &hidden)?
+                .into_iter()
+                .filter(|s| s.face.who == face.who)
+                .map(|s| s.face.key)
+                .collect()
+        };
+        let pid = person_named(&idx, &name, &me)?;
+        idx.name_faces(&keys, pid)?;
+        people.relabel(&idx)?;
+        Ok(Some(pid))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(pid))) => {
+            let back = f.back.clone().unwrap_or_else(|| format!("person/{pid}"));
+            back_to(&st, Some(&back))
+        }
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /people/not: this face is not `person`.
+async fn people_not(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<NameForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(pid) = f.person else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some((_, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(false);
+        };
+        idx.not_person(&face.key.0, face.key.1, pid)?;
+        people.relabel(&idx)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, f.back.as_deref()),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// Whether the viewer has a photo of this person: only then may they see
+/// or change the name.
+fn sees_person(
+    idx: &index::Index,
+    people: &crate::people::People,
+    viewer: &Viewer,
+    pid: u64,
+) -> anyhow::Result<bool> {
+    let hidden = idx.hidden(&person(viewer))?;
+    Ok(seen_faces(idx, people, &viewer.labels, &hidden)?
+        .iter()
+        .any(|f| f.face.who == crate::people::Who::Person(pid)))
+}
+
+/// POST /person/{id}/rename: a new name; someone else's name puts both
+/// together.
+async fn person_rename(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "a name is needed").into_response();
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<u64>> {
+        if idx.person(pid)?.is_none() || !sees_person(&idx, &people, &viewer, pid)? {
+            return Ok(None);
+        }
+        let low = name.to_lowercase();
+        let other = idx
+            .people()?
+            .into_iter()
+            .find(|(id, p)| *id != pid && p.name.to_lowercase() == low);
+        let to = match other {
+            Some((into, _)) => {
+                idx.merge_people(pid, into)?;
+                into
+            }
+            None => {
+                idx.rename_person(pid, &name)?;
+                pid
+            }
+        };
+        people.relabel(&idx)?;
+        Ok(Some(to))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(to))) => back_to(&st, Some(&format!("person/{to}"))),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /person/{id}/delete: take the name off; the faces are unnamed again.
+async fn person_delete(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if idx.person(pid)?.is_none() || !sees_person(&idx, &people, &viewer, pid)? {
+            return Ok(false);
+        }
+        idx.delete_person(pid)?;
+        people.relabel(&idx)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some("people")),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /face/{item}/{face}: the small picture of a face.
+async fn face_crop(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath((item, k)): UrlPath<(u64, u32)>,
+) -> Response {
+    let dd = st.data_dir.clone();
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
+        let Some(rec) = idx.locate(item)?.filter(|r| viewer.may_see(&r.label)) else {
+            return Ok(None);
+        };
+        Ok(std::fs::read(crate::faces::crop_path(&dd, &rec.hash, k)).ok())
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(b))) => (
+            [
+                (header::CONTENT_TYPE, "image/jpeg"),
+                (header::CACHE_CONTROL, "private, max-age=86400"),
+            ],
+            b,
+        )
+            .into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// The faces of a photo for the viewer: each small, with its name (a link)
+/// or a field to name it, and "not them" for a name lichtbild passed along.
+fn render_faces(
+    idx: &index::Index,
+    people: &crate::people::People,
+    id: u64,
+    hash: &str,
+    back: &str,
+) -> String {
+    let faces = people.in_photo(hash);
+    if faces.is_empty() {
+        return String::new();
+    }
+    let names: HashMap<u64, String> = idx
+        .people()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(i, p)| (i, p.name))
+        .collect();
+    let b = esc(back);
+    let mut o = format!(
+        "<details class=\"faces\"><summary title=\"People in the picture\" aria-label=\"People in the picture\">☺ {}</summary><div class=\"kpanel\"><ul class=\"facelist\">",
+        faces.len()
+    );
+    for f in &faces {
+        let k = f.key.1;
+        let img = face_img(id, k);
+        let row = match f.who {
+            crate::people::Who::Person(p) if names.contains_key(&p) => {
+                let not = format!(
+                    "<form method=\"post\" action=\"people/not\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"person\" value=\"{p}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" class=\"not\" title=\"This is someone else\">Not {n}</button></form>",
+                    n = esc(&names[&p])
+                );
+                format!(
+                    "<a href=\"person/{p}\">{}</a>{}{not}",
+                    esc(&names[&p]),
+                    if f.named { "" } else { " <small class=\"dim\">found</small>" }
+                )
+            }
+            _ => format!(
+                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>"
+            ),
+        };
+        o += &format!("<li>{img}<span>{row}</span></li>");
+    }
+    o + "</ul>" + &names_list(idx) + "</div></details>"
 }
 
 #[cfg(test)]

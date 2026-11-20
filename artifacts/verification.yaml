@@ -1401,3 +1401,104 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-017
+
+  - id: VER-100
+    type: verification
+    title: The faces child finds every face with its vector and picture
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_child_finds_every_face_with_its_vector"
+      test-location: tests/faces.rs
+      steps:
+        - run: "cargo test --test faces the_child_finds_every_face_with_its_vector"
+    links:
+      - type: verifies
+        target: REQ-FACE-001
+
+  - id: VER-101
+    type: verification
+    title: One person's faces match and others do not
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "one_persons_faces_match_and_others_do_not"
+      test-location: tests/faces.rs
+      steps:
+        - run: "cargo test --test faces one_persons_faces_match_and_others_do_not"
+    links:
+      - type: verifies
+        target: REQ-FACE-002
+
+  - id: VER-102
+    type: verification
+    title: The pass groups people and a name finds them
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_groups_people_and_a_name_finds_them"
+      test-location: tests/faces.rs
+      steps:
+        - run: "cargo test --test faces the_pass_groups_people_and_a_name_finds_them"
+    links:
+      - type: verifies
+        target: REQ-FACE-002
+      - type: verifies
+        target: REQ-FACE-003
+
+  - id: VER-103
+    type: verification
+    title: Names are shared but each person sees only their photos of them
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "names_are_shared_but_each_person_sees_only_their_photos_of_them"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth names_are_shared_but_each_person_sees_only_their_photos_of_them"
+    links:
+      - type: verifies
+        target: REQ-FACE-003
+
+  - id: VER-104
+    type: verification
+    title: Grouping links look-alikes and passes names, not to strangers or refusers
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "people::tests"
+      test-location: src/people.rs
+      steps:
+        - run: "cargo test --lib people::tests"
+    links:
+      - type: verifies
+        target: REQ-FACE-002
+
+  - id: VER-105
+    type: verification
+    title: A name is taken out of a query
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_name_is_taken_out_of_a_query"
+      test-location: src/search.rs
+      steps:
+        - run: "cargo test --lib a_name_is_taken_out_of_a_query"
+    links:
+      - type: verifies
+        target: REQ-FACE-003
+
+  - id: VER-106
+    type: verification
+    title: A trip, a day and this day in every year open their pictures alone
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "days_away_from_home_are_one_trip_named_by_place"
+      test-location: tests/trips.rs
+      steps:
+        - run: "cargo test --test trips days_away_from_home_are_one_trip_named_by_place"
+    links:
+      - type: verifies
+        target: REQ-WEB-018
+

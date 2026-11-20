@@ -8,7 +8,7 @@ lichtbild indexes photo folders read-only, in place, without copying or moving t
 - favourites and albums, each person their own (an album can be shared with the house), with a slideshow of each;
 - a world map of where photos and videos were taken, and trips found from it;
 - one search box over what was said in videos, the text in pictures, the things in them (Katze, Fahrrad), places, dates, seasons and holidays, or a description in your own words, with suggestions as you type;
-- later, face recognition.
+- the people in the photos: faces grouped by person, named once for the whole house, found by name in search; each person sees only their own photos of anyone.
 
 Everything runs on the home server. The map tiles come from a local file, and no photo, place or face leaves the house.
 
@@ -29,7 +29,7 @@ All settings are in `lichtbild --help` and [config.example.toml](config.example.
 
 ### Looking at photos
 
-With `LICHTBILD_VISION_DIR` set, every photo is looked at once in a background child process after the scan: the text in it (PaddleOCR), the things in it (RT-DETRv2, 80 kinds) and a picture vector for search by meaning and look-alikes (SigLIP, multilingual). `scripts/fetch-vision-models.sh <dir>` fetches the seven pinned files (about 410 MB) and picks compact int8 models where the CPU runs them correctly, float32 elsewhere; lichtbild refuses a set that does not match the CPU. On a Raspberry Pi 5 a photo takes about 2 s. Searching by meaning loads a text encoder of about 0.6 GB, dropped again after 10 idle minutes.
+With `LICHTBILD_VISION_DIR` set, every photo is looked at once in a background child process after the scan: the text in it (PaddleOCR), the things in it (RT-DETRv2, 80 kinds) and a picture vector for search by meaning and look-alikes (SigLIP, multilingual). `scripts/fetch-vision-models.sh <dir>` fetches the seven pinned files (about 410 MB) and picks compact int8 models where the CPU runs them correctly, float32 elsewhere; lichtbild refuses a set that does not match the CPU. On a Raspberry Pi 5 a photo takes about 2 s. Searching by meaning loads a text encoder of about 0.6 GB, dropped again after 10 idle minutes. The same directory may hold the two face models (YuNet and AuraFace, about 250 MB, fetched by the same script unless `LICHTBILD_FACES=0`): then every photo is also looked at for faces, once, after that pass, and the People page groups them for a name.
 
 ## Verification
 

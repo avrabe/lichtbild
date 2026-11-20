@@ -864,3 +864,48 @@ details.albumtools button.danger { background: var(--shu); color: #fff; }
 }
 .viewer details.info form.albumf button { cursor: pointer; }
 .viewer details.info form.albumf [hidden] { display: none; }
+
+/* People (REQ-FACE-002, REQ-FACE-003): a round face per person, and the
+   faces of a photo in the viewer. */
+.thingtiles.people { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
+.thingtiles.people a.thing { aspect-ratio: auto; background: transparent; box-shadow: none; text-align: center; }
+.thingtiles.people a.thing img.face {
+  width: 100%; height: auto; aspect-ratio: 1; border-radius: 50%; box-shadow: var(--shadow); background: var(--tile);
+}
+.thingtiles.people a.thing span {
+  position: static; justify-content: center; padding: 8px 0 0; color: var(--ink); background: none;
+}
+.thingtiles.people a.thing i { margin-left: 0; color: var(--ink-faint); }
+.thead img.face { width: 56px; height: 56px; border-radius: 50%; margin-right: 12px; object-fit: cover; }
+form.namef { display: flex; gap: 8px; margin: 0 0 12px; max-width: 28em; }
+form.namef input {
+  flex: 1; font: inherit; min-height: 36px; padding: 0 12px; border: 1px solid var(--line, #d8cfbf);
+  border-radius: 6px; background: var(--paper); color: var(--ink);
+}
+form.namef button {
+  font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 0;
+  background: var(--ink); color: var(--paper); cursor: pointer;
+}
+.viewer details.faces { position: relative; }
+.viewer details.faces > summary { list-style: none; cursor: pointer; font-size: 15px; padding: 0 8px; color: inherit; white-space: nowrap; }
+.viewer details.faces > summary::-webkit-details-marker { display: none; }
+.viewer details.faces[open] > summary { color: var(--shu); }
+.viewer ul.facelist { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.viewer ul.facelist li { display: flex; align-items: center; gap: 12px; }
+.viewer ul.facelist img.face { width: 52px; height: 52px; border-radius: 50%; flex: none; }
+.viewer ul.facelist a { color: #fff; font-weight: 600; }
+.viewer ul.facelist form { display: inline-flex; gap: 6px; margin: 0; }
+.viewer ul.facelist form.namef { margin: 0; flex: 1; }
+.viewer ul.facelist form.namef input, .viewer ul.facelist form.namef button,
+.viewer ul.facelist button.not {
+  font: 400 13px/1.4 var(--sans); min-height: 30px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid rgba(233, 225, 209, .25); background: transparent; color: inherit; cursor: pointer;
+}
+.viewer ul.facelist button.not { margin-left: 8px; opacity: .75; }
+
+/* A day heading, the viewer's date and "On this day" open just those
+   pictures (/days). */
+h4.day a, .otd h2 a { color: inherit; text-decoration: none; }
+h4.day a:hover, .otd h2 a:hover { color: var(--shu); }
+.viewer a.when { text-decoration: none; }
+.viewer a.when:hover { color: #e9e1d1; text-decoration: underline; }

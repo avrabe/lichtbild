@@ -170,6 +170,7 @@ struct Env {
     mock: Shared,
     idx: Arc<Index>,
     auth: Arc<Auth>,
+    people: Arc<lichtbild::people::People>,
 }
 
 /// p1 belongs to subject user-1 (its email alone does not sign in); p2 to
@@ -187,6 +188,7 @@ async fn env(public_url: &str) -> Env {
     let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
     state.search.rebuild(&idx, None).unwrap();
     let auth = state.auth.clone().unwrap();
+    let people = state.people.clone();
     let app = web::router(state);
     Env {
         _fx: fx,
@@ -194,6 +196,7 @@ async fn env(public_url: &str) -> Env {
         mock,
         idx,
         auth,
+        people,
     }
 }
 
@@ -1637,4 +1640,205 @@ async fn a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner() {
     assert_eq!(r.status, StatusCode::NOT_FOUND);
     let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
     assert!(!list.body.contains("Ferien"));
+}
+
+/// A face vector pointing mostly along `d`, a little along `e`.
+fn face_vec(d: usize, e: usize) -> Vec<i8> {
+    let mut v = vec![0i8; lichtbild::faces::DIM];
+    v[d] = 100;
+    v[e] = 25;
+    v
+}
+
+fn one_face(v: Vec<i8>) -> Vec<lichtbild::faces::Face> {
+    vec![lichtbild::faces::Face {
+        b: [0.3, 0.2, 0.2, 0.25],
+        score: 0.95,
+        v,
+    }]
+}
+
+// Names are the house's, but a viewer sees a person, their photos, their
+// face, their name in suggestions and search only through photos they may
+// see; naming and "not them" need a same-site request on a face the viewer
+// may see.
+// rivet: verifies REQ-FACE-003
+#[tokio::test]
+async fn names_are_shared_but_each_person_sees_only_their_photos_of_them() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    // X and Y (p1) show the same face; Z (p2, which p1 may not see)
+    // someone else.
+    let (x, y, z) = (&p1[0], &p1[1], &p2[0]);
+    e.idx
+        .set_faces(&x.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 1)))
+        .unwrap();
+    e.idx
+        .set_faces(&y.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 2)))
+        .unwrap();
+    e.idx
+        .set_faces(&z.1, lichtbild::faces::VERSION, &one_face(face_vec(5, 6)))
+        .unwrap();
+    let data = e._fx.data.clone();
+    for h in [&x.1, &y.1, &z.1] {
+        let p = lichtbild::faces::crop_path(&data, h, 0);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, common::jpeg(16, 16, 3)).unwrap();
+    }
+    e.people.rebuild(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+
+    // p2 sees both: the look-alikes form one group, offered for a name.
+    let page = req_with(&e.app, "GET", "/people", Some(&c2), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(page.body.contains("Who is this?"), "{}", page.body);
+    // p2 names the group from Y: X and Y become Oma.
+    let body = format!("item={}&face=0&name=%20Oma%20", y.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let oma = e.idx.people().unwrap()[0].0;
+    assert_eq!(e.idx.people().unwrap()[0].1.name, "Oma");
+    assert_eq!(e.idx.named_faces().unwrap().len(), 2);
+    // And Z, alone, as Opa.
+    let body = format!("item={}&face=0&one=1&name=Opa", z.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert!(r.status.is_redirection());
+    let opa = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .find(|(_, p)| p.name == "Opa")
+        .unwrap()
+        .0;
+    // Typing the same name again finds the same person, in any case.
+    let body = format!("item={}&face=0&one=1&name=oma", x.0);
+    req_with_body(&e.app, "POST", "/people/name", Some(&c2), &body, &form).await;
+    assert_eq!(e.idx.people().unwrap().len(), 2);
+
+    // p1 sees Oma, and nothing of Opa.
+    let page = req_with(&e.app, "GET", "/people", Some(&c1), false, &[]).await;
+    assert!(
+        page.body.contains("Oma") && !page.body.contains("Opa"),
+        "{}",
+        page.body
+    );
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(r.body.contains(&format!("thumb/{}?", x.0)), "{}", r.body);
+    for uri in [
+        format!("/person/{opa}"),
+        format!("/face/{}/0", z.0),
+        format!("/people/{}/0", z.0),
+    ] {
+        let r = req_with(&e.app, "GET", &uri, Some(&c1), false, &[]).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c1), true, &[]).await;
+    assert!(!r.body.contains("Opa"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/suggest?q=Om", Some(&c1), true, &[]).await;
+    assert!(r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/search?q=Opa", Some(&c1), false, &[]).await;
+    assert_eq!(
+        r.status,
+        StatusCode::OK,
+        "no redirect to someone p1 has no photo of"
+    );
+    let r = req_with(&e.app, "GET", "/search?q=oma", Some(&c1), false, &[]).await;
+    assert!(r.status.is_redirection());
+    assert!(location(&r).ends_with(&format!("/person/{oma}")));
+    // p1 can neither name, rename, take off nor refuse what it cannot see.
+    for (uri, body) in [
+        (
+            "/people/name".to_string(),
+            format!("item={}&face=0&name=Zorro", z.0),
+        ),
+        (
+            "/people/not".to_string(),
+            format!("item={}&face=0&person={opa}", z.0),
+        ),
+        (format!("/person/{opa}/rename"), "name=Zorro".to_string()),
+        (format!("/person/{opa}/delete"), String::new()),
+    ] {
+        let r = req_with_body(&e.app, "POST", &uri, Some(&c1), &body, &form).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(e.idx.person(opa).unwrap().unwrap().name, "Opa");
+    // Not from another site.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let body = format!("item={}&face=0&person={oma}", x.0);
+    let r = req_with_body(&e.app, "POST", "/people/not", Some(&c1), &body, &cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // p1 says X is not Oma: the name comes off X and is not passed back.
+    let r = req_with_body(&e.app, "POST", "/people/not", Some(&c1), &body, &form).await;
+    assert!(r.status.is_redirection());
+    let x_now = e.people.in_photo(&x.1);
+    assert_ne!(x_now[0].who, lichtbild::people::Who::Person(oma));
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert!(
+        r.body.contains(&format!("thumb/{}?", y.0)) && !r.body.contains(&format!("thumb/{}?", x.0)),
+        "{}",
+        r.body
+    ); // A photo p1 hid is no way to Oma for p1 (p2 still has Y).
+    e.idx.set_hidden("p1", y.0, true).unwrap();
+    let uri = format!("/person/{oma}");
+    let r = req_with(&e.app, "GET", &uri, Some(&c1), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = req_with(&e.app, "GET", "/people", Some(&c1), false, &[]).await;
+    assert!(!r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", "/suggest?q=Om", Some(&c1), true, &[]).await;
+    assert!(!r.body.contains("Oma"), "{}", r.body);
+    let r = req_with(&e.app, "GET", &uri, Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::OK);
 }

@@ -316,3 +316,31 @@ artifacts:
         target: REQ-WEB-016
       - type: satisfies
         target: REQ-WEB-017
+
+  - id: FEAT-015
+    type: feature
+    title: Faces and the people in the photos
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner request 2026-11-20, after v0.7.0: faces next. Names are the
+      household's (owner's decision), seen through one's own photos. With
+      the owner's report the same day: trips and days shown alone.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - The People page offers the face seen most often, with a field for a name
+        - A name given once finds that person in hundreds of photos, and "Oma" in search opens her photos
+        - "Not Oma" on a wrongly named face takes the name off for good
+        - Someone who sees only their own library never learns of a person who is only in another's photos
+        - A trip, a day and "On this day" open just their pictures, with a slideshow
+    links:
+      - type: satisfies
+        target: REQ-WEB-018
+      - type: satisfies
+        target: REQ-FACE-001
+      - type: satisfies
+        target: REQ-FACE-002
+      - type: satisfies
+        target: REQ-FACE-003
+

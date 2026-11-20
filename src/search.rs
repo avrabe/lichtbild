@@ -172,6 +172,38 @@ pub fn split_fav(q: &str) -> (String, bool) {
     (rest.join(" "), fav)
 }
 
+/// The query without the name of one of `names` (whole words, any case;
+/// the longest name that fits), and that person: "Oma Weihnachten" is
+/// ("Weihnachten", Some(oma)).
+pub fn split_name(q: &str, names: &[(u64, String)]) -> (String, Option<u64>) {
+    let words: Vec<&str> = q.split_whitespace().collect();
+    let low: Vec<String> = words.iter().map(|w| w.to_lowercase()).collect();
+    let mut best: Option<(usize, usize, u64)> = None;
+    for (id, name) in names {
+        let n: Vec<String> = name.split_whitespace().map(|w| w.to_lowercase()).collect();
+        if n.is_empty() || n.len() > low.len() {
+            continue;
+        }
+        if best.is_some_and(|(_, len, _)| len >= n.len()) {
+            continue;
+        }
+        if let Some(at) = (0..=low.len() - n.len()).find(|&i| low[i..i + n.len()] == n[..]) {
+            best = Some((at, n.len(), *id));
+        }
+    }
+    match best {
+        Some((at, len, id)) => {
+            let rest: Vec<&str> = words[..at]
+                .iter()
+                .chain(&words[at + len..])
+                .copied()
+                .collect();
+            (rest.join(" "), Some(id))
+        }
+        None => (q.split_whitespace().collect::<Vec<_>>().join(" "), None),
+    }
+}
+
 /// The favourites word a partly typed last word completes to, if any
 /// ("Fav" -> "Favoriten", "favou" -> "favourites").
 pub fn fav_completion(word: &str) -> Option<&'static str> {
@@ -807,6 +839,28 @@ mod tests {
             .join(" ")
             .contains("Ostern"));
         assert!(date_words("unknown").is_empty());
+    }
+
+    #[test]
+    fn a_name_is_taken_out_of_a_query() {
+        let names = vec![
+            (1, "Oma".to_string()),
+            (2, "Tante Erika".to_string()),
+            (3, "Erika".to_string()),
+        ];
+        assert_eq!(
+            split_name("oma Weihnachten", &names),
+            ("Weihnachten".into(), Some(1))
+        );
+        assert_eq!(
+            split_name("Sommer TANTE erika 2019", &names),
+            ("Sommer 2019".into(), Some(2))
+        );
+        assert_eq!(split_name("Erika", &names), ("".into(), Some(3)));
+        assert_eq!(
+            split_name("Omas Garten", &names),
+            ("Omas Garten".into(), None)
+        );
     }
 
     #[test]

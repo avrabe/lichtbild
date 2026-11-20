@@ -35,6 +35,7 @@ async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 }
 
 // rivet: verifies REQ-TRIP-001
+// rivet: verifies REQ-WEB-018
 #[tokio::test]
 async fn days_away_from_home_are_one_trip_named_by_place() {
     let fx = fixture();
@@ -84,8 +85,39 @@ async fn days_away_from_home_are_one_trip_named_by_place() {
     assert!(page.contains("<small>3–5 July 2021</small>"), "{page}");
     // Four items: the one without a position on 5 July counts too.
     assert!(page.contains("<i>4</i>"), "{page}");
-    assert!(page.contains("?before=2021-07-05T99&amp;id=0\""), "{page}");
     assert!(!page.contains("Westdorf"), "{page}");
+    // The trip opens its own pictures, named, with a slideshow of them.
+    let at = page
+        .find("href=\"days/")
+        .expect("a link to the trip's days")
+        + 6;
+    let link = page[at..at + page[at..].find('"').unwrap()].replace("&amp;", "&");
+    assert!(
+        link.starts_with("days/all?from=2021-07-03&to=2021-07-05&title=Bergheim"),
+        "{link}"
+    );
+    let (s, trip) = get(&app, &format!("/{link}")).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(trip.contains("<h1>Bergheim, ZZ</h1>"), "{trip}");
+    assert_eq!(trip.matches("class=\"item").count(), 4, "{trip}");
+    assert!(
+        trip.contains("show/all?from=2021-07-03&amp;to=2021-07-05"),
+        "{trip}"
+    );
+    let (_, show) = get(&app, "/show/all?from=2021-07-03&to=2021-07-05").await;
+    assert_eq!(show.matches("<li data-src").count(), 4, "{show}");
+    // One day, from its heading; and this day in every year.
+    assert!(
+        trip.contains("href=\"days/all?from=2021-07-05&amp;to=2021-07-05\""),
+        "{trip}"
+    );
+    let (_, day) = get(&app, "/days/all?from=2021-07-05&to=2021-07-05").await;
+    assert_eq!(day.matches("class=\"item").count(), 2, "{day}");
+    assert!(day.contains("<h1>5 July 2021</h1>"), "{day}");
+    let (_, md) = get(&app, "/days/all?md=06-25").await;
+    assert_eq!(md.matches("class=\"item").count(), 3, "{md}");
+    let (s, _) = get(&app, "/days/all?from=2021-07-05&to=nonsense").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
 
     // Only the viewer's items: p2 holds none of these, so no trips.
     let all = idx.all().unwrap();

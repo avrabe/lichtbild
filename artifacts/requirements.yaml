@@ -684,17 +684,62 @@ artifacts:
   - id: REQ-FACE-001
     type: requirement
     title: Face and similarity models run locally and are pinned by sha256
-    status: draft
+    status: implemented
+    release: v0.8.0
     description: >
       Model files come from the deployment, are checked against a pinned
-      sha256 before loading and run in-process; nothing is downloaded at run
-      time.
+      sha256 before loading and run in the house (the face models in a
+      child process per photo); nothing is downloaded at run time. Without
+      the face models there are no faces and nothing else changes; one of
+      them missing or unknown is an error.
     fields:
       priority: could
       category: constraint
     links:
       - type: satisfies
         target: SSC-007
+
+  - id: REQ-FACE-002
+    type: requirement
+    title: Faces in photos are found and one person's faces are grouped
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner request 2026-11-20 (next after v0.7.0). Every photo is looked
+      at for faces once, after the look pass; each face keeps its place in
+      the photo, a vector and a small picture. Faces of one person, in all
+      libraries, are grouped; a group of someone seen in at least two
+      photos is offered for a name on a People page, biggest first.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-007
+      - type: satisfies
+        target: SSC-003
+
+  - id: REQ-FACE-003
+    type: requirement
+    title: Names of people are the household's, seen only through one's own photos
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner decision 2026-11-20: a name given to a face is the same for
+      everyone in the house. Naming a group names its faces the viewer
+      sees, and the name passes to that person's other faces; "not them"
+      on a face takes the name off and keeps it off. A person, their
+      page, their photos, their faces, their name in suggestions and the
+      search by their name exist for a viewer only through photos the
+      viewer may see and did not hide. Naming, renaming (a name already
+      given puts both together), taking a name off and "not them" need a
+      same-site request on a face or person the viewer may see.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
 
   - id: REQ-MEDIA-004
     type: requirement
@@ -908,6 +953,25 @@ artifacts:
       "♥" or "Favoriten" next to other words keeps only favourites, alone
       it opens the Favourites page, and a partly typed "Fav" is suggested
       to whoever has favourites. Nothing in the libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-018
+    type: requirement
+    title: A trip, a day, or this day in every year is shown alone
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner report 2026-11-20: a trip opened the timeline without marking
+      it, and a day could not be shown by itself. A trip, a day heading of
+      the timeline, the date of a photo in the viewer and "On this day" on
+      the home page each open just those pictures (one copy each, nothing
+      hidden, only the viewer's libraries), newest first, with a heading
+      and a slideshow of them. Nonsense dates are refused.
     fields:
       priority: should
       category: functional

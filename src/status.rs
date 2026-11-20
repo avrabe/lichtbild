@@ -26,6 +26,12 @@ pub enum Phase {
         total: u64,
         report: crate::vision::PassReport,
     },
+    Faces {
+        since: SystemTime,
+        done: u64,
+        total: u64,
+        report: crate::faces::PassReport,
+    },
     Idle {
         next: Option<SystemTime>,
     },
