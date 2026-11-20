@@ -1606,3 +1606,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-021
+
+  - id: VER-114
+    type: verification
+    title: A time range or a trip narrows the map's clusters and count
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_time_range_or_a_trip_narrows_the_map"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map a_time_range_or_a_trip_narrows_the_map"
+    links:
+      - type: verifies
+        target: REQ-MAP-002

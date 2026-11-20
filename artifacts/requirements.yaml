@@ -598,6 +598,26 @@ artifacts:
       priority: should
       category: interface
 
+  - id: REQ-MAP-002
+    type: requirement
+    title: The map narrows to a trip or a time range
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: select the trips on the map, and a time
+      slider for a rough range. The map offers the viewer's trips (as the
+      Trips page finds them) and a slider over the months that have a
+      position; a trip opens the map on its pictures alone, the slider
+      narrows the clusters in place. The clusters and the page's count
+      hold only pictures of those days, scoped as before; a malformed or
+      backward range is refused.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MAP-001
     type: requirement
     title: World map from a local PMTiles file, served by lichtbild

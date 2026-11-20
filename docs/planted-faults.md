@@ -173,6 +173,9 @@ at nice 0.
 | F163 | REQ-WEB-021 | a series keeps its newest shot first | `the_best_shot_leads_its_series` |
 | F164 | REQ-WEB-021 | a favourite does not lead its series | `the_best_shot_leads_its_series` |
 | F165 | REQ-WEB-021 | the blurriest shot counts as best | `the_best_shot_leads_its_series` |
+| F166 | REQ-MAP-002 | the clusters ignore the days | `a_time_range_or_a_trip_narrows_the_map` |
+| F167 | REQ-MAP-002 | a backward range is taken | `a_time_range_or_a_trip_narrows_the_map` |
+| F168 | REQ-MAP-002 | the page counts and fits every day | `a_time_range_or_a_trip_narrows_the_map` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

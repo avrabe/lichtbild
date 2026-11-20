@@ -423,6 +423,57 @@ pub struct PageQuery {
     kind: Option<String>,
     /// Place this item by hand (REQ-PLACE-002).
     place: Option<u64>,
+    /// Only pictures of these days, YYYY-MM-DD (REQ-MAP-002).
+    from: Option<String>,
+    to: Option<String>,
+    /// A trip from the chooser: "YYYY-MM-DD..YYYY-MM-DD".
+    trip: Option<String>,
+}
+
+/// The days a map shows (REQ-MAP-002): both ends included; a missing end
+/// is open.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct When {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+impl When {
+    /// From the query; None when a given day is malformed or the range
+    /// runs backwards.
+    pub fn parse(from: Option<&str>, to: Option<&str>, trip: Option<&str>) -> Option<When> {
+        let (from, to) = match trip.filter(|t| !t.is_empty()) {
+            Some(t) => {
+                let (f, e) = t.split_once("..")?;
+                (Some(f), Some(e))
+            }
+            None => (from.filter(|s| !s.is_empty()), to.filter(|s| !s.is_empty())),
+        };
+        if from.is_some_and(|d| !crate::web::is_day(d))
+            || to.is_some_and(|d| !crate::web::is_day(d))
+        {
+            return None;
+        }
+        if let (Some(f), Some(t)) = (from, to) {
+            if f > t {
+                return None;
+            }
+        }
+        Some(When {
+            from: from.map(str::to_string),
+            to: to.map(str::to_string),
+        })
+    }
+
+    pub fn any(&self) -> bool {
+        self.from.is_some() || self.to.is_some()
+    }
+
+    /// Whether a picture taken at `taken` ("YYYY-MM-DDTHH...") is in.
+    pub fn holds(&self, taken: &str) -> bool {
+        let day = taken.get(..10).unwrap_or(taken);
+        self.from.as_deref().is_none_or(|f| day >= f) && self.to.as_deref().is_none_or(|t| day <= t)
+    }
 }
 
 /// GET /map: the map, or a notice when no PMTiles file is configured.
@@ -434,26 +485,68 @@ pub async fn page(
     let Some(labels) = map_scope(&viewer, q.who.as_deref()) else {
         return (StatusCode::NOT_FOUND, "no such library").into_response();
     };
+    let Some(when) = When::parse(q.from.as_deref(), q.to.as_deref(), q.trip.as_deref()) else {
+        return (StatusCode::BAD_REQUEST, "which days?").into_response();
+    };
     let idx = st.index.clone();
     let map = st.map.clone();
+    let (dups, me, pc, places) = (
+        st.dups.clone(),
+        crate::web::person(&viewer),
+        st.positions.clone(),
+        st.places.clone(),
+    );
+    let (labels2, when2) = (labels.clone(), when.clone());
     let res = tokio::task::spawn_blocking(move || {
         let points = map.points(&idx)?;
-        anyhow::Ok(clusters(&points, &labels, 0, None))
+        let all = clusters(&points, &labels2, 0, None);
+        // The first and last month with a position, for the time slider.
+        let mut months: Option<(String, String)> = None;
+        for p in points
+            .iter()
+            .filter(|p| labels2.iter().any(|l| l.as_str() == &*p.label))
+        {
+            let m = p.taken.get(..7).unwrap_or("").to_string();
+            months = Some(match months {
+                None => (m.clone(), m),
+                Some((a, b)) => (a.min(m.clone()), b.max(m)),
+            });
+        }
+        let summary = if when2.any() {
+            let some: Vec<Point> = points
+                .iter()
+                .filter(|p| when2.holds(&p.taken))
+                .cloned()
+                .collect();
+            clusters(&some, &labels2, 0, None)
+        } else {
+            all
+        };
+        let (trips, _) = crate::web::trips_of(&idx, &dups, &labels2, &me, &pc, places.as_deref())?;
+        anyhow::Ok((summary, months, trips))
     })
     .await;
-    let summary = match res {
+    let (summary, months, trips) = match res {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return crate::web::internal(e),
         Err(e) => return crate::web::internal(e),
     };
-    let count = match summary.total {
-        1 => "1 photo or video has a position.".to_string(),
-        n => format!("{n} photos and videos have a position."),
+    let count = match (summary.total, when.any()) {
+        (1, false) => "1 photo or video has a position.".to_string(),
+        (n, false) => format!("{n} photos and videos have a position."),
+        (1, true) => "1 photo or video of these days has a position.".to_string(),
+        (n, true) => format!("{n} photos and videos of these days have a position."),
     };
     let bar = toolbar(
         &viewer,
         q.who.as_deref(),
         crate::web::kind_filter(q.kind.as_deref()).0,
+    ) + &when_bar(
+        q.who.as_deref(),
+        q.kind.as_deref(),
+        &when,
+        months.as_ref(),
+        &trips,
     );
     // Place mode: only for an item of one's own library without a
     // recorded position.
@@ -530,6 +623,12 @@ pub async fn page(
     }
     if let Some(w) = &q.who {
         attrs += &format!(" data-who=\"{}\"", esc(w));
+    }
+    if let Some(f) = &when.from {
+        attrs += &format!(" data-from=\"{}\"", esc(f));
+    }
+    if let Some(t) = &when.to {
+        attrs += &format!(" data-to=\"{}\"", esc(t));
     }
     let (kind, _) = crate::web::kind_filter(q.kind.as_deref());
     match kind {
@@ -612,6 +711,80 @@ pub struct ClusterQuery {
     bbox: Option<String>,
     who: Option<String>,
     kind: Option<String>,
+    from: Option<String>,
+    to: Option<String>,
+}
+
+/// The time row under the map's toolbar (REQ-MAP-002): a trip to choose,
+/// and a slider over the months with a position.
+fn when_bar(
+    who: Option<&str>,
+    kind: Option<&str>,
+    when: &When,
+    months: Option<&(String, String)>,
+    trips: &[crate::trips::Trip],
+) -> String {
+    let keep = |name: &str, v: Option<&str>| match v {
+        Some(v) if !v.is_empty() => {
+            format!(
+                "<input type=\"hidden\" name=\"{name}\" value=\"{}\">",
+                esc(v)
+            )
+        }
+        _ => String::new(),
+    };
+    let chosen = match (&when.from, &when.to) {
+        (Some(f), Some(t)) => format!("{f}..{t}"),
+        _ => String::new(),
+    };
+    let mut opts = format!(
+        "<option value=\"\"{}>Any time</option>",
+        if when.any() { "" } else { " selected" }
+    );
+    let mut listed = chosen.is_empty();
+    for tr in trips.iter().rev() {
+        let v = format!(
+            "{}..{}",
+            tr.start.format("%Y-%m-%d"),
+            tr.end.format("%Y-%m-%d")
+        );
+        let on = v == chosen;
+        listed |= on;
+        let name = tr
+            .places
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "Away".to_string());
+        opts += &format!(
+            "<option value=\"{v}\"{}>{} · {}</option>",
+            if on { " selected" } else { "" },
+            esc(&name),
+            esc(&crate::web::day_span(tr.start, tr.end)),
+        );
+    }
+    if !listed {
+        opts += &format!(
+            "<option value=\"{}\" selected>These days</option>",
+            esc(&chosen)
+        );
+    }
+    let slider = match months {
+        Some((first, last)) if first != last => format!(
+            "<div class=\"mapslider\" data-first=\"{}\" data-last=\"{}\" hidden>\
+             <input type=\"range\" class=\"lo\" aria-label=\"From\" step=\"1\">\
+             <input type=\"range\" class=\"hi\" aria-label=\"Until\" step=\"1\">\
+             <output></output></div>",
+            esc(first),
+            esc(last)
+        ),
+        _ => String::new(),
+    };
+    format!(
+        "<form class=\"mapwhen\" method=\"get\" action=\"map\">{}{}\
+         <label>Trip <select name=\"trip\">{opts}</select></label><button type=\"submit\">Show</button>{slider}</form>\n",
+        keep("who", who),
+        keep("kind", kind),
+    )
 }
 
 /// GET /map/clusters?z=&bbox=w,s,e,n[&who=]: the viewer's clusters as JSON.
@@ -633,6 +806,9 @@ pub async fn clusters_json(
             }
         },
     };
+    let Some(when) = When::parse(q.from.as_deref(), q.to.as_deref(), None) else {
+        return (StatusCode::BAD_REQUEST, "which days?").into_response();
+    };
     let z = q.z.unwrap_or(0);
     let idx = st.index.clone();
     let map = st.map.clone();
@@ -647,6 +823,7 @@ pub async fn clusters_json(
         let shown: Vec<Point> = points
             .iter()
             .filter(|p| kind.is_none_or(|v| p.video == v))
+            .filter(|p| when.holds(&p.taken))
             .filter(|p| dups.shown(p.id, &labels, &hidden).shown)
             .cloned()
             .collect();

@@ -4123,7 +4123,7 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
 
 /// "3–9 July 2021", "30 June – 2 July 2021", "30 December 2021 – 2 January
 /// 2022".
-fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
+pub(crate) fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
     use chrono::Datelike;
     let m = |d: chrono::NaiveDate| MONTHS[d.month0() as usize];
     if a == b {
@@ -4147,6 +4147,31 @@ fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
 
 /// GET /trips: days away from home, grouped and named by place
 /// (REQ-TRIP-001); a trip opens the timeline at its last day.
+/// Trips, and the items they were found in.
+pub(crate) type TripsAndItems = (Vec<crate::trips::Trip>, Vec<(u64, index::Record)>);
+
+/// The trips in `labels` as this person's timeline shows them (one copy
+/// each, nothing hidden), with the items they were found in.
+pub(crate) fn trips_of(
+    idx: &index::Index,
+    dups: &crate::dups::Dups,
+    labels: &[String],
+    me: &str,
+    positions: &crate::place::Cache,
+    places: Option<&crate::places::Places>,
+) -> anyhow::Result<TripsAndItems> {
+    let hidden = idx.hidden(me)?;
+    let items: Vec<(u64, index::Record)> = idx
+        .all()?
+        .into_iter()
+        .filter(|(id, r)| {
+            !r.missing && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
+        })
+        .collect();
+    let pos = positions.get(idx)?;
+    Ok((crate::trips::find(&items, &pos, places), items))
+}
+
 async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let (idx, dups, labels, me) = (
         st.index.clone(),
@@ -4156,16 +4181,7 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     );
     let (pc, places) = (st.positions.clone(), st.places.clone());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let hidden = idx.hidden(&me)?;
-        let items: Vec<(u64, index::Record)> = idx
-            .all()?
-            .into_iter()
-            .filter(|(id, r)| {
-                !r.missing && labels.contains(&r.label) && dups.shown(*id, &labels, &hidden).shown
-            })
-            .collect();
-        let pos = pc.get(&idx)?;
-        let trips = crate::trips::find(&items, &pos, places.as_deref());
+        let (trips, items) = trips_of(&idx, &dups, &labels, &me, &pc, places.as_deref())?;
         let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
         Ok(trips
             .into_iter()
@@ -4534,7 +4550,7 @@ pub struct DaysQuery {
     day: Option<String>,
 }
 
-fn is_day(s: &str) -> bool {
+pub(crate) fn is_day(s: &str) -> bool {
     s.len() == 10
         && s.bytes().enumerate().all(|(i, b)| {
             if i == 4 || i == 7 {

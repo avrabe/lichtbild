@@ -782,3 +782,92 @@ fn vendored_map_assets_match_their_pinned_sha256() {
         );
     }
 }
+
+// A time range or a trip narrows the map (REQ-MAP-002): the clusters and
+// the page's count hold only those days; the slider spans the months with
+// a position; malformed or backward days are refused.
+// rivet: verifies REQ-MAP-002
+#[tokio::test]
+async fn a_time_range_or_a_trip_narrows_the_map() {
+    let (_fx, cfg, idx) = scanned();
+    let mut state = AppState::new(&cfg, idx.clone());
+    state.map = Arc::new(map::MapState::new(&MapFiles {
+        pmtiles: Some(cfg.data_dir.join("x.pmtiles")),
+        assets: None,
+    }));
+    let app = web::router(state);
+    let n = |r: &Resp| listed(&serde_json::from_slice(&r.body).unwrap()).1;
+    // p1: 15 June 2021, 1 August 2022; p2: 2 January and 2 February 2023.
+    for (q, want) in [
+        ("from=2023-01-01&to=2023-01-31", 1),
+        ("from=2022-01-01", 3),
+        ("to=2022-12-31", 2),
+        ("from=2021-06-15&to=2021-06-15", 1),
+        ("from=2024-01-01", 0),
+    ] {
+        let r = get(&app, &format!("/map/clusters?z=18&{q}"), None).await;
+        assert_eq!(r.status, StatusCode::OK, "{q}");
+        assert_eq!(n(&r), want, "{q}");
+    }
+    for bad in [
+        "from=2023-13",
+        "from=2023-02-01&to=2023-01-01",
+        "to=yesterday",
+    ] {
+        let r = get(&app, &format!("/map/clusters?{bad}"), None).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(
+            get(&app, &format!("/map?{bad}"), None).await.status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+
+    let page = get(&app, "/map", None).await.text();
+    assert!(
+        page.contains("4 photos and videos have a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("class=\"mapslider\" data-first=\"2021-06\" data-last=\"2023-02\""),
+        "{page}"
+    );
+    assert!(
+        page.contains("<option value=\"\" selected>Any time</option>"),
+        "{page}"
+    );
+    let page = get(&app, "/map?from=2023-01-01&to=2023-01-31", None)
+        .await
+        .text();
+    assert!(
+        page.contains("1 photo or video of these days has a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("data-from=\"2023-01-01\" data-to=\"2023-01-31\""),
+        "{page}"
+    );
+    // The map starts on those days' pictures only (Westdorf, 10.4 N 19.9 E).
+    let at = page.find("data-bounds=\"").unwrap() + 13;
+    let b: Vec<f64> = page[at..at + page[at..].find('"').unwrap()]
+        .split(',')
+        .map(|v| v.parse().unwrap())
+        .collect();
+    assert!(b[0] > 19.8 && b[2] < 20.0, "{b:?}");
+    // A trip from the chooser is the same as its days.
+    let page = get(&app, "/map?trip=2023-01-01..2023-01-31", None)
+        .await
+        .text();
+    assert!(
+        page.contains("1 photo or video of these days has a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("<option value=\"2023-01-01..2023-01-31\" selected>"),
+        "{page}"
+    );
+    assert_eq!(
+        get(&app, "/map?trip=2023-01-01", None).await.status,
+        StatusCode::BAD_REQUEST
+    );
+}
