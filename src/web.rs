@@ -123,6 +123,11 @@ pub fn router(state: AppState) -> Router {
         .route("/unhide-many", axum::routing::post(unhide_many))
         .route("/keep/{id}", axum::routing::post(keep))
         .route("/hidden", get(hidden_page))
+        .route("/fav/{id}", axum::routing::post(fav))
+        .route("/unfav/{id}", axum::routing::post(unfav))
+        .route("/fav-many", axum::routing::post(fav_many))
+        .route("/unfav-many", axum::routing::post(unfav_many))
+        .route("/favourites", get(favourites_page))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
@@ -516,7 +521,8 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
-         <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
+         <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
+         <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
          <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
@@ -795,6 +801,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
         body += "</div></section>";
     }
     body += "<nav class=\"tiles\">\
+             <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
@@ -1041,6 +1048,13 @@ pub fn render_items(
         } else {
             dur
         };
+        let dur = if it.fav {
+            format!(
+                "{dur}<span class=\"heart\" title=\"Favourite\" aria-label=\"Favourite\">♥</span>"
+            )
+        } else {
+            dur
+        };
         let n = series.get(i).copied().unwrap_or(1);
         let follows = n == 0 && left > 0;
         let dur = if n >= 2 {
@@ -1124,6 +1138,7 @@ async fn timeline(
         // One copy of each duplicate group, the best the viewer may see,
         // and nothing this person hid (REQ-DUP-001, REQ-DUP-002).
         let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
         let mut items = idx.timeline_where(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
@@ -1135,6 +1150,7 @@ async fn timeline(
         )?;
         for it in &mut items {
             it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
         }
         // The chooser counts what this timeline shows (REQ-WEB-010).
         let months = if full_page {
@@ -1215,6 +1231,7 @@ type ViewerItem = (
     Vec<(&'static str, String)>,
     Option<crate::stt::Transcript>,
     Vec<(u64, index::Record)>,
+    bool,
     bool,
 );
 
@@ -1623,6 +1640,8 @@ const SHOW_MAX: usize = 500;
 pub struct ShowQuery {
     /// Start at this photo; without it, at the newest.
     at: Option<u64>,
+    /// Only this person's favourites (REQ-WEB-016), each one shown.
+    fav: Option<u8>,
 }
 
 /// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
@@ -1655,8 +1674,13 @@ async fn show(
     let dups = st.dups.clone();
     let me = person(&viewer);
     let space = st.vision_on.then(|| st.space.clone());
+    let fav_only = sq.fav.is_some();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
         let hidden = idx.hidden(&me)?;
+        let favs = match sq.fav {
+            Some(_) => Some(idx.favs(&me)?),
+            None => None,
+        };
         let start = match sq.at {
             Some(at) => match idx.locate(at)?.filter(|r| labels.contains(&r.label)) {
                 Some(r) => Some((r.taken_local, at + 1)),
@@ -1668,9 +1692,18 @@ async fn show(
             &labels,
             start.as_ref().map(|(t, i)| (t.as_str(), *i)),
             SHOW_MAX,
-            |id, rec| rec.video.is_none() && dups.shown(id, &labels, &hidden).shown,
+            |id, rec| {
+                rec.video.is_none()
+                    && match &favs {
+                        Some(f) => f.contains(&id) && !hidden.contains(&id),
+                        None => dups.shown(id, &labels, &hidden).shown,
+                    }
+            },
         )?;
-        let runs = series(&items, space.as_deref());
+        let runs = match favs {
+            Some(_) => vec![1; items.len()],
+            None => series(&items, space.as_deref()),
+        };
         let mut out = Vec::new();
         for (it, n) in items.iter().zip(runs) {
             if n == 0 {
@@ -1689,6 +1722,7 @@ async fn show(
         Err(e) => return internal(e),
     };
     let back = match slides.first() {
+        _ if fav_only => "favourites".to_string(),
         Some((id, _, _)) => format!("v/{}/{id}", esc(&who)),
         None => format!("t/{}", esc(&who)),
     };
@@ -1787,12 +1821,13 @@ async fn viewer(
             }
         }
         let is_hidden = hidden.contains(&id);
+        let is_fav = idx.favs(&me)?.contains(&id);
         Ok(Some((
-            rec, newer, older, prefetch, exif, transcript, copies, is_hidden,
+            rec, newer, older, prefetch, exif, transcript, copies, is_hidden, is_fav,
         )))
     })
     .await;
-    let (rec, newer, older, prefetch, exif, transcript, copies, is_hidden) = match res {
+    let (rec, newer, older, prefetch, exif, transcript, copies, is_hidden, is_fav) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1900,7 +1935,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
@@ -1928,6 +1963,13 @@ async fn viewer(
                 ),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
+        // A favourite (REQ-WEB-016): a form, so it works without JavaScript;
+        // assets/lichtbild.js toggles it in place.
+        heart = if is_fav {
+            format!("<form class=\"favf\" method=\"post\" action=\"unfav/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\"><button type=\"submit\" class=\"heart on\" aria-pressed=\"true\" title=\"Favourite (.)\" aria-label=\"Favourite\">♥</button></form>")
+        } else {
+            format!("<form class=\"favf\" method=\"post\" action=\"fav/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\"><button type=\"submit\" class=\"heart\" aria-pressed=\"false\" title=\"Favourite (.)\" aria-label=\"Favourite\">♡</button></form>")
+        },
     );
     page_for(&st, "lichtbild", &body).into_response()
 }
@@ -2376,7 +2418,7 @@ async fn many(
     viewer: Viewer,
     headers: axum::http::HeaderMap,
     m: Many,
-    hidden: bool,
+    set: fn(&index::Index, &str, u64) -> anyhow::Result<()>,
 ) -> Response {
     if !same_site(&headers) {
         return StatusCode::FORBIDDEN.into_response();
@@ -2393,7 +2435,7 @@ async fn many(
         let mut n = 0;
         for id in ids {
             if idx.locate(id)?.is_some_and(|r| viewer.may_see(&r.label)) {
-                idx.set_hidden(&me, id, hidden)?;
+                set(&idx, &me, id)?;
                 n += 1;
             }
         }
@@ -2415,7 +2457,10 @@ async fn hide_many(
     headers: axum::http::HeaderMap,
     axum::Form(m): axum::Form<Many>,
 ) -> Response {
-    many(st, viewer, headers, m, true).await
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_hidden(me, id, true)
+    })
+    .await
 }
 
 /// POST /unhide-many: show them again (the undo after hiding).
@@ -2425,7 +2470,120 @@ async fn unhide_many(
     headers: axum::http::HeaderMap,
     axum::Form(m): axum::Form<Many>,
 ) -> Response {
-    many(st, viewer, headers, m, false).await
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_hidden(me, id, false)
+    })
+    .await
+}
+
+/// POST /fav/{id}: the item becomes this person's favourite (REQ-WEB-016).
+async fn fav(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_fav(me, id, true)
+    })
+    .await
+}
+
+/// POST /unfav/{id}: not a favourite any more.
+async fn unfav(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_fav(me, id, false)
+    })
+    .await
+}
+
+/// POST /fav-many: the selected items become favourites.
+async fn fav_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_fav(me, id, true)
+    })
+    .await
+}
+
+/// POST /unfav-many: the selected items are favourites no more.
+async fn unfav_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_fav(me, id, false)
+    })
+    .await
+}
+
+/// Favourites one page shows at most, newest first.
+const FAVS_MAX: usize = 2000;
+
+/// GET /favourites: this person's favourites in the libraries they may
+/// see, newest first, as a timeline (REQ-WEB-016).
+async fn favourites_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<index::Item>> {
+        let favs = idx.favs(&me)?;
+        if favs.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hidden = idx.hidden(&me)?;
+        let mut items = idx.timeline_where(&labels, None, FAVS_MAX, |id, _| {
+            favs.contains(&id) && !hidden.contains(&id)
+        })?;
+        for it in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = true;
+        }
+        Ok(items)
+    })
+    .await;
+    let items = match res {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    // Each favourite is its own choice: no series folding here.
+    let ones = vec![1; items.len()];
+    let body = if items.is_empty() {
+        "<h1>Favourites</h1><p class=\"dim\">None yet. Tap ♡ on a photo, press <kbd>.</kbd>, or choose several in a timeline with Select.</p>".to_string()
+    } else {
+        format!(
+            "<div class=\"thead\"><h1>Favourites</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?fav=1\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline favs\">\n{}</div>\n",
+            render_items(&who, &items, &ones, None, false, ""),
+            n = items.len(),
+            w = esc(&who),
+        )
+    };
+    page_for(&st, "lichtbild favourites", &body).into_response()
 }
 
 /// POST /unhide/{id}: show the item again.

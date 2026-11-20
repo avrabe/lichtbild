@@ -53,6 +53,9 @@ const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new(
 /// (REQ-DUP-002). Per person: one person's choice never changes another's
 /// view; nothing in the libraries changes.
 const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
+/// (person, item id) -> (): each person's favourites (REQ-WEB-016), kept
+/// apart like what they hid.
+const FAVS: TableDefinition<(&str, u64), ()> = TableDefinition::new("favourites");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -126,6 +129,8 @@ pub struct Item {
     pub video_ms: Option<u64>,
     /// Copies of this picture the viewer may see, this one included.
     pub copies: usize,
+    /// The viewer's favourite.
+    pub fav: bool,
 }
 
 pub struct Index {
@@ -171,6 +176,7 @@ impl Index {
             w.open_table(FINGERPRINTS)?;
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
+            w.open_table(FAVS)?;
             w.open_table(PLACED)?;
             w.open_table(TEXTS)?;
             w.open_table(OBJECTS)?;
@@ -428,6 +434,7 @@ impl Index {
                     height: rec.height,
                     video_ms: rec.video.map(|v| v.duration_ms),
                     copies: 1,
+                    fav: false,
                 });
             }
             Ok(out.len() >= limit)
@@ -561,10 +568,25 @@ impl Index {
 
     /// Hide or show again an item for one person.
     pub fn set_hidden(&self, person: &str, id: u64, hidden: bool) -> Result<()> {
+        self.mark(HIDDEN, person, id, hidden)
+    }
+
+    /// Make an item one person's favourite, or not any more.
+    pub fn set_fav(&self, person: &str, id: u64, fav: bool) -> Result<()> {
+        self.mark(FAVS, person, id, fav)
+    }
+
+    fn mark(
+        &self,
+        table: TableDefinition<(&str, u64), ()>,
+        person: &str,
+        id: u64,
+        on: bool,
+    ) -> Result<()> {
         let w = self.db.begin_write()?;
         {
-            let mut t = w.open_table(HIDDEN)?;
-            if hidden {
+            let mut t = w.open_table(table)?;
+            if on {
                 t.insert((person, id), ())?;
             } else {
                 t.remove((person, id))?;
@@ -572,6 +594,20 @@ impl Index {
         }
         w.commit()?;
         Ok(())
+    }
+
+    fn marked(
+        &self,
+        table: TableDefinition<(&str, u64), ()>,
+        person: &str,
+    ) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(table)?;
+        let mut out = std::collections::HashSet::new();
+        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
+            out.insert(e?.0.value().1);
+        }
+        Ok(out)
     }
 
     /// Set (Some) or remove (None) the position of an item set by hand.
@@ -611,13 +647,12 @@ impl Index {
 
     /// The items one person has hidden.
     pub fn hidden(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
-        let r = self.db.begin_read()?;
-        let t = r.open_table(HIDDEN)?;
-        let mut out = std::collections::HashSet::new();
-        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
-            out.insert(e?.0.value().1);
-        }
-        Ok(out)
+        self.marked(HIDDEN, person)
+    }
+
+    /// One person's favourites.
+    pub fn favs(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
+        self.marked(FAVS, person)
     }
 
     /// Live videos (by content), how many have a transcript from `model`,

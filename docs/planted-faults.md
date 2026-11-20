@@ -132,6 +132,9 @@ at nice 0.
 | F121 | REQ-TRIP-001 | a town 90 km away counts as home | `days_away_from_home_are_one_trip_named_by_place` |
 | F122 | REQ-TRIP-001 | a day without pictures splits a trip | `days_away_from_home_are_one_trip_named_by_place` |
 | F123 | REQ-SEARCH-003 | a narrowing chip that finds nothing is offered | `narrowing_never_offers_a_dead_end` |
+| F124 | REQ-WEB-016 | everyone shares one person's favourites | `favourites_are_kept_per_person` |
+| F125 | REQ-WEB-016 | a hidden favourite still shows on the Favourites page | `favourites_are_kept_per_person` |
+| F126 | REQ-WEB-016 | the timeline shows no heart on favourites | `favourites_are_kept_per_person` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

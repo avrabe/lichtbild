@@ -293,6 +293,7 @@ artifacts:
         - Searching "Hund" offers "2021 (12)" and "Katze (3)" to narrow down
         - Twenty screenshots are chosen and hidden in one go, and the undo brings them back
         - A holiday shows on the Trips page under the town visited, with its days
+        - A heart on a photo puts it among one's favourites, with its own slideshow
     links:
       - type: satisfies
         target: REQ-SEARCH-002
@@ -310,3 +311,5 @@ artifacts:
         target: REQ-TRIP-001
       - type: satisfies
         target: REQ-WEB-015
+      - type: satisfies
+        target: REQ-WEB-016

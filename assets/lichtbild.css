@@ -800,3 +800,18 @@ dialog.keys button {
   font: inherit; padding: 6px 16px; border-radius: 16px; border: 1px solid var(--line);
   background: transparent; color: inherit; cursor: pointer;
 }
+
+/* Favourites (REQ-WEB-016): a heart on the tile and in the viewer bar. */
+.item .heart {
+  position: absolute; top: 4px; right: 6px; font-size: 16px; line-height: 1;
+  color: var(--shu); text-shadow: 0 0 3px rgba(255, 248, 238, .9);
+}
+.item.weak .heart { right: 18px; }
+.viewer form.favf { display: inline; margin: 0; }
+.viewer button.heart {
+  background: none; border: 0; color: inherit; cursor: pointer;
+  font-size: 20px; padding: 0 8px; line-height: 1; min-width: 36px; min-height: 36px;
+}
+.viewer button.heart.on { color: var(--shu); }
+.viewer button.heart:hover { color: var(--shu); }
+.selbar .selfav { color: var(--shu); }

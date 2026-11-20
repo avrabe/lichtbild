@@ -5,6 +5,7 @@ A self-hosted photo and video library for a household, as one Rust binary.
 lichtbild indexes photo folders read-only, in place, without copying or moving them. It serves:
 
 - a timeline per person, or merged, with bursts folded into one tile and a slideshow;
+- favourites, each person their own, with a heart in the viewer and a slideshow of them;
 - a world map of where photos and videos were taken, and trips found from it;
 - one search box over what was said in videos, the text in pictures, the things in them (Katze, Fahrrad), places, dates, seasons and holidays, or a description in your own words, with suggestions as you type;
 - later, face recognition.

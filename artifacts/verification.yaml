@@ -1359,3 +1359,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-015
+
+  - id: VER-097
+    type: verification
+    title: Favourites are kept per person
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "favourites_are_kept_per_person"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth favourites_are_kept_per_person"
+    links:
+      - type: verifies
+        target: REQ-WEB-016

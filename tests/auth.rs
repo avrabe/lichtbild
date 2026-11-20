@@ -1130,3 +1130,147 @@ async fn several_items_are_hidden_at_once_and_shown_again() {
     assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
     assert!(e.idx.hidden("p1").unwrap().is_empty());
 }
+
+// Favourites are each person's own: p1 marks some, alone or several at
+// once, only items they may see and only from the same site; p2, who also
+// sees p1's library, finds none of them among their own.
+// rivet: verifies REQ-WEB-016
+#[tokio::test]
+async fn favourites_are_kept_per_person() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    // One from the viewer, then several from a selection; p2's item and
+    // nonsense are left alone.
+    let back = format!("back=v%2Fp1%2F{}", mine[0]);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/fav/{}", mine[0]),
+        Some(&c1),
+        &back,
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{}", r.status);
+    let body = format!("ids={}%2C{other}%2Cnope", mine[1]);
+    let r = req_with_body(&e.app, "POST", "/fav-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let favs = e.idx.favs("p1").unwrap();
+    assert_eq!(favs.len(), 2);
+    assert!(mine.iter().all(|id| favs.contains(id)));
+    // From another site: refused.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/unfav/{}", mine[0]),
+        Some(&c1),
+        &back,
+        &cross,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(e.idx.favs("p1").unwrap().len(), 2);
+
+    // The page, the timeline's hearts, the viewer's heart, the slideshow.
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c1), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    for id in &mine {
+        assert!(
+            page.body.contains(&format!("id=\"i{id}\"")),
+            "{}",
+            page.body
+        );
+    }
+    assert!(!page.body.contains(&format!("id=\"i{other}\"")));
+    assert_eq!(
+        page.body.matches("class=\"heart\"").count(),
+        2,
+        "{}",
+        page.body
+    );
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert_eq!(tl.body.matches("class=\"heart\"").count(), 2, "{}", tl.body);
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains(&format!("action=\"unfav/{}\"", mine[0])),
+        "{}",
+        v.body
+    );
+    assert!(v.body.contains("aria-pressed=\"true\""));
+    let show = req_with(&e.app, "GET", "/show/p1?fav=1", Some(&c1), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        2,
+        "{}",
+        show.body
+    );
+    assert!(show.body.contains("class=\"close\" href=\"favourites\""));
+    // A hidden favourite is not shown.
+    e.idx.set_hidden("p1", mine[1], true).unwrap();
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c1), false, &[]).await;
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[1])));
+    e.idx.set_hidden("p1", mine[1], false).unwrap();
+
+    // p2 sees p1's photos but not p1's favourites.
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c2), false, &[]).await;
+    assert!(page.body.contains("None yet"), "{}", page.body);
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains(&format!("action=\"fav/{}\"", mine[0])),
+        "{}",
+        v.body
+    );
+    assert!(e.idx.favs("p2").unwrap().is_empty());
+
+    // p1 takes them out again.
+    let body = format!("ids={}%2C{}", mine[0], mine[1]);
+    let r = req_with_body(&e.app, "POST", "/unfav-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    assert!(e.idx.favs("p1").unwrap().is_empty());
+}

@@ -139,6 +139,7 @@ async fn every_page_has_the_app_menu() {
             "things",
             "trips",
             "words",
+            "favourites",
             "hidden",
             "duplicates",
             "status",

@@ -892,6 +892,27 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-016
+    type: requirement
+    title: Each person keeps their own favourites
+    status: implemented
+    release: v0.7.0
+    description: >
+      A person marks a picture as a favourite with the heart in the viewer
+      (or "."), or several at once from a timeline selection, and takes
+      the mark off the same ways. Only items they may see can be marked,
+      only by a same-site request. Favourites are per person: another
+      person who sees the same library never sees them. The timeline shows
+      a heart on each favourite; a Favourites page lists them newest first
+      (not the hidden ones) with a slideshow of them alone. Nothing in the
+      libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

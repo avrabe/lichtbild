@@ -112,6 +112,9 @@
       if (tr) tr.open = !tr.open;
     } else if (e.key === "s") {
       go("a.slideshow");
+    } else if (e.key === ".") {
+      var h = viewer.querySelector("form.favf button");
+      if (h) h.click();
     }
   });
   var x0 = null, y0 = null, t0 = 0;
@@ -130,6 +133,34 @@
       go(dx < 0 ? "a.next" : "a.prev");
     }
   }, { passive: true });
+})();
+
+// Favourite (REQ-WEB-016): the heart toggles in place; without
+// JavaScript the form posts and the page comes back.
+(function () {
+  "use strict";
+  var form = document.querySelector(".viewer form.favf");
+  if (!form || !window.fetch) return;
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var b = form.querySelector("button");
+    var on = b.classList.contains("on");
+    b.disabled = true;
+    fetch(form.action, {
+      method: "POST",
+      credentials: "same-origin",
+      redirect: "manual",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(new FormData(form)).toString()
+    }).then(function (r) {
+      if (!r.ok && r.type !== "opaqueredirect") throw new Error(r.status);
+      on = !on;
+      b.classList.toggle("on", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+      b.textContent = on ? "\u2665" : "\u2661";
+      form.action = form.action.replace(on ? /\/fav\/(\d+)$/ : /\/unfav\/(\d+)$/, on ? "/unfav/$1" : "/fav/$1");
+    }).catch(function () {}).then(function () { b.disabled = false; });
+  });
 })();
 
 // Transcript: a click on a time seeks the video instead of reloading.
@@ -665,11 +696,15 @@
   bar.className = "selbar";
   bar.setAttribute("role", "toolbar");
   bar.hidden = true;
+  // On the favourites page the heart takes them out again.
+  var favPage = tl.classList.contains("favs");
   bar.innerHTML = '<span class="seln" aria-live="polite"></span>' +
+    '<button type="button" class="selfav">' + (favPage ? "Not a favourite" : "\u2665 Favourite") + '</button>' +
     '<button type="button" class="selhide">Hide for me</button>' +
     '<button type="button" class="selcancel">Cancel</button>';
   document.body.appendChild(bar);
   var count = bar.querySelector(".seln"), hideBtn = bar.querySelector(".selhide");
+  var favBtn = bar.querySelector(".selfav");
   function ids(tile) {
     var series = tile.closest(".series");
     if (series && !series.classList.contains("open") && !tile.classList.contains("later")) {
@@ -692,6 +727,7 @@
     var n = chosen().length;
     count.textContent = n === 1 ? "1 chosen" : n + " chosen";
     hideBtn.disabled = n === 0;
+    favBtn.disabled = n === 0;
   }
   function setMode(on) {
     document.body.classList.toggle("selecting", on);
@@ -746,17 +782,51 @@
       toast(list);
     }, function () { hideBtn.disabled = false; count.textContent = "Could not hide, try again"; });
   });
-  function toast(list) {
+  function hearts(list, on) {
+    list.forEach(function (id) {
+      var t = document.getElementById("i" + id);
+      if (!t) return;
+      var h = t.querySelector(".heart");
+      if (on && !h) {
+        h = document.createElement("span");
+        h.className = "heart";
+        h.title = "Favourite";
+        h.textContent = "\u2665";
+        t.appendChild(h);
+      } else if (!on && h) h.remove();
+    });
+  }
+  favBtn.addEventListener("click", function () {
+    var list = chosen();
+    if (!list.length) return;
+    favBtn.disabled = true;
+    post(favPage ? "unfav-many" : "fav-many", list).then(function () {
+      if (favPage) list.forEach(function (id) {
+        var t = document.getElementById("i" + id);
+        if (t) t.remove();
+      });
+      else hearts(list, true);
+      setMode(false);
+      var n = list.length === 1 ? "1 item" : list.length + " items";
+      toast(list, favPage ? n + " no longer favourites." : n + " made favourites.",
+        favPage ? "fav-many" : "unfav-many", !favPage);
+    }, function () { favBtn.disabled = false; count.textContent = "Could not save, try again"; });
+  });
+  // Undo posts `undo`; it reloads unless only hearts changed in place.
+  function toast(list, text, undo, inPlace) {
     var t = document.createElement("div");
     t.className = "toast";
     t.setAttribute("role", "status");
     t.innerHTML = '<span></span><button type="button">Undo</button>';
-    t.querySelector("span").textContent = (list.length === 1 ? "1 item" : list.length + " items") + " hidden for you.";
+    t.querySelector("span").textContent = text ||
+      (list.length === 1 ? "1 item" : list.length + " items") + " hidden for you.";
     document.body.appendChild(t);
     var gone = setTimeout(function () { t.remove(); }, 10000);
     t.querySelector("button").addEventListener("click", function () {
       clearTimeout(gone);
-      post("unhide-many", list).then(function () { window.location.reload(); });
+      post(undo || "unhide-many", list).then(function () {
+        if (inPlace) { hearts(list, false); t.remove(); } else window.location.reload();
+      });
     });
   }
 })();
@@ -771,11 +841,12 @@
     ["Photo", "i  t", "details, transcript"],
     ["Photo", "f", "full screen"],
     ["Photo", "s", "slideshow from here"],
+    ["Photo", ".", "favourite, or not any more"],
     ["Slideshow", "space", "pause, play (or tap)"],
     ["Slideshow", "← →", "previous, next (or swipe)"],
     ["Slideshow", "Esc", "close"],
     ["Search", "↓ ↑", "move through the suggestions"],
-    ["Timeline", "Select", "choose several, then hide them"],
+    ["Timeline", "Select", "choose several, then make them favourites or hide them"],
     ["Anywhere", "?", "this list"]
   ];
   var dlg = null;
