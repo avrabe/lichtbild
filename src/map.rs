@@ -428,6 +428,22 @@ pub struct PageQuery {
     to: Option<String>,
     /// A trip from the chooser: "YYYY-MM-DD..YYYY-MM-DD".
     trip: Option<String>,
+    /// Only pictures in this country, by ISO code (REQ-MAP-003).
+    country: Option<String>,
+}
+
+/// A country code as the place names give it: two to three letters or
+/// digits; anything else is refused.
+fn valid_country(c: &str) -> bool {
+    (2..=3).contains(&c.len()) && c.bytes().all(|b| b.is_ascii_alphanumeric())
+}
+
+/// Whether point `p` lies in `country` (always, when none is asked).
+fn in_country(places: Option<&crate::places::Places>, country: Option<&str>, p: &Point) -> bool {
+    match country {
+        None => true,
+        Some(c) => places.and_then(|pl| pl.country(p.lat, p.lon)) == Some(c),
+    }
 }
 
 /// The days a map shows (REQ-MAP-002): both ends included; a missing end
@@ -488,6 +504,11 @@ pub async fn page(
     let Some(when) = When::parse(q.from.as_deref(), q.to.as_deref(), q.trip.as_deref()) else {
         return (StatusCode::BAD_REQUEST, "which days?").into_response();
     };
+    let country = q.country.clone().filter(|c| !c.is_empty());
+    if country.as_deref().is_some_and(|c| !valid_country(c)) {
+        return (StatusCode::BAD_REQUEST, "which country?").into_response();
+    }
+    let country2 = country.clone();
     let idx = st.index.clone();
     let map = st.map.clone();
     let (dups, me, pc, places) = (
@@ -512,10 +533,11 @@ pub async fn page(
                 Some((a, b)) => (a.min(m.clone()), b.max(m)),
             });
         }
-        let summary = if when2.any() {
+        let summary = if when2.any() || country2.is_some() {
             let some: Vec<Point> = points
                 .iter()
                 .filter(|p| when2.holds(&p.taken))
+                .filter(|p| in_country(places.as_deref(), country2.as_deref(), p))
                 .cloned()
                 .collect();
             clusters(&some, &labels2, 0, None)
@@ -531,11 +553,11 @@ pub async fn page(
         Ok(Err(e)) => return crate::web::internal(e),
         Err(e) => return crate::web::internal(e),
     };
-    let count = match (summary.total, when.any()) {
+    let count = match (summary.total, when.any() || country.is_some()) {
         (1, false) => "1 photo or video has a position.".to_string(),
         (n, false) => format!("{n} photos and videos have a position."),
-        (1, true) => "1 photo or video of these days has a position.".to_string(),
-        (n, true) => format!("{n} photos and videos of these days have a position."),
+        (1, true) => "1 photo or video of these has a position.".to_string(),
+        (n, true) => format!("{n} photos and videos of these have a position."),
     };
     let bar = toolbar(
         &viewer,
@@ -544,6 +566,14 @@ pub async fn page(
     ) + &when_bar(
         q.who.as_deref(),
         q.kind.as_deref(),
+        country.as_deref().map(|c| {
+            (
+                c,
+                st.places
+                    .as_ref()
+                    .map_or_else(|| c.to_string(), |p| p.country_name(c)),
+            )
+        }),
         &when,
         months.as_ref(),
         &trips,
@@ -630,6 +660,9 @@ pub async fn page(
     if let Some(t) = &when.to {
         attrs += &format!(" data-to=\"{}\"", esc(t));
     }
+    if let Some(c) = &country {
+        attrs += &format!(" data-country=\"{}\"", esc(c));
+    }
     let (kind, _) = crate::web::kind_filter(q.kind.as_deref());
     match kind {
         Some(true) => attrs += " data-kind=\"video\"",
@@ -713,6 +746,7 @@ pub struct ClusterQuery {
     kind: Option<String>,
     from: Option<String>,
     to: Option<String>,
+    country: Option<String>,
 }
 
 /// The time row under the map's toolbar (REQ-MAP-002): a trip to choose,
@@ -720,6 +754,7 @@ pub struct ClusterQuery {
 fn when_bar(
     who: Option<&str>,
     kind: Option<&str>,
+    country: Option<(&str, String)>,
     when: &When,
     months: Option<&(String, String)>,
     trips: &[crate::trips::Trip],
@@ -780,10 +815,16 @@ fn when_bar(
         _ => String::new(),
     };
     format!(
-        "<form class=\"mapwhen\" method=\"get\" action=\"map\">{}{}\
-         <label>Trip <select name=\"trip\">{opts}</select></label><button type=\"submit\">Show</button>{slider}</form>\n",
+        "<form class=\"mapwhen\" method=\"get\" action=\"map\">{}{}{}\
+         <label>Trip <select name=\"trip\">{opts}</select></label><button type=\"submit\">Show</button>{slider}\
+         <a class=\"countrylink\" href=\"countries\">{}</a></form>\n",
         keep("who", who),
         keep("kind", kind),
+        keep("country", country.as_ref().map(|c| c.0)),
+        match &country {
+            Some((_, name)) => format!("{} · all countries", esc(name)),
+            None => "Countries".to_string(),
+        },
     )
 }
 
@@ -809,6 +850,11 @@ pub async fn clusters_json(
     let Some(when) = When::parse(q.from.as_deref(), q.to.as_deref(), None) else {
         return (StatusCode::BAD_REQUEST, "which days?").into_response();
     };
+    let country = q.country.clone().filter(|c| !c.is_empty());
+    if country.as_deref().is_some_and(|c| !valid_country(c)) {
+        return (StatusCode::BAD_REQUEST, "which country?").into_response();
+    }
+    let places = st.places.clone();
     let z = q.z.unwrap_or(0);
     let idx = st.index.clone();
     let map = st.map.clone();
@@ -824,6 +870,7 @@ pub async fn clusters_json(
             .iter()
             .filter(|p| kind.is_none_or(|v| p.video == v))
             .filter(|p| when.holds(&p.taken))
+            .filter(|p| in_country(places.as_deref(), country.as_deref(), p))
             .filter(|p| dups.shown(p.id, &labels, &hidden).shown)
             .cloned()
             .collect();

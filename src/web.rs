@@ -193,6 +193,7 @@ pub fn router(state: AppState) -> Router {
         .route("/fix/text", axum::routing::post(fix_text))
         .route("/fix/off", axum::routing::post(fix_off))
         .route("/trips", get(trips_page))
+        .route("/countries", get(countries_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -578,6 +579,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
+         <li><a href=\"countries\"><b>Countries</b><span>Where you have been</span></a></li>\
          <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
@@ -872,6 +874,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
              <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
+             <a href=\"countries\"><b>Countries</b><span>Where you have been</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
@@ -4232,6 +4235,123 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     }
     body += "</section>";
     page_for(&st, "lichtbild trips", &body).into_response()
+}
+
+/// One country the viewer's pictures were taken in (REQ-MAP-003).
+struct Country {
+    code: String,
+    name: String,
+    items: usize,
+    days: std::collections::BTreeSet<String>,
+    /// The newest picture: (taken, id, hash).
+    cover: (String, u64, String),
+}
+
+/// A flag from a two-letter ISO code (regional indicator symbols); any
+/// other code gets none.
+fn flag(code: &str) -> String {
+    if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
+        return String::new();
+    }
+    code.bytes()
+        .filter_map(|b| char::from_u32(0x1F1E6 + u32::from(b - b'A')))
+        .collect()
+}
+
+/// GET /countries: the countries the viewer's pictures were taken in, by
+/// the nearest town of each position (recorded, set by hand or
+/// estimated), as the timeline shows them: one copy each, nothing hidden,
+/// only the viewer's libraries. A country opens the map on its pictures.
+async fn countries_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let Some(places) = st.places.clone() else {
+        let body = "<h1>Countries</h1><p class=\"dim\">Countries come from the offline place names, and none are configured.</p>";
+        return page_for(&st, "lichtbild countries", body).into_response();
+    };
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let pc = st.positions.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Country>> {
+        let hidden = idx.hidden(&me)?;
+        let pos = pc.get(&idx)?;
+        let mut by: HashMap<String, Country> = HashMap::new();
+        for (id, r) in idx.all()? {
+            if r.missing || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
+                continue;
+            }
+            let Some(p) = pos.get(&id) else { continue };
+            let Some(code) = places.country(p.lat, p.lon) else {
+                continue;
+            };
+            let c = by.entry(code.to_string()).or_insert_with(|| Country {
+                code: code.to_string(),
+                name: places.country_name(code),
+                items: 0,
+                days: Default::default(),
+                cover: (String::new(), 0, String::new()),
+            });
+            c.items += 1;
+            c.days
+                .insert(r.taken_local.get(..10).unwrap_or("").to_string());
+            if r.thumb == "ok" && (r.taken_local.as_str(), id) > (c.cover.0.as_str(), c.cover.1) {
+                c.cover = (r.taken_local.clone(), id, r.hash.clone());
+            }
+        }
+        let mut out: Vec<Country> = by.into_values().collect();
+        out.sort_by(|a, b| b.items.cmp(&a.items).then(a.name.cmp(&b.name)));
+        Ok(out)
+    })
+    .await;
+    let countries = match res {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = format!(
+        "<h1>Countries</h1><p class=\"dim\">{} by the nearest town of each picture with a position. A country opens the map on its pictures.</p>",
+        match countries.len() {
+            0 => "No countries yet,".to_string(),
+            1 => "1 country,".to_string(),
+            n => format!("{n} countries,"),
+        }
+    );
+    body += "<section class=\"thingtiles countries\">";
+    for c in &countries {
+        let first = c.days.first().map(String::as_str).unwrap_or("");
+        let last = c.days.last().map(String::as_str).unwrap_or("");
+        let (y1, y2) = (first.get(..4).unwrap_or(""), last.get(..4).unwrap_or(""));
+        let years = if y1 == y2 {
+            y1.to_string()
+        } else {
+            format!("{y1}–{y2}")
+        };
+        let img = if c.cover.1 == 0 {
+            String::new()
+        } else {
+            format!(
+                "<img src=\"thumb/{}?h={}\" loading=\"lazy\" alt=\"\">",
+                c.cover.1,
+                esc(c.cover.2.get(..12).unwrap_or(""))
+            )
+        };
+        body += &format!(
+            "<a class=\"thing\" href=\"map?country={code}\">{img}<span><b>{flag} {name}</b><i>{n}</i></span><small>{days} · {years}</small></a>",
+            code = esc(&c.code),
+            flag = flag(&c.code),
+            name = esc(&c.name),
+            n = c.items,
+            days = if c.days.len() == 1 { "1 day".to_string() } else { format!("{} days", c.days.len()) },
+            years = esc(&years),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild countries", &body).into_response()
 }
 
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);

@@ -177,6 +177,8 @@
     var from = attr("data-from"), to = attr("data-to");
     if (from) q += "&from=" + encodeURIComponent(from);
     if (to) q += "&to=" + encodeURIComponent(to);
+    var country = attr("data-country");
+    if (country) q += "&country=" + encodeURIComponent(country);
     fetch(q, { signal: pending.signal, headers: { accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("clusters: " + r.status);

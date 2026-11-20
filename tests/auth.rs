@@ -434,6 +434,9 @@ async fn every_route_needs_a_session_except_health_static_and_login() {
         "/t/nobody".into(),
         "/corrections".into(),
         "/corrections.jsonl".into(),
+        "/countries".into(),
+        "/days/all?day=2021-07-05".into(),
+        "/hidden?sort=name".into(),
     ];
     for uri in &routes {
         let r = req(&e.app, "GET", uri, None, false).await;

@@ -1620,3 +1620,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MAP-002
+
+  - id: VER-115
+    type: verification
+    title: The countries page counts by nearest town and a country narrows the map
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_countries_page_and_the_map_of_one_country"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map the_countries_page_and_the_map_of_one_country"
+    links:
+      - type: verifies
+        target: REQ-MAP-003

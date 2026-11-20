@@ -1004,3 +1004,5 @@ ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4p
 .mapslider[hidden] { display: none; }
 .mapslider input[type=range] { width: 100%; accent-color: var(--shu); }
 .mapslider output { grid-column: 1 / -1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.mapwhen a.countrylink { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+.mapwhen a.countrylink:hover { color: var(--shu); border-color: var(--shu); }

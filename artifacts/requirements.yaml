@@ -598,6 +598,29 @@ artifacts:
       priority: should
       category: interface
 
+  - id: REQ-MAP-003
+    type: requirement
+    title: The countries one's pictures were taken in
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: mark the countries visited. The Countries
+      page lists every country the viewer's pictures were taken in, by
+      the offline place names' nearest town to each position (recorded,
+      set by hand or estimated), with its flag, how many pictures, on how
+      many days and in which years, most pictures first, counted as the
+      timeline shows them (one copy each, nothing hidden, only the
+      viewer's libraries). A country opens the map on its pictures alone;
+      a malformed country code is refused. Without place names the page
+      says so. Shading the countries on the map itself needs country
+      outlines, which the house does not have yet.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MAP-002
     type: requirement
     title: The map narrows to a trip or a time range

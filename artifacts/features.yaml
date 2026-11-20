@@ -385,7 +385,10 @@ artifacts:
         - Hidden pictures sort by date or name, narrow by a word, and come back several at a time
         - A series shows its best shot first, and the others go away in one tap
         - The map shows one trip, or the months chosen on a slider
+        - The countries visited are listed with their pictures, and each opens on the map
     links:
+      - type: satisfies
+        target: REQ-MAP-003
       - type: satisfies
         target: REQ-MAP-002
       - type: satisfies
