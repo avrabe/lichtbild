@@ -157,6 +157,7 @@ at nice 0.
 | F146 | REQ-FACE-003 | a name field offers names the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
 | F147 | REQ-FACE-003 | naming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
 | F148 | REQ-FACE-003 | renaming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F150 | REQ-FACE-002 | a batch runs on past a path that is not UTF-8 | `a_bad_picture_or_a_hang_fails_alone_in_a_batch` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

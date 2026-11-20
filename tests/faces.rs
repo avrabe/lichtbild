@@ -279,6 +279,31 @@ fn a_bad_picture_or_a_hang_fails_alone_in_a_batch() {
         "{got:?}"
     );
     assert_eq!(got[2], (2, Ok(1)));
+    // A path that is not UTF-8 fails alone and costs no other photo.
+    use std::os::unix::ffi::OsStrExt;
+    let odd = tmp.path().join(std::ffi::OsStr::from_bytes(b"\xff.jpg"));
+    let mixed = vec![files[0].clone(), odd, files[2].clone()];
+    let mut got = Vec::new();
+    lichtbild::vision::run_batch::<faces::Found>(
+        Path::new(EXE),
+        "faces",
+        &m,
+        &mixed,
+        faces::TIME_BUDGET,
+        &mut |i, r| {
+            got.push((i, r.map(|f| f.faces.len()).map_err(|e| e.to_string())));
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        got,
+        vec![
+            (0, Ok(1)),
+            (1, Err("path not UTF-8".to_string())),
+            (2, Ok(1))
+        ]
+    );
     // No time at all: every picture times out, each in its own child.
     let mut late = Vec::new();
     lichtbild::vision::run_batch::<faces::Found>(

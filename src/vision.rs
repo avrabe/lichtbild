@@ -251,10 +251,22 @@ pub fn run_batch<T: serde::de::DeserializeOwned + Send + 'static>(
     use std::process::{Command, Stdio};
     let mut at = 0;
     while at < files.len() {
+        // A child reads its arguments as UTF-8: a path that is not fails
+        // here, alone, and never reaches a child (where it would fail every
+        // photo before it in the batch).
+        if files[at].to_str().is_none() {
+            each(at, Err(anyhow::anyhow!("path not UTF-8")))?;
+            at += 1;
+            continue;
+        }
+        let end = files[at..]
+            .iter()
+            .position(|f| f.to_str().is_none())
+            .map_or(files.len(), |p| at + p);
         let mut child = Command::new(exe)
             .arg(mode)
             .arg(model_dir)
-            .args(&files[at..])
+            .args(&files[at..end])
             .env_clear()
             .env("RAYON_NUM_THREADS", "4")
             .stdin(Stdio::null())
@@ -290,7 +302,7 @@ pub fn run_batch<T: serde::de::DeserializeOwned + Send + 'static>(
             }
         });
         let mut broke = false;
-        while at < files.len() {
+        while at < end {
             match rx.recv_timeout(timeout) {
                 Ok(Ok(Answer::Ok(v))) => each(at, Ok(v))?,
                 Ok(Ok(Answer::Err(e))) => each(at, Err(anyhow::anyhow!(e)))?,
