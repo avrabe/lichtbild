@@ -1245,3 +1245,16 @@ artifacts:
       - type: verifies
         target: REQ-SEE-002
 
+  - id: VER-089
+    type: verification
+    title: Search suggestions from what the viewer's libraries hold
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_search_box_suggests_what_the_libraries_hold"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_search_box_suggests_what_the_libraries_hold"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-002

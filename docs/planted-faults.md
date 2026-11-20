@@ -115,6 +115,9 @@ at nice 0.
 | F102 | REQ-TEXT-001 | without a search every line is marked as a hit | `what_was_seen_is_stored_searched_and_shown` |
 | F103 | REQ-SEE-001 | unsure detections are kept as things | `whole_picture_boxes_need_a_sure_find` |
 | F104 | REQ-SEE-001 | things are searchable in English only | `what_was_seen_is_stored_searched_and_shown` |
+| F107 | REQ-SEARCH-002 | suggestions come from libraries the viewer may not see | `the_search_box_suggests_what_the_libraries_hold` |
+| F108 | REQ-SEARCH-002 | common words are suggested | `the_search_box_suggests_what_the_libraries_hold` |
+| F109 | REQ-SEARCH-002 | a completion that finds nothing with the earlier words is offered | `the_search_box_suggests_what_the_libraries_hold` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

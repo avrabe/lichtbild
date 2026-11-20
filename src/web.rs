@@ -115,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .route("/t/{who}", get(timeline))
         .route("/v/{who}/{id}", get(viewer))
         .route("/search", get(search))
+        .route("/suggest", get(suggest))
         .route("/hide/{id}", axum::routing::post(hide))
         .route("/unhide/{id}", axum::routing::post(unhide))
         .route("/keep/{id}", axum::routing::post(keep))
@@ -566,7 +567,7 @@ fn page(
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a>{menu}<form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200"></form>{nav}</header>
+<header><a href="./" class="brand">lichtbild</a>{menu}<form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" hx-get="suggest" hx-trigger="input changed delay:120ms" hx-target="next .suggest" hx-sync="this:replace" aria-autocomplete="list" aria-controls="suggest"><div id="suggest" class="suggest" role="listbox" aria-label="Suggestions"></div></form>{nav}</header>
 <main>
 {body}
 </main>
@@ -1771,6 +1772,45 @@ type Found = (
     Vec<(crate::search::Hit, index::Record)>,
     Vec<(u64, index::Record)>,
 );
+
+/// Completions for the search box as it is typed (REQ-SEARCH-002): only
+/// terms that items in the viewer's libraries hold.
+async fn suggest(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(sq): Query<SearchQuery>,
+) -> Response {
+    let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
+    let labels = viewer.labels.clone();
+    let sx = st.search.clone();
+    let found = match tokio::task::spawn_blocking(move || sx.suggest(&q, &labels, 8)).await {
+        Ok(f) => f,
+        Err(e) => return internal(e),
+    };
+    let mut h = String::new();
+    for s in found {
+        let (icon, what) = match s.kind {
+            crate::search::Kind::Thing => ("◎", "thing"),
+            crate::search::Kind::Place => ("⌖", "place"),
+            crate::search::Kind::Date => ("◷", "date"),
+            crate::search::Kind::Word => ("❝", "said or written"),
+        };
+        let head = s.query.strip_suffix(&s.term).unwrap_or("");
+        let mut note = s.hint.clone();
+        if !note.is_empty() {
+            note += " · ";
+        }
+        note += &s.items.to_string();
+        h += &format!(
+            "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"{what}\" aria-label=\"{what}\">{icon}</span><span class=\"st\">{head}<b>{term}</b></span><span class=\"dim\">{note}</span></a>",
+            q = urlencode(&s.query),
+            head = esc(head),
+            term = esc(&s.term),
+            note = esc(&note),
+        );
+    }
+    ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(h)).into_response()
+}
 
 async fn search(
     State(st): State<AppState>,

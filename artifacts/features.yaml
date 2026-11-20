@@ -273,3 +273,21 @@ artifacts:
       - type: satisfies
         target: REQ-SEE-002
 
+
+  - id: FEAT-014
+    type: feature
+    title: Usability round beyond the big photo apps
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19: work through the night on one big release;
+      lichtbild should be more usable than the photo apps of the big
+      vendors. Search that helps while typing comes first.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - Typing "kat" offers "Katze" with its count, and picking it runs the search
+        - The results page keeps the query in the box
+    links:
+      - type: satisfies
+        target: REQ-SEARCH-002

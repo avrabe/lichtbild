@@ -99,6 +99,8 @@
   document.addEventListener("keydown", function (e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (onVideo(e.target) && e.key !== "Escape") return;
+    // Typing in the search box is not navigation.
+    if (e.target && e.target.closest && e.target.closest("input, textarea, .suggest")) return;
     if (e.key === "ArrowLeft") go("a.prev");
     else if (e.key === "ArrowRight") go("a.next");
     else if (e.key === "Escape") go("a.back");
@@ -473,3 +475,36 @@
   }
 })();
 
+
+// Search suggestions (REQ-SEARCH-002): the list under the search box comes
+// from the server as it is typed; arrow keys move through it, Escape or a
+// click elsewhere closes it. On the results page the box keeps the query,
+// so it can be refined instead of typed again.
+(function () {
+  "use strict";
+  var input = document.querySelector("form.search input[name=q]");
+  var box = document.getElementById("suggest");
+  if (!input || !box) return;
+  if (/\/search$/.test(location.pathname) && !input.value) {
+    var q = new URLSearchParams(location.search).get("q");
+    if (q) input.value = q;
+  }
+  function opts() { return Array.prototype.slice.call(box.querySelectorAll("a")); }
+  function close() { box.innerHTML = ""; }
+  input.addEventListener("keydown", function (e) {
+    var o = opts();
+    if (e.key === "ArrowDown" && o.length) { e.preventDefault(); o[0].focus(); }
+    else if (e.key === "Escape") close();
+  });
+  box.addEventListener("keydown", function (e) {
+    var o = opts(), i = o.indexOf(document.activeElement);
+    if (e.key === "ArrowDown") { e.preventDefault(); (o[i + 1] || o[i]).focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); if (i <= 0) input.focus(); else o[i - 1].focus(); }
+    else if (e.key === "Escape") { close(); input.focus(); }
+  });
+  document.addEventListener("click", function (e) {
+    if (!(e.target.closest && e.target.closest("form.search"))) close();
+  });
+  // The form is sent as typed; a stale list must not cover the results.
+  input.form.addEventListener("submit", close);
+})();

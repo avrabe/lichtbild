@@ -354,3 +354,82 @@ async fn the_filter_holds_in_the_chooser_and_the_viewer() {
     assert_ne!(arrow(&page, "prev"), Some(beside), "{page}");
     assert_ne!(arrow(&page, "next"), Some(beside), "{page}");
 }
+
+// Suggestions as the search box is typed: things (in German and English),
+// dates, words said; the earlier words kept, with nothing that finds
+// nothing; only what the viewer's libraries hold; common words and single
+// letters suggest nothing.
+// rivet: verifies REQ-SEARCH-002
+#[tokio::test]
+async fn the_search_box_suggests_what_the_libraries_hold() {
+    let e = env();
+    let (_, photo) = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.label == "p1" && r.video.is_none() && r.taken_local.starts_with("2020"))
+        .unwrap();
+    let look = lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: "none".into(),
+            model: "test".into(),
+            lines: vec![],
+            docs: vec![],
+        },
+        objects: vec![lichtbild::objects::Object {
+            kind: 15,
+            score: 0.9,
+            bbox: [0.1, 0.1, 0.6, 0.8],
+        }],
+        vector: vec![],
+    };
+    e.idx.set_look(&photo.hash, "test", &look).unwrap();
+    e.state.search.rebuild(&e.idx, None).unwrap();
+    let app = web::router(e.state.clone());
+
+    let (s, l) = get(&app, "/suggest?q=Leu", true).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(l.contains(r#"href="search?q=leuchtturm""#), "{l}");
+    for q in ["kat", "Cat", "katzen"] {
+        let (_, l) = get(&app, &format!("/suggest?q={q}"), true).await;
+        assert!(l.contains(r#"href="search?q=Katze""#), "{q}: {l}");
+        assert!(l.contains("cat · 1"), "{q}: {l}");
+    }
+    let (_, l) = get(&app, "/suggest?q=jul", true).await;
+    assert!(l.contains(r#"href="search?q=Juli%202019""#), "{l}");
+    // The earlier words stay, and only what still finds something is
+    // offered: the cat was photographed in 2020, not in 2019 or 2022.
+    let (_, l) = get(&app, "/suggest?q=katze%2020", true).await;
+    assert!(l.contains(r#"href="search?q=katze%202020""#), "{l}");
+    assert!(l.contains("katze <b>2020</b>"), "{l}");
+    assert!(!l.contains("2019") && !l.contains("2022"), "{l}");
+    let (_, l) = get(&app, "/suggest?q=20", true).await;
+    assert!(l.contains("2019") && l.contains("2022"), "{l}");
+    // And it runs: the suggested query finds the photo.
+    let (_, hits) = get(&app, "/search?q=katze%202020", false).await;
+    assert!(
+        hits.contains(&format!("/{}\"", photo_id(&e, &photo.hash))),
+        "{hits}"
+    );
+    for q in ["l", "abe", "katze%20"] {
+        let (_, l) = get(&app, &format!("/suggest?q={q}"), true).await;
+        assert!(!l.contains("<a"), "{q}: {l}");
+    }
+    // Only what the viewer's libraries hold.
+    let p1 = e.state.search.suggest("leu", &["p1".into()], 8);
+    assert_eq!(p1.len(), 1);
+    assert_eq!(p1[0].items, 1);
+    assert!(e.state.search.suggest("leu", &["p2".into()], 8).is_empty());
+    assert!(e.state.search.suggest("kat", &["p2".into()], 8).is_empty());
+}
+
+fn photo_id(e: &Env, hash: &str) -> u64 {
+    e.idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.hash == hash)
+        .unwrap()
+        .0
+}

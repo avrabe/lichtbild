@@ -735,6 +735,28 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-SEARCH-002
+    type: requirement
+    title: The search box suggests what the libraries hold as it is typed
+    status: implemented
+    release: v0.7.0
+    description: >
+      While a word is typed into the search box, a list under it offers
+      completions of the last word: things found in pictures (German, found
+      by their English name too), places, years and months, and words said
+      in videos or written in pictures, each with how many items hold it.
+      Earlier words of the query are kept, and a completion that would find
+      nothing together with them is not offered. Only terms that items in the
+      libraries the viewer may see hold are offered; common words and a
+      single letter offer nothing. The results page keeps the query in the
+      box so it can be refined.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy
