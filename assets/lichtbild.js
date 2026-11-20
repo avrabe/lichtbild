@@ -110,6 +110,8 @@
     } else if (e.key === "t") {
       var tr = viewer.querySelector("details.transcript");
       if (tr) tr.open = !tr.open;
+    } else if (e.key === "s") {
+      go("a.slideshow");
     }
   });
   var x0 = null, y0 = null, t0 = 0;
@@ -533,4 +535,111 @@
     e.preventDefault();
     toggle(stack);
   });
+})();
+
+// Slideshow (REQ-WEB-013): the photos listed in the page, one every few
+// seconds, cross-faded, the next one loaded ahead. A tap or the space bar
+// pauses and plays, arrows and swipes step, Escape closes; the screen stays
+// on while it plays where the browser allows it.
+(function () {
+  "use strict";
+  var show = document.querySelector(".show");
+  if (!show) return;
+  var slides = Array.prototype.slice.call(show.querySelectorAll(".slides li"));
+  var imgs = show.querySelectorAll("img.slide");
+  var cap = show.querySelector(".cap");
+  var play = show.querySelector(".play");
+  var close = show.querySelector("a.close");
+  var fs = show.querySelector(".sfs");
+  var ms = parseInt(show.getAttribute("data-interval"), 10) || 5000;
+  var i = -1, cur = 0, playing = true, timer = null, lock = null;
+  if (!slides.length) { show.hidden = true; return; }
+  document.documentElement.classList.add("showing");
+  function wake(on) {
+    try {
+      if (on && !lock && navigator.wakeLock) {
+        navigator.wakeLock.request("screen").then(function (l) { lock = l; }, function () {});
+      } else if (!on && lock) { lock.release(); lock = null; }
+    } catch (e) { /* not offered */ }
+  }
+  function schedule() {
+    clearTimeout(timer);
+    if (playing) timer = setTimeout(function () { go(i + 1); }, ms);
+  }
+  function setPlaying(p) {
+    playing = p;
+    show.classList.toggle("paused", !p);
+    play.textContent = p ? "❚❚" : "▶";
+    play.setAttribute("aria-label", p ? "Pause" : "Play");
+    wake(p);
+    schedule();
+  }
+  function go(k) {
+    if (k >= slides.length) {
+      show.querySelector(".send").hidden = false;
+      setPlaying(false);
+      return;
+    }
+    if (k < 0 || k === i) return;
+    show.querySelector(".send").hidden = true;
+    i = k;
+    var next = imgs[1 - cur], li = slides[k];
+    next.onload = function () {
+      next.classList.add("on");
+      imgs[cur].classList.remove("on");
+      cur = 1 - cur;
+    };
+    next.src = li.getAttribute("data-src");
+    cap.textContent = li.getAttribute("data-when");
+    close.href = li.getAttribute("data-href");
+    if (slides[k + 1]) new Image().src = slides[k + 1].getAttribute("data-src");
+    schedule();
+  }
+  play.addEventListener("click", function (e) { e.stopPropagation(); setPlaying(!playing); });
+  show.querySelector(".snext").addEventListener("click", function (e) { e.stopPropagation(); go(i + 1); });
+  show.querySelector(".sprev").addEventListener("click", function (e) { e.stopPropagation(); go(i - 1); });
+  show.addEventListener("click", function (e) {
+    if (e.target.closest("a, button")) return;
+    setPlaying(!playing);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+    if (e.key === " ") { e.preventDefault(); setPlaying(!playing); }
+    else if (e.key === "ArrowRight") go(i + 1);
+    else if (e.key === "ArrowLeft") go(i - 1);
+    else if (e.key === "Escape" && !document.fullscreenElement) window.location.href = close.href;
+    else if (e.key === "f" && fs && !fs.hidden) fs.click();
+  });
+  var x0 = null, y0 = 0;
+  show.addEventListener("touchstart", function (e) {
+    if (e.touches.length !== 1) { x0 = null; return; }
+    x0 = e.touches[0].clientX; y0 = e.touches[0].clientY;
+  }, { passive: true });
+  show.addEventListener("touchend", function (e) {
+    if (x0 === null) return;
+    var dx = e.changedTouches[0].clientX - x0, dy = e.changedTouches[0].clientY - y0;
+    x0 = null;
+    if (Math.abs(dx) > 50 && Math.abs(dx) > 2 * Math.abs(dy)) {
+      e.preventDefault();
+      go(dx < 0 ? i + 1 : i - 1);
+    }
+  });
+  var full = show.requestFullscreen || show.webkitRequestFullscreen;
+  if (fs && full) {
+    fs.hidden = false;
+    fs.addEventListener("click", function (e) {
+      e.stopPropagation();
+      if (document.fullscreenElement || document.webkitFullscreenElement) {
+        (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+      } else {
+        full.call(show);
+      }
+    });
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (document.visibilityState === "visible" && playing) { lock = null; wake(true); }
+  });
+  go(0);
+  setPlaying(true);
 })();

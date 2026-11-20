@@ -120,6 +120,8 @@ at nice 0.
 | F109 | REQ-SEARCH-002 | a completion that finds nothing with the earlier words is offered | `the_search_box_suggests_what_the_libraries_hold` |
 | F110 | REQ-WEB-012 | photos far apart in time join a series | `photos_taken_one_after_another_that_look_alike_are_one_series` |
 | F111 | REQ-WEB-012 | photos that do not look alike join a series | `photos_taken_one_after_another_that_look_alike_are_one_series` |
+| F112 | REQ-WEB-013 | the slideshow shows videos | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
+| F113 | REQ-WEB-013 | the slideshow shows every photo of a series | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

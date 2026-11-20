@@ -777,6 +777,26 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-013
+    type: requirement
+    title: A slideshow from any photo on
+    status: implemented
+    release: v0.7.0
+    description: >
+      The viewer starts a slideshow from the photo shown (button or key s):
+      the timeline's photos from there on, older and older, one every five
+      seconds, cross-faded and loaded ahead, full screen where the browser
+      allows it. It shows one photo of each series, no videos, and nothing
+      the viewer hid or may not see. A tap or the space bar pauses, arrows
+      and swipes step, Escape closes to the viewer at the photo last shown;
+      the screen stays on while it plays where the browser allows it.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

@@ -289,8 +289,11 @@ artifacts:
         - Typing "kat" offers "Katze" with its count, and picking it runs the search
         - The results page keeps the query in the box
         - A burst of ten shots shows as one tile with "10", and opens in place
+        - On the iPad, a slideshow runs from any photo with the screen kept on
     links:
       - type: satisfies
         target: REQ-SEARCH-002
       - type: satisfies
         target: REQ-WEB-012
+      - type: satisfies
+        target: REQ-WEB-013

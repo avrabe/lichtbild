@@ -114,6 +114,7 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(home))
         .route("/t/{who}", get(timeline))
         .route("/v/{who}/{id}", get(viewer))
+        .route("/show/{who}", get(show))
         .route("/search", get(search))
         .route("/suggest", get(suggest))
         .route("/hide/{id}", axum::routing::post(hide))
@@ -1608,6 +1609,113 @@ pub fn photo_src(id: u64, rec: &index::Record) -> String {
     }
 }
 
+/// Photos a slideshow holds at most.
+const SHOW_MAX: usize = 500;
+
+#[derive(Deserialize)]
+pub struct ShowQuery {
+    /// Start at this photo; without it, at the newest.
+    at: Option<u64>,
+}
+
+/// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
+fn long_date(taken: &str) -> String {
+    let m: usize = taken.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
+    match (
+        taken.get(8..10).and_then(|d| d.parse::<u32>().ok()),
+        MONTHS.get(m.wrapping_sub(1)),
+        taken.get(..4),
+        taken.get(11..16),
+    ) {
+        (Some(d), Some(name), Some(y), Some(hm)) => format!("{d} {name} {y}, {hm}"),
+        _ => taken.replace('T', " "),
+    }
+}
+
+/// GET /show/{who}?at=: a slideshow of the timeline's photos from `at` on,
+/// older and older (REQ-WEB-013): full screen, one photo of each series,
+/// no videos, nothing hidden. assets/lichtbild.js plays it.
+async fn show(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(who): UrlPath<String>,
+    Query(sq): Query<ShowQuery>,
+) -> Response {
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let space = st.vision_on.then(|| st.space.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
+        let hidden = idx.hidden(&me)?;
+        let start = match sq.at {
+            Some(at) => match idx.locate(at)?.filter(|r| labels.contains(&r.label)) {
+                Some(r) => Some((r.taken_local, at + 1)),
+                None => return Ok(Vec::new()),
+            },
+            None => None,
+        };
+        let items = idx.timeline_where(
+            &labels,
+            start.as_ref().map(|(t, i)| (t.as_str(), *i)),
+            SHOW_MAX,
+            |id, rec| rec.video.is_none() && dups.shown(id, &labels, &hidden).shown,
+        )?;
+        let runs = series(&items, space.as_deref());
+        let mut out = Vec::new();
+        for (it, n) in items.iter().zip(runs) {
+            if n == 0 {
+                continue;
+            }
+            if let Some(rec) = idx.locate(it.id)? {
+                out.push((it.id, photo_src(it.id, &rec), long_date(&it.taken_local)));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    let slides = match res {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let back = match slides.first() {
+        Some((id, _, _)) => format!("v/{}/{id}", esc(&who)),
+        None => format!("t/{}", esc(&who)),
+    };
+    let list: String = slides
+        .iter()
+        .map(|(id, src, when)| {
+            format!(
+                "<li data-src=\"{}\" data-when=\"{}\" data-href=\"v/{}/{id}\"></li>",
+                esc(src),
+                esc(when),
+                esc(&who)
+            )
+        })
+        .collect();
+    let body = format!(
+        "<div class=\"show\" data-interval=\"5000\" role=\"region\" aria-label=\"Slideshow\">\
+         <img class=\"slide on\" alt=\"\"><img class=\"slide\" alt=\"\">\
+         <div class=\"sbar\"><span class=\"cap\" aria-live=\"polite\"></span>\
+         <span class=\"sctl\"><button type=\"button\" class=\"sprev\" aria-label=\"Previous\">‹</button>\
+         <button type=\"button\" class=\"play\" aria-label=\"Pause\">❚❚</button>\
+         <button type=\"button\" class=\"snext\" aria-label=\"Next\">›</button>\
+         <button type=\"button\" class=\"sfs\" hidden aria-label=\"Full screen\">⛶</button>\
+         <a class=\"close\" href=\"{back}\" aria-label=\"Close\">✕</a></span></div>\
+         <p class=\"send\" hidden>The end. <a href=\"{back}\">Back</a></p>\
+         <ol class=\"slides\" hidden>{list}</ol></div>{empty}",
+        empty = if slides.is_empty() {
+            "<p>No photos to show.</p>"
+        } else {
+            ""
+        }
+    );
+    page_for(&st, "lichtbild slideshow", &body).into_response()
+}
+
 /// GET /v/{who}/{id}: one photo, large, with the previous (newer) and next
 /// (older) photo of the same timeline. Arrow keys and swipes in
 /// assets/lichtbild.js follow the same links; without JavaScript they are
@@ -1785,7 +1893,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",

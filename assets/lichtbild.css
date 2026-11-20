@@ -696,3 +696,37 @@ section.looks { margin-top: 28px; }
 .thingtiles a.thing b { font: 500 17px/1.2 var(--serif); letter-spacing: .04em; }
 .thingtiles a.thing i { font: 400 12px/1 var(--sans); font-style: normal; opacity: .8; margin-left: auto; }
 
+
+/* Slideshow (REQ-WEB-013): black, the photo as large as it fits, a quiet
+   bar that fades while playing. */
+html.showing, html.showing body { overflow: hidden; }
+.show { position: fixed; inset: 0; z-index: 200; background: #000; color: #eee; }
+.show img.slide {
+  position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain;
+  opacity: 0; transition: opacity .8s ease;
+}
+.show img.slide.on { opacity: 1; }
+.show .sbar {
+  position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; padding: 14px max(16px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background: linear-gradient(transparent, rgba(0, 0, 0, .55)); transition: opacity .6s ease;
+}
+.show:not(.paused) .sbar { opacity: .0; }
+.show:not(.paused):hover .sbar { opacity: 1; }
+.show .cap { font-size: 15px; letter-spacing: .02em; }
+.show .sctl { display: flex; gap: 8px; }
+.show .sctl button, .show .sctl a {
+  min-width: 44px; height: 44px; border-radius: 22px; border: 0; font: inherit; font-size: 18px;
+  color: #fff; background: rgba(255, 255, 255, .14); display: inline-flex; align-items: center;
+  justify-content: center; text-decoration: none; cursor: pointer;
+}
+.show .sctl button:focus-visible, .show .sctl a:focus-visible { outline: 2px solid var(--shu); }
+.show .send {
+  position: absolute; top: 50%; left: 0; right: 0; text-align: center; font-size: 20px;
+  transform: translateY(-50%); margin: 0;
+}
+.show .send a { color: #fff; }
+.viewer .vbar a.slideshow { text-decoration: none; margin-left: 8px; }
+@media (prefers-reduced-motion: reduce) {
+  .show img.slide, .show .sbar { transition: none; }
+}

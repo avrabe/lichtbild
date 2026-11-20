@@ -1272,3 +1272,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-012
+
+  - id: VER-091
+    type: verification
+    title: Slideshow from a photo on, one photo of each series
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_shows_one_photo_of_each_series_from_where_it_starts"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series a_slideshow_shows_one_photo_of_each_series_from_where_it_starts"
+    links:
+      - type: verifies
+        target: REQ-WEB-013

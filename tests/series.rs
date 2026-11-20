@@ -1,6 +1,7 @@
 //! Series in the timeline (REQ-WEB-012): photos taken one after another
-//! that look alike show as one tile with a count. Synthetic pictures, with
-//! made-up vectors standing in for what the vision model would store.
+//! that look alike show as one tile with a count; the slideshow
+//! (REQ-WEB-013) shows one photo of each. Synthetic pictures, with made-up
+//! vectors standing in for what the vision model would store.
 
 #![allow(clippy::disallowed_methods)] // tests build fixture trees (DD-006)
 
@@ -18,6 +19,8 @@ use lichtbild::embed::{quantize, DIM};
 use lichtbild::index::Index;
 use lichtbild::scan::{self, Options};
 use lichtbild::web::{self, AppState};
+
+const VIDEO: &[u8] = include_bytes!("fixtures/video/synthetic-h264-160x120.mp4");
 
 async fn get(app: &axum::Router, uri: &str) -> (StatusCode, String) {
     let r = Request::builder()
@@ -137,4 +140,87 @@ async fn photos_taken_one_after_another_that_look_alike_are_one_series() {
     let s_at = page.find(&format!("id=\"s{third}\"")).unwrap();
     let close = s_at + page[s_at..].find("</a></span>").unwrap();
     assert!(page[s_at..close].contains(&format!("id=\"i{first}\"")));
+}
+
+// rivet: verifies REQ-WEB-013
+#[tokio::test]
+async fn a_slideshow_shows_one_photo_of_each_series_from_where_it_starts() {
+    let fx = fixture();
+    for (name, seed) in [
+        ("IMG_20200102_030410.jpg", 31),
+        ("IMG_20200102_030430.jpg", 32),
+        ("IMG_20200102_031000.jpg", 33),
+    ] {
+        std::fs::write(fx.root1.join("a").join(name), jpeg(40, 30, seed)).unwrap();
+    }
+    std::fs::write(fx.root1.join("a/clip.mp4"), VIDEO).unwrap();
+    let cfg = config(&fx, &fx.data);
+    let idx = Arc::new(Index::open(&cfg.data_dir).unwrap());
+    let opts = Options {
+        keyframe_decoder: Some(env!("CARGO_BIN_EXE_lichtbild").into()),
+        ..Options::default()
+    };
+    assert!(scan::run(&cfg, &idx, &opts).unwrap().reconciled);
+    let a: Vec<f32> = (0..DIM).map(|i| (i as f32 * 0.37).sin()).collect();
+    let all = idx.all().unwrap();
+    let id_at = |stamp: &str| all.iter().find(|(_, r)| r.taken_local == stamp).unwrap();
+    for stamp in [
+        "2020-01-02T03:04:05",
+        "2020-01-02T03:04:10",
+        "2020-01-02T03:04:30",
+        "2020-01-02T03:10:00",
+    ] {
+        idx.set_look(&id_at(stamp).1.hash, "test", &look(quantize(&a)))
+            .unwrap();
+    }
+    let (first, second, third, later) = (
+        id_at("2020-01-02T03:04:05").0,
+        id_at("2020-01-02T03:04:10").0,
+        id_at("2020-01-02T03:04:30").0,
+        id_at("2020-01-02T03:10:00").0,
+    );
+    let video = all.iter().find(|(_, r)| r.video.is_some()).unwrap().0;
+    let p2 = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let mut state = AppState::new(&cfg, idx.clone());
+    state.vision_on = true;
+    state.space.rebuild(&idx).unwrap();
+    let app = web::router(state);
+
+    let slides = |page: &str| -> Vec<u64> {
+        page.split("data-href=\"v/p1/")
+            .skip(1)
+            .filter_map(|s| s.split('"').next()?.parse().ok())
+            .collect()
+    };
+    let (s, page) = get(&app, "/show/p1").await;
+    assert_eq!(s, StatusCode::OK);
+    let all_slides = slides(&page);
+    assert!(
+        all_slides.contains(&third) && all_slides.contains(&later),
+        "{page}"
+    );
+    for id in [second, first, video] {
+        assert!(!all_slides.contains(&id), "{id}: {page}");
+    }
+    assert!(
+        page.contains("data-when=\"2 January 2020, 03:04\""),
+        "{page}"
+    );
+    // From a photo on: it comes first, then older ones.
+    let (_, page) = get(&app, &format!("/show/p1?at={later}")).await;
+    let from = slides(&page);
+    assert_eq!(from.first(), Some(&later), "{page}");
+    assert_eq!(from.get(1), Some(&third), "{page}");
+    // A photo of another timeline starts nothing.
+    let (_, page) = get(&app, &format!("/show/p1?at={p2}")).await;
+    assert!(
+        slides(&page).is_empty() && page.contains("No photos to show"),
+        "{page}"
+    );
+    // The viewer offers it from the photo shown.
+    let (_, page) = get(&app, &format!("/v/p1/{later}")).await;
+    assert!(
+        page.contains(&format!("href=\"show/p1?at={later}\"")),
+        "{page}"
+    );
 }
