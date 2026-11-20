@@ -171,11 +171,17 @@ struct Env {
     idx: Arc<Index>,
     auth: Arc<Auth>,
     people: Arc<lichtbild::people::People>,
+    search: Arc<lichtbild::search::Search>,
 }
 
 /// p1 belongs to subject user-1 (its email alone does not sign in); p2 to
 /// the verified email two@example.test, and p2 may also see p1.
 async fn env(public_url: &str) -> Env {
+    env_with(public_url, false).await
+}
+
+/// `env`, with the looking at photos switched on or off.
+async fn env_with(public_url: &str, vision: bool) -> Env {
     let mock = mock_provider().await;
     let fx = fixture();
     let cfg = config(&fx, &fx.data);
@@ -185,10 +191,12 @@ async fn env(public_url: &str) -> Env {
     scan::run(&cfg, &idx, &Options::default()).unwrap();
     let issuer = mock.lock().unwrap().issuer.clone();
     let auth = make_auth(&issuer, &secret, public_url, true).with_store(idx.clone());
-    let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    let mut state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    state.vision_on = vision;
     state.search.rebuild(&idx, None).unwrap();
     let auth = state.auth.clone().unwrap();
     let people = state.people.clone();
+    let search = state.search.clone();
     let app = web::router(state);
     Env {
         _fx: fx,
@@ -197,6 +205,7 @@ async fn env(public_url: &str) -> Env {
         idx,
         auth,
         people,
+        search,
     }
 }
 
@@ -423,6 +432,8 @@ async fn every_route_needs_a_session_except_health_static_and_login() {
         format!("/original/{id}"),
         format!("/preview/{id}"),
         "/t/nobody".into(),
+        "/corrections".into(),
+        "/corrections.jsonl".into(),
     ];
     for uri in &routes {
         let r = req(&e.app, "GET", uri, None, false).await;
@@ -1892,4 +1903,306 @@ async fn names_are_shared_but_each_person_sees_only_their_photos_of_them() {
         location(&r)
     );
     assert!(e.idx.person(oma).unwrap().is_some());
+}
+
+/// Logged-in cookies for p1 (sees only p1) and p2 (sees p1 and p2).
+async fn two_sessions(e: &Env) -> (String, String) {
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(e, "").await else {
+        panic!("p1 login failed");
+    };
+    (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    )
+}
+
+/// Search as `c` until `done` holds for the page, for up to ten seconds
+/// (search learns a correction in the background).
+async fn search_until(e: &Env, c: &str, q: &str, done: impl Fn(&str) -> bool) -> String {
+    let mut page = String::new();
+    for _ in 0..100 {
+        page = req_with(
+            &e.app,
+            "GET",
+            &format!("/search?q={q}"),
+            Some(c),
+            false,
+            &[],
+        )
+        .await
+        .body;
+        if done(&page) {
+            return page;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    panic!("search for {q} never came right: {page}");
+}
+
+// rivet: verifies REQ-FIX-001, REQ-FIX-002
+#[tokio::test]
+async fn corrections_are_the_houses_and_seen_only_with_ones_photos() {
+    use lichtbild::objects::Object;
+    let e = env_with("https://photos.example", true).await;
+    let all = e.idx.all().unwrap();
+    let first = |l: &str| -> (u64, String) {
+        all.iter()
+            .find(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .unwrap()
+    };
+    // X (p1) has a snowboard that is not there, a dog and a misread line;
+    // Z (p2, which p1 may not see) a snowboard too.
+    let (x, z) = (first("p1"), first("p2"));
+    let board = |score: f32, bbox: [f32; 4]| Object {
+        kind: 31,
+        score,
+        bbox,
+    };
+    let look = |objects: Vec<Object>, line: Option<&str>| lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: if line.is_some() { "ok" } else { "none" }.into(),
+            model: "test".into(),
+            lines: line
+                .map(|t| lichtbild::ocr::Line {
+                    quad: [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2],
+                    block: 0,
+                    text: t.into(),
+                    conf: 0.9,
+                })
+                .into_iter()
+                .collect(),
+            docs: vec![0],
+        },
+        objects,
+        vector: vec![],
+    };
+    let dog = Object {
+        kind: 16,
+        score: 0.9,
+        bbox: [0.6, 0.5, 0.9, 0.9],
+    };
+    e.idx
+        .set_look(
+            &x.1,
+            "test",
+            &look(
+                vec![board(0.8, [0.1, 0.1, 0.4, 0.4]), dog],
+                Some("Sommerfcst"),
+            ),
+        )
+        .unwrap();
+    e.idx
+        .set_look(
+            &z.1,
+            "test",
+            &look(vec![board(0.84, [0.2, 0.2, 0.5, 0.5])], None),
+        )
+        .unwrap();
+    e.search.rebuild(&e.idx, None).unwrap();
+    let (c1, c2) = two_sessions(&e).await;
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    // A hit links to the photo, a text hit with the words to mark.
+    let has = |page: &str, id: u64| {
+        page.contains(&format!("/{id}\"")) || page.contains(&format!("/{id}?q="))
+    };
+
+    // The viewer offers to correct each find and each line.
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(v.status, StatusCode::OK);
+    assert!(v.body.contains("Something wrong?") && v.body.contains("action=\"fix/thing\""));
+    assert!(v.body.contains("action=\"fix/text\"") && v.body.contains("Sommerfcst"));
+    let p = search_until(&e, &c2, "snowboard", |p| has(p, x.0) && has(p, z.0)).await;
+    assert!(has(&p, z.0));
+
+    // p1 says X has no snowboard: gone for the whole house, Z kept.
+    let fix = |item: u64, rest: &str| format!("item={item}&n=0&back=v%2Fp1%2F{item}&{rest}");
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    // Not from another site, and not on a photo p1 may not see.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=right"),
+        &[("sec-fetch-site", "cross-site"), form[1]],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(z.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/text",
+        Some(&c1),
+        &fix(z.0, "now=wrong"),
+        &form,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    search_until(&e, &c2, "snowboard", |p| !has(p, x.0) && has(p, z.0)).await;
+    let things = req_with(&e.app, "GET", "/things", Some(&c1), false, &[])
+        .await
+        .body;
+    assert!(
+        !things.contains("Snowboard") && things.contains("Hund"),
+        "{things}"
+    );
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(v.body.contains("marked not there") && v.body.contains("No Snowboards in our house"));
+
+    // p2 says Z's snowboard is skis: two wrong snowboards teach a bar
+    // above both, and Z is found as skis.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c2),
+        &fix(z.0, "now=kind&kind=skis"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    search_until(&e, &c2, "ski", |p| has(p, z.0)).await;
+    let fixes = e.idx.fixes().unwrap();
+    assert!((fixes.bar(31) - 0.85).abs() < 1e-6, "{}", fixes.bar(31));
+    // The list and the download show each person only their photos' part.
+    let page1 = req_with(&e.app, "GET", "/corrections", Some(&c1), false, &[])
+        .await
+        .body;
+    let page2 = req_with(&e.app, "GET", "/corrections", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(
+        page1.contains(&format!("/{}\"", x.0)) && !page1.contains(&format!("/{}\"", z.0)),
+        "{page1}"
+    );
+    assert!(
+        page2.contains(&format!("/{}\"", z.0)) && page2.contains("Learned"),
+        "{page2}"
+    );
+    let dl1 = req_with(&e.app, "GET", "/corrections.jsonl", Some(&c1), false, &[]).await;
+    assert!(dl1.headers[header::CONTENT_DISPOSITION]
+        .to_str()
+        .unwrap()
+        .contains("attachment"));
+    assert!(
+        dl1.body.contains(&x.1) && !dl1.body.contains(&z.1),
+        "{}",
+        dl1.body
+    );
+    assert!(dl1.body.contains("\"model\":\"snowboard\""), "{}", dl1.body);
+    assert!(
+        !dl1.body.contains("user-1") && !dl1.body.contains("example.test"),
+        "{}",
+        dl1.body
+    );
+
+    // A kind never in the house, and back.
+    let off = "kind=Hund&off=1&back=things";
+    let r = req_with_body(&e.app, "POST", "/fix/off", Some(&c1), off, &form).await;
+    assert!(r.status.is_redirection());
+    let things = req_with(&e.app, "GET", "/things", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(!things.contains("Hund"), "{things}");
+    req_with_body(
+        &e.app,
+        "POST",
+        "/fix/off",
+        Some(&c1),
+        "kind=16&back=things",
+        &form,
+    )
+    .await;
+    let things = req_with(&e.app, "GET", "/things", Some(&c2), false, &[])
+        .await
+        .body;
+    assert!(things.contains("Hund"), "{things}");
+
+    // A line read wrong is corrected, and search finds the right word.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/text",
+        Some(&c1),
+        &fix(x.0, "now=save&text=Sommerfest"),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    search_until(&e, &c1, "sommerfest", |p| has(p, x.0)).await;
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(v.body.contains("read “Sommerfcst”"), "{}", v.body);
+
+    // Taken back, the snowboard is there again.
+    req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c1),
+        &fix(x.0, "now=undo"),
+        &form,
+    )
+    .await;
+    assert!(!e.idx.fixes().unwrap().things.contains_key(&x.1));
+    assert_eq!(e.idx.objects(&x.1).unwrap().len(), 2);
 }

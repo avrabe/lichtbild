@@ -1065,3 +1065,50 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+
+  - id: REQ-FIX-001
+    type: requirement
+    title: The house corrects the things found, and the correction stays
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner request 2026-11-20 ("we have a snowboard which we don't
+      have"): in the viewer, each thing found can be marked right, not
+      there, or another kind, and a kind can be marked never in the house.
+      Corrections are the household's (owner's decision): they hold for
+      everyone, in the viewer, on the Things page, in search and its
+      suggestions, and are kept apart from what the model found, so the
+      next look pass keeps them (matched by kind and box). From two wrong
+      finds of a kind on, a find of that kind needs a higher score than
+      the surest of them, never above a find of it marked right. A
+      Corrections page lists them, and a download holds them as one JSON
+      object per line (photo by content hash, box, what the model said,
+      what is right; no pictures, not who said it) to teach a model one
+      day. Correcting needs a same-site request on a photo the viewer may
+      see; the page and the download show only photos the viewer may see
+      and did not hide.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FIX-002
+    type: requirement
+    title: The house corrects the text read in a photo
+    status: implemented
+    release: v0.8.0
+    description: >
+      Each line read in a photo can be corrected or taken out, for the
+      whole house; the viewer and search use the corrected text, the
+      viewer says what was first read, and the next reading keeps the
+      correction (matched by the line's box or its text). It is listed on
+      the Corrections page and in the download like things, under the
+      same checks.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

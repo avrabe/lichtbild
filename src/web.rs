@@ -66,6 +66,37 @@ pub struct AppState {
     pub map: Arc<crate::map::MapState>,
     /// Faces and the names given to them (REQ-FACE-002, REQ-FACE-003).
     pub people: Arc<crate::people::People>,
+    /// Search rebuilt after a correction, one at a time (REQ-FIX-001).
+    pub rebuild: Arc<Later>,
+}
+
+/// A search rebuild in the background that runs again, once, if asked
+/// while it runs: many corrections in a row rebuild at most twice.
+#[derive(Debug, Default)]
+pub struct Later {
+    busy: std::sync::atomic::AtomicBool,
+    again: std::sync::atomic::AtomicBool,
+}
+
+/// Rebuild search in the background, after a correction.
+fn rebuild_search(st: &AppState) {
+    use std::sync::atomic::Ordering::SeqCst;
+    let later = st.rebuild.clone();
+    later.again.store(true, SeqCst);
+    if later.busy.swap(true, SeqCst) {
+        return;
+    }
+    let (search, idx, places) = (st.search.clone(), st.index.clone(), st.places.clone());
+    tokio::task::spawn_blocking(move || loop {
+        later.again.store(false, SeqCst);
+        if let Err(e) = search.rebuild(&idx, places.as_deref()) {
+            tracing::warn!("search rebuild after a correction failed: {e:#}");
+        }
+        later.busy.store(false, SeqCst);
+        if !later.again.load(SeqCst) || later.busy.swap(true, SeqCst) {
+            break;
+        }
+    });
 }
 
 impl AppState {
@@ -96,6 +127,7 @@ impl AppState {
             space: Arc::new(crate::embed::Space::with_dir(cfg.vision_dir.as_deref())),
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
             people: Arc::new(crate::people::People::default()),
+            rebuild: Arc::new(Later::default()),
         }
     }
 
@@ -152,6 +184,11 @@ pub fn router(state: AppState) -> Router {
         .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
         .route("/things", get(things_page))
+        .route("/corrections", get(corrections_page))
+        .route("/corrections.jsonl", get(corrections_jsonl))
+        .route("/fix/thing", axum::routing::post(fix_thing))
+        .route("/fix/text", axum::routing::post(fix_text))
+        .route("/fix/off", axum::routing::post(fix_off))
         .route("/trips", get(trips_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
@@ -1312,9 +1349,16 @@ pub fn render_transcript(id: u64, who: &str, tr: &crate::stt::Transcript) -> Str
 /// the picture (placed by assets/lichtbild.js from the corners in
 /// `data-quad`; a tap searches for the line). Lines holding a word of `q`
 /// are marked, and then the layer shows from the start.
-pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String) {
+pub fn render_text(text: &crate::ocr::Text, q: Option<&str>, fixes: &str) -> (String, String) {
     if text.state != "ok" || text.lines.is_empty() {
-        return (String::new(), String::new());
+        if fixes.is_empty() {
+            return (String::new(), String::new());
+        }
+        // Every line was taken out: the panel stays, to undo it.
+        return (
+            format!("<details class=\"textp\"><summary title=\"Text in the picture\" aria-label=\"Text in the picture\">Aa</summary><div class=\"xpanel\"><p class=\"dim\">No text left in this picture.</p>{fixes}</div></details>"),
+            String::new(),
+        );
     }
     let words: Vec<String> = q
         .unwrap_or("")
@@ -1374,6 +1418,7 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String)
     if docs > 1 {
         panel += "</section>";
     }
+    panel += fixes;
     panel += "</div></details>";
     layer += "</div>";
     (panel, layer)
@@ -1385,12 +1430,17 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>) -> (String, String)
 /// while the panel is open.
 pub fn render_things(
     who: &str,
-    objects: &[crate::objects::Object],
+    id: u64,
+    back: &str,
+    hash: &str,
+    raw: &[crate::objects::Object],
+    fixes: &crate::fixes::Fixes,
     similar: &[(u64, index::Record)],
 ) -> (String, String) {
-    if objects.is_empty() && similar.is_empty() {
+    if raw.is_empty() && similar.is_empty() {
         return (String::new(), String::new());
     }
+    let objects = &fixes.apply(hash, raw.to_vec());
     let mut kinds: Vec<(u8, usize)> = Vec::new();
     for o in objects {
         match kinds.iter_mut().find(|(k, _)| *k == o.kind) {
@@ -1430,6 +1480,7 @@ pub fn render_things(
         }
         panel += "</div>";
     }
+    panel += &render_thing_fixes(id, back, hash, raw, fixes);
     panel += "</div></details>";
     let mut layer = String::from(
         "<div class=\"boxlayer thinglayer\" data-for=\"things\" hidden aria-hidden=\"true\">",
@@ -1927,17 +1978,24 @@ async fn viewer(
     // Text read in the picture, if any.
     let (idx3, hash) = (st.index.clone(), rec.hash.clone());
     let read = if rec.video.is_none() {
-        tokio::task::spawn_blocking(move || idx3.text(&hash))
-            .await
-            .ok()
-            .and_then(|r| r.ok())
-            .flatten()
+        tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+            Ok(idx3.raw_text(&hash)?.map(|t| (t, idx3.text_fixes(&hash))))
+        })
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .flatten()
+        .and_then(|(t, f)| Some((t, f.ok()?)))
     } else {
         None
     };
+    let back = format!("v/{who}/{id}{vqs}");
     let (textp, layer) = read
-        .as_ref()
-        .map(|t| render_text(t, vq.q.as_deref()))
+        .map(|(raw, fixes)| {
+            let fixhtml = render_text_fixes(id, &back, &raw, &fixes);
+            let t = crate::fixes::apply_text(raw, &fixes);
+            render_text(&t, vq.q.as_deref(), &fixhtml)
+        })
         .unwrap_or_default();
     // Things in it, and pictures that look like it (one copy each, nothing
     // hidden, in this timeline's libraries).
@@ -1951,7 +2009,8 @@ async fn viewer(
         );
         let labels = scope(&viewer, &who).unwrap_or_default();
         let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let objects = idx4.objects(&hash)?;
+            let objects = idx4.raw_objects(&hash)?;
+            let fixes = idx4.fixes()?;
             let hidden = idx4.hidden(&me)?;
             let mut similar = Vec::new();
             for (ids, _) in space.similar(&hash, &labels, 40) {
@@ -1968,11 +2027,11 @@ async fn viewer(
                     break;
                 }
             }
-            Ok((objects, similar))
+            Ok((objects, fixes, hash, similar))
         })
         .await;
         match res {
-            Ok(Ok((o, s))) => render_things(&who, &o, &s),
+            Ok(Ok((o, f, h, s))) => render_things(&who, id, &back, &h, &o, &f, &s),
             _ => Default::default(),
         }
     } else {
@@ -2407,6 +2466,7 @@ async fn search(
         // What the results hold, to narrow them down (REQ-SEARCH-003).
         let pos = positions.get(&idx)?;
         let mut held: Vec<Vec<(crate::search::Kind, String)>> = Vec::new();
+        let fixes = idx.fixes()?;
         for (h, rec) in &out {
             let mut terms = Vec::new();
             if let Some(y) = rec
@@ -2417,7 +2477,11 @@ async fn search(
                 terms.push((crate::search::Kind::Date, y.to_string()));
             }
             if rec.video.is_none() {
-                let mut kinds: Vec<u8> = idx.objects(&rec.hash)?.iter().map(|o| o.kind).collect();
+                let mut kinds: Vec<u8> = fixes
+                    .apply(&rec.hash, idx.raw_objects(&rec.hash)?)
+                    .iter()
+                    .map(|o| o.kind)
+                    .collect();
                 kinds.sort_unstable();
                 kinds.dedup();
                 for k in kinds {
@@ -3929,7 +3993,7 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
             name = esc(many),
         );
     }
-    body += "</section>";
+    body += "</section><p class=\"dim\">Something found that is not there? Say so in the photo, under ◎ “Something wrong?”; <a href=\"corrections\">corrections</a> hold for the house.</p>";
     page_for(&st, "lichtbild things", &body).into_response()
 }
 
@@ -5106,6 +5170,558 @@ fn render_faces(
     }
     let seen = seen_people(idx, people, viewer).unwrap_or_default();
     o + "</ul>" + &names_list(idx, &seen) + "</div></details>"
+}
+
+// ---- Corrections (REQ-FIX-001, REQ-FIX-002) ----
+
+/// The kinds of thing to pick from, German and English.
+fn kinds_datalist() -> String {
+    let mut s = String::from("<datalist id=\"kinds\">");
+    for (en, de, _) in crate::objects::KINDS {
+        s += &format!(
+            "<option value=\"{}\"><option value=\"{}\">",
+            esc(de),
+            esc(en)
+        );
+    }
+    s + "</datalist>"
+}
+
+/// The kind a name stands for: German singular or plural, or English.
+fn kind_of(name: &str) -> Option<u8> {
+    let n = crate::search::fold(name.trim());
+    crate::objects::KINDS
+        .iter()
+        .position(|(en, de, pl)| [en, de, pl].iter().any(|w| crate::search::fold(w) == n))
+        .map(|k| k as u8)
+}
+
+/// The "Something wrong?" part of the things panel: each find with what
+/// the house said about it, and buttons to say it is right, not there or
+/// another kind.
+fn render_thing_fixes(
+    id: u64,
+    back: &str,
+    hash: &str,
+    raw: &[crate::objects::Object],
+    fixes: &crate::fixes::Fixes,
+) -> String {
+    if raw.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "<details class=\"fix\"><summary>Something wrong?</summary><p class=\"dim\">What you say here holds for everyone in the house, and the next look at the photos keeps it. <a href=\"corrections\">All corrections</a></p><ul class=\"fixlist\">",
+    );
+    for (n, o) in raw.iter().enumerate() {
+        let about = fixes.about(hash, o);
+        let state = match about {
+            Some(f) if f.right() => "marked right".to_string(),
+            Some(f) => match f.now {
+                None => "marked not there".to_string(),
+                Some(k) => format!("is a {}", crate::fixes::kind_name(k)),
+            },
+            None if fixes.off.contains_key(&o.kind) => "never in our house".to_string(),
+            None if o.score < fixes.bar(o.kind) => {
+                "left out: too unsure, after earlier corrections".to_string()
+            }
+            None => String::new(),
+        };
+        let (en, _, many) = crate::objects::KINDS[o.kind as usize];
+        s += &format!(
+            "<li><b>{name}</b> <span class=\"dim\">{pct:.0} %</span> <i>{state}</i>\
+             <form method=\"post\" action=\"fix/thing\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"n\" value=\"{n}\"><input type=\"hidden\" name=\"back\" value=\"{b}\">\
+             <button type=\"submit\" name=\"now\" value=\"right\" title=\"It is there\" aria-label=\"It is there\">✓</button>\
+             <button type=\"submit\" name=\"now\" value=\"wrong\" title=\"It is not there\" aria-label=\"It is not there\">✕</button>\
+             <input name=\"kind\" list=\"kinds\" placeholder=\"It is a…\" aria-label=\"It is a…\" size=\"9\"><button type=\"submit\" name=\"now\" value=\"kind\">Change</button>{undo}</form>{off}</li>",
+            name = esc(o.name()),
+            pct = o.score * 100.0,
+            state = esc(&state),
+            b = esc(back),
+            undo = if about.is_some() {
+                "<button type=\"submit\" name=\"now\" value=\"undo\">Undo</button>"
+            } else {
+                ""
+            },
+            off = if about.is_some_and(|f| !f.right()) && !fixes.off.contains_key(&o.kind) {
+                format!(
+                    "<form method=\"post\" action=\"fix/off\"><input type=\"hidden\" name=\"kind\" value=\"{k}\"><input type=\"hidden\" name=\"off\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" title=\"Leave out every {en} found, in every photo\">No {many} in our house</button></form>",
+                    k = o.kind,
+                    b = esc(back),
+                    en = esc(en),
+                    many = esc(many),
+                )
+            } else {
+                String::new()
+            },
+        );
+    }
+    s += "</ul>";
+    s += &kinds_datalist();
+    s += "</details>";
+    s
+}
+
+/// The "Something wrong?" part of the text panel: each line read, to
+/// correct or take out.
+fn render_text_fixes(
+    id: u64,
+    back: &str,
+    raw: &crate::ocr::Text,
+    fixes: &[crate::fixes::TextFix],
+) -> String {
+    if raw.state != "ok" || raw.lines.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "<details class=\"fix\"><summary>Something wrong?</summary><p class=\"dim\">Correct a line or take it out, for everyone in the house; the next reading keeps it.</p><ul class=\"fixlist\">",
+    );
+    for (n, l) in raw.lines.iter().enumerate() {
+        let about = crate::fixes::text_about(fixes, crate::fixes::quad_box(&l.quad), &l.text);
+        let (value, state) = match about {
+            Some(f) => match &f.now {
+                Some(t) => (t.as_str(), format!("read “{}”", l.text)),
+                None => (l.text.as_str(), "taken out".to_string()),
+            },
+            None => (l.text.as_str(), String::new()),
+        };
+        s += &format!(
+            "<li><form method=\"post\" action=\"fix/text\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"n\" value=\"{n}\"><input type=\"hidden\" name=\"back\" value=\"{b}\">\
+             <input name=\"text\" value=\"{v}\" aria-label=\"Line {line}\" maxlength=\"500\"><button type=\"submit\" name=\"now\" value=\"save\">Save</button>\
+             <button type=\"submit\" name=\"now\" value=\"wrong\" title=\"There is no such text\" aria-label=\"There is no such text\">✕</button>{undo}</form> <i class=\"dim\">{state}</i></li>",
+            b = esc(back),
+            v = esc(value),
+            line = n + 1,
+            state = esc(&state),
+            undo = if about.is_some() {
+                "<button type=\"submit\" name=\"now\" value=\"undo\">Undo</button>"
+            } else {
+                ""
+            },
+        );
+    }
+    s + "</ul></details>"
+}
+
+#[derive(Deserialize)]
+pub struct FixForm {
+    item: u64,
+    /// The find or line, by its place in what the model returned.
+    n: usize,
+    /// "right", "wrong", "kind", "save" or "undo".
+    now: String,
+    kind: Option<String>,
+    text: Option<String>,
+    back: Option<String>,
+}
+
+/// The photo `item` if the viewer may see it.
+fn fix_photo(
+    idx: &index::Index,
+    viewer: &Viewer,
+    item: u64,
+) -> anyhow::Result<Option<index::Record>> {
+    Ok(idx
+        .locate(item)?
+        .filter(|r| viewer.may_see(&r.label) && r.video.is_none()))
+}
+
+/// POST /fix/thing: a thing found is right, not there, another kind, or
+/// the word about it is taken back.
+async fn fix_thing(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<FixForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let back = f.back.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<StatusCode> {
+        let Some(rec) = fix_photo(&idx, &viewer, f.item)? else {
+            return Ok(StatusCode::NOT_FOUND);
+        };
+        let raw = idx.raw_objects(&rec.hash)?;
+        let Some(o) = raw.get(f.n) else {
+            return Ok(StatusCode::NOT_FOUND);
+        };
+        let now = match f.now.as_str() {
+            "right" => Some(o.kind),
+            "wrong" => None,
+            "kind" => match f.kind.as_deref().and_then(kind_of) {
+                Some(k) => Some(k),
+                None => return Ok(StatusCode::BAD_REQUEST),
+            },
+            "undo" => {
+                let fixes = idx.fixes()?;
+                let list = fixes.things.get(&rec.hash).cloned().unwrap_or_default();
+                let at =
+                    crate::fixes::about(&list, o).and_then(|a| list.iter().position(|x| x == a));
+                idx.fix_thing(&rec.hash, None, at)?;
+                return Ok(StatusCode::OK);
+            }
+            _ => return Ok(StatusCode::BAD_REQUEST),
+        };
+        let fix = crate::fixes::ThingFix {
+            kind: o.kind,
+            bbox: o.bbox,
+            score: o.score,
+            now,
+            by: me,
+            at: now_secs(),
+        };
+        idx.fix_thing(&rec.hash, Some(fix), None)?;
+        Ok(StatusCode::OK)
+    })
+    .await;
+    fixed(&st, res, back.as_deref())
+}
+
+/// After a correction: search learns it in the background, then back.
+fn fixed(
+    st: &AppState,
+    res: Result<anyhow::Result<StatusCode>, tokio::task::JoinError>,
+    back: Option<&str>,
+) -> Response {
+    match res {
+        Ok(Ok(StatusCode::OK)) => {
+            rebuild_search(st);
+            back_to(st, back)
+        }
+        Ok(Ok(code)) => code.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /fix/text: a line read is corrected, taken out, or the
+/// correction is taken back.
+async fn fix_text(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<FixForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let back = f.back.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<StatusCode> {
+        let Some(rec) = fix_photo(&idx, &viewer, f.item)? else {
+            return Ok(StatusCode::NOT_FOUND);
+        };
+        let Some(l) = idx
+            .raw_text(&rec.hash)?
+            .and_then(|t| t.lines.into_iter().nth(f.n))
+        else {
+            return Ok(StatusCode::NOT_FOUND);
+        };
+        let bbox = crate::fixes::quad_box(&l.quad);
+        let now = match f.now.as_str() {
+            "wrong" => None,
+            "save" => {
+                let t = f.text.as_deref().unwrap_or("").trim();
+                if t.is_empty() || t.chars().count() > 500 {
+                    return Ok(StatusCode::BAD_REQUEST);
+                }
+                if t == l.text {
+                    // Unchanged: nothing to say, an earlier word goes.
+                    let fixes = idx.text_fixes(&rec.hash)?;
+                    let at = crate::fixes::text_about(&fixes, bbox, &l.text)
+                        .and_then(|a| fixes.iter().position(|x| x == a));
+                    idx.fix_text(&rec.hash, None, at)?;
+                    return Ok(StatusCode::OK);
+                }
+                Some(t.to_string())
+            }
+            "undo" => {
+                let fixes = idx.text_fixes(&rec.hash)?;
+                let at = crate::fixes::text_about(&fixes, bbox, &l.text)
+                    .and_then(|a| fixes.iter().position(|x| x == a));
+                idx.fix_text(&rec.hash, None, at)?;
+                return Ok(StatusCode::OK);
+            }
+            _ => return Ok(StatusCode::BAD_REQUEST),
+        };
+        let fix = crate::fixes::TextFix {
+            bbox,
+            was: l.text,
+            now,
+            by: me,
+            at: now_secs(),
+        };
+        idx.fix_text(&rec.hash, Some(fix), None)?;
+        Ok(StatusCode::OK)
+    })
+    .await;
+    fixed(&st, res, back.as_deref())
+}
+
+#[derive(Deserialize)]
+pub struct OffForm {
+    /// A kind's number, or its name typed.
+    kind: String,
+    /// "1": never in the house; anything else: it may be again.
+    off: Option<String>,
+    back: Option<String>,
+}
+
+/// POST /fix/off: a kind is never in the house, or may be again.
+async fn fix_off(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<OffForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let kind = match f.kind.parse::<u8>() {
+        Ok(k) if (k as usize) < crate::objects::KINDS.len() => Some(k),
+        Ok(_) => None,
+        Err(_) => kind_of(&f.kind),
+    };
+    let Some(kind) = kind else {
+        return StatusCode::BAD_REQUEST.into_response();
+    };
+    let idx = st.index.clone();
+    let mark = (f.off.as_deref() == Some("1")).then(|| crate::fixes::Mark {
+        by: person(&viewer),
+        at: now_secs(),
+    });
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<StatusCode> {
+        idx.set_kind_off(kind, mark.as_ref())?;
+        Ok(StatusCode::OK)
+    })
+    .await;
+    fixed(&st, res, f.back.as_deref())
+}
+
+/// The photos the viewer may see and did not hide, by content: hash ->
+/// (the first such item, its library).
+fn seen_photos(
+    idx: &index::Index,
+    viewer: &Viewer,
+) -> anyhow::Result<HashMap<String, (u64, String)>> {
+    let hidden = idx.hidden(&person(viewer))?;
+    let mut at: HashMap<String, (u64, String)> = HashMap::new();
+    for (id, r) in idx.all()? {
+        if r.missing || r.video.is_some() || !viewer.may_see(&r.label) || hidden.contains(&id) {
+            continue;
+        }
+        match at.get_mut(&r.hash) {
+            Some(e) if e.0 <= id => {}
+            Some(e) => *e = (id, r.label),
+            None => {
+                at.insert(r.hash, (id, r.label));
+            }
+        }
+    }
+    Ok(at)
+}
+
+/// GET /corrections: what the house corrected in the photos the viewer
+/// sees, the kinds never in the house and the bars learned.
+async fn corrections_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let seen = seen_photos(&idx, &viewer)?;
+        let fixes = idx.fixes()?;
+        let mut body = String::from(
+            "<h1>Corrections</h1><p class=\"dim\">What the house said the looking got wrong, in your photos. Corrections hold for everyone in the house and stay when the photos are looked at again. Make them under “Something wrong?” in a photo’s ◎ and Aa panels. <a href=\"corrections.jsonl\" download>Download them all</a> (no pictures, only which find was wrong), to teach a model one day.</p>",
+        );
+        // Kinds never in the house.
+        body += "<h2>Never in our house</h2>";
+        let mut off: Vec<(&u8, &crate::fixes::Mark)> = fixes.off.iter().collect();
+        off.sort_by_key(|(k, _)| crate::fixes::kind_name(**k));
+        if off.is_empty() {
+            body += "<p class=\"dim\">Nothing yet.</p>";
+        } else {
+            body += "<ul class=\"fixlist\">";
+            for (k, _) in off {
+                body += &format!(
+                    "<li><b>{}</b><form method=\"post\" action=\"fix/off\"><input type=\"hidden\" name=\"kind\" value=\"{k}\"><input type=\"hidden\" name=\"back\" value=\"corrections\"><button type=\"submit\">Find them again</button></form></li>",
+                    esc(crate::objects::KINDS[*k as usize].2),
+                );
+            }
+            body += "</ul>";
+        }
+        body += "<form method=\"post\" action=\"fix/off\" class=\"fixadd\"><input type=\"hidden\" name=\"off\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"corrections\"><input name=\"kind\" list=\"kinds\" placeholder=\"A kind of thing\" aria-label=\"A kind of thing never in our house\" required><button type=\"submit\">Never in our house</button></form>";
+        body += &kinds_datalist();
+        // Bars learned.
+        let mut bars: Vec<(u8, f32)> = (0..crate::objects::KINDS.len() as u8)
+            .map(|k| (k, fixes.bar(k)))
+            .filter(|(_, b)| *b > crate::objects::MIN_SCORE)
+            .collect();
+        if !bars.is_empty() {
+            bars.sort_by_key(|(k, _)| crate::fixes::kind_name(*k));
+            body += "<h2>Learned</h2><p class=\"dim\">Kinds marked wrong more than once are kept only when the looking is surer than it was then.</p><ul class=\"fixlist\">";
+            for (k, b) in bars {
+                body += &format!(
+                    "<li><b>{}</b> from {:.0} % on</li>",
+                    esc(crate::objects::KINDS[k as usize].2),
+                    b * 100.0
+                );
+            }
+            body += "</ul>";
+        }
+        // Things.
+        let mut rows: Vec<(u64, String, String, String)> = Vec::new();
+        for (hash, list) in &fixes.things {
+            let Some((id, label)) = seen.get(hash) else {
+                continue;
+            };
+            for f in list {
+                let said = match f.now {
+                    _ if f.right() => "right".to_string(),
+                    None => "not there".to_string(),
+                    Some(k) => format!("a {}", crate::fixes::kind_name(k)),
+                };
+                rows.push((*id, label.clone(), crate::fixes::kind_name(f.kind).to_string(), said));
+            }
+        }
+        rows.sort();
+        body += &format!("<h2>Things <span class=\"dim\">{}</span></h2>", rows.len());
+        if rows.is_empty() {
+            body += "<p class=\"dim\">Nothing corrected yet.</p>";
+        } else {
+            body += "<ul class=\"fixlist fixrows\">";
+            for (id, label, was, now) in &rows {
+                body += &format!(
+                    "<li><a href=\"v/{l}/{id}\"><img src=\"thumb/{id}\" loading=\"lazy\" alt=\"\"></a> {was} → <b>{now}</b></li>",
+                    l = esc(label),
+                    was = esc(was),
+                    now = esc(now),
+                );
+            }
+            body += "</ul>";
+        }
+        // Text.
+        let mut lines: Vec<(u64, String, String, Option<String>)> = Vec::new();
+        for (hash, list) in idx.all_text_fixes()? {
+            let Some((id, label)) = seen.get(&hash) else {
+                continue;
+            };
+            for f in list {
+                lines.push((*id, label.clone(), f.was, f.now));
+            }
+        }
+        lines.sort();
+        body += &format!("<h2>Text <span class=\"dim\">{}</span></h2>", lines.len());
+        if lines.is_empty() {
+            body += "<p class=\"dim\">Nothing corrected yet.</p>";
+        } else {
+            body += "<ul class=\"fixlist fixrows\">";
+            for (id, label, was, now) in &lines {
+                body += &format!(
+                    "<li><a href=\"v/{l}/{id}\"><img src=\"thumb/{id}\" loading=\"lazy\" alt=\"\"></a> “{was}” → {now}</li>",
+                    l = esc(label),
+                    was = esc(was),
+                    now = match now {
+                        Some(t) => format!("<b>“{}”</b>", esc(t)),
+                        None => "<b>no text</b>".into(),
+                    },
+                );
+            }
+            body += "</ul>";
+        }
+        Ok(body)
+    })
+    .await;
+    match res {
+        Ok(Ok(body)) => page_for(&st, "lichtbild corrections", &body).into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /corrections.jsonl: every correction in the photos the viewer sees,
+/// a JSON object per line, to teach a model: which photo (by content
+/// hash), where, what the model said and what is right. No pictures, and
+/// not who said it.
+async fn corrections_jsonl(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<String> {
+        let seen = seen_photos(&idx, &viewer)?;
+        let fixes = idx.fixes()?;
+        let mut out = String::new();
+        let mut line = |v: serde_json::Value| {
+            out += &v.to_string();
+            out.push('\n');
+        };
+        let en = |k: u8| crate::objects::KINDS.get(k as usize).map_or("?", |t| t.0);
+        let mut things: Vec<_> = fixes
+            .things
+            .iter()
+            .filter(|(h, _)| seen.contains_key(*h))
+            .collect();
+        things.sort_by_key(|(h, _)| *h);
+        for (h, list) in things {
+            for f in list {
+                line(serde_json::json!({
+                    "type": "thing", "photo": h, "box": f.bbox,
+                    "model": en(f.kind), "score": f.score, "is": f.now.map(en),
+                }));
+            }
+        }
+        let mut off: Vec<u8> = fixes.off.keys().copied().collect();
+        off.sort_unstable();
+        for k in off {
+            line(serde_json::json!({"type": "never", "kind": en(k)}));
+        }
+        let mut texts = idx.all_text_fixes()?;
+        texts.retain(|(h, _)| seen.contains_key(h));
+        texts.sort_by(|a, b| a.0.cmp(&b.0));
+        for (h, list) in texts {
+            for f in list {
+                line(serde_json::json!({
+                    "type": "text", "photo": h, "box": f.bbox, "read": f.was, "is": f.now,
+                }));
+            }
+        }
+        // Faces: named faces say who they are, "not them" who they are not
+        // (people by the house's number, not by name).
+        let mut named = idx.named_faces()?;
+        named.retain(|((h, _), _)| seen.contains_key(h));
+        named.sort();
+        for ((h, n), p) in named {
+            line(serde_json::json!({"type": "face", "photo": h, "face": n, "person": p}));
+        }
+        let mut not = idx.not_faces()?;
+        not.retain(|(h, _, _)| seen.contains_key(h));
+        not.sort();
+        for (h, n, p) in not {
+            line(serde_json::json!({"type": "face", "photo": h, "face": n, "not_person": p}));
+        }
+        Ok(out)
+    })
+    .await;
+    match res {
+        Ok(Ok(body)) => (
+            [
+                (header::CONTENT_TYPE, "application/x-ndjson; charset=utf-8"),
+                (
+                    header::CONTENT_DISPOSITION,
+                    "attachment; filename=\"lichtbild-corrections.jsonl\"",
+                ),
+                (header::CACHE_CONTROL, "private, no-store"),
+            ],
+            body,
+        )
+            .into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
 }
 
 #[cfg(test)]

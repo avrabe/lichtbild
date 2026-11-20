@@ -792,3 +792,44 @@ artifacts:
       - type: satisfies
         target: REQ-FACE-003
 
+
+  - id: DD-026
+    type: design-decision
+    title: Corrections kept beside the models' finds, applied when read
+    status: implemented
+    release: v0.8.0
+    description: >
+      The detector keeps finds from 0.7 and knows 80 COCO kinds, so a
+      house without a snowboard still gets snowboards. The owner wants
+      to say so where the mistake shows, and to refine models later.
+    fields:
+      decision: >
+        Three redb tables: corrections of things per content hash (kind,
+        box and score the model gave, what is right, who, when), kinds
+        never in the house, and corrections of text lines per content
+        hash (box, what was read, what it says). The models' results stay
+        as they were; every reader (viewer, Things page, search build,
+        narrowing) applies the corrections: a word about a find (same
+        kind, box overlap at least 0.5) wins, then a kind never in the
+        house and the kind's learned bar leave it out. The bar is
+        learned from the wrong finds, from two of a kind on: just above
+        the surest of them, at most 0.95, never above the least sure find
+        marked right. Search is rebuilt in the background after a
+        correction, at most one rebuild running and one more queued.
+      rationale: >
+        Kept apart, a correction survives a new model version and can be
+        taken back; matched by box, it still finds its find when the next
+        model puts the box a little elsewhere. A bar per kind stops the
+        same mistake in photos nobody looked at, without training
+        anything in the house. The download is the training set for a
+        later fine-tune, with no picture in it.
+      alternatives: >
+        Deleting the find from the stored results (lost at the next
+        pass, cannot be undone); one global threshold (hides good finds
+        of every other kind); fine-tuning the detector in the house (too
+        heavy for the Pi, and needs many more corrections first).
+    links:
+      - type: satisfies
+        target: REQ-FIX-001
+      - type: satisfies
+        target: REQ-FIX-002

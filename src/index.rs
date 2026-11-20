@@ -77,6 +77,14 @@ const PEOPLE_SEQ: TableDefinition<&str, u64> = TableDefinition::new("people_seq"
 const FACE_PERSON: TableDefinition<(&str, u32), u64> = TableDefinition::new("face_person");
 /// (content hash, face number, person id) -> (): "this is not them".
 const FACE_NOT: TableDefinition<(&str, u32, u64), ()> = TableDefinition::new("face_not");
+/// Corrections of things found (REQ-FIX-001): content hash -> JSON
+/// `[fixes::ThingFix]`.
+const THING_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("thing_fixes");
+/// Kinds never in the house (REQ-FIX-001): kind -> JSON `fixes::Mark`.
+const KIND_OFF: TableDefinition<u8, &[u8]> = TableDefinition::new("kind_off");
+/// Corrections of text read (REQ-FIX-002): content hash -> JSON
+/// `[fixes::TextFix]`.
+const TEXT_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("text_fixes");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -251,6 +259,9 @@ impl Index {
             w.open_table(PEOPLE_SEQ)?;
             w.open_table(FACE_PERSON)?;
             w.open_table(FACE_NOT)?;
+            w.open_table(THING_FIXES)?;
+            w.open_table(KIND_OFF)?;
+            w.open_table(TEXT_FIXES)?;
         }
         w.commit()?;
         Ok(Index {
@@ -925,6 +936,14 @@ impl Index {
 
     /// The text read from a picture, by content hash.
     pub fn text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
+        let fixes = self.text_fixes(hash)?;
+        Ok(self
+            .raw_text(hash)?
+            .map(|t| crate::fixes::apply_text(t, &fixes)))
+    }
+
+    /// The text as it was read, without the house's corrections.
+    pub fn raw_text(&self, hash: &str) -> Result<Option<crate::ocr::Text>> {
         let r = self.db.begin_read()?;
         let t = r.open_table(TEXTS)?;
         match t.get(hash)? {
@@ -933,6 +952,65 @@ impl Index {
             )),
             None => Ok(None),
         }
+    }
+
+    /// The corrections of the text read in a photo.
+    pub fn text_fixes(&self, hash: &str) -> Result<Vec<crate::fixes::TextFix>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXT_FIXES)?;
+        Ok(match t.get(hash)? {
+            Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+            None => Vec::new(),
+        })
+    }
+
+    /// Every correction of text: (content hash, corrections).
+    pub fn all_text_fixes(&self) -> Result<Vec<(String, Vec<crate::fixes::TextFix>)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(TEXT_FIXES)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push((
+                k.value().to_string(),
+                serde_json::from_slice(v.value()).unwrap_or_default(),
+            ));
+        }
+        Ok(out)
+    }
+
+    /// Put a correction of a line, replacing an earlier one of that line;
+    /// with `undo`, the correction number `undo` is taken out instead.
+    pub fn fix_text(
+        &self,
+        hash: &str,
+        fix: Option<crate::fixes::TextFix>,
+        undo: Option<usize>,
+    ) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(TEXT_FIXES)?;
+            let mut v: Vec<crate::fixes::TextFix> = match t.get(hash)? {
+                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            if let Some(i) = undo.filter(|i| *i < v.len()) {
+                v.remove(i);
+            }
+            if let Some(f) = fix {
+                v.retain(|o| {
+                    crate::fixes::text_about(std::slice::from_ref(o), f.bbox, &f.was).is_none()
+                });
+                v.push(f);
+            }
+            if v.is_empty() {
+                t.remove(hash)?;
+            } else {
+                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
     }
 
     pub fn set_text(&self, hash: &str, text: &crate::ocr::Text) -> Result<()> {
@@ -1208,14 +1286,91 @@ impl Index {
         Ok(out)
     }
 
-    /// The things found in a picture, by content hash.
+    /// The things in a picture as the house says they are (REQ-FIX-001).
     pub fn objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
+        Ok(self.fixes()?.apply(hash, self.raw_objects(hash)?))
+    }
+
+    /// The things the detector found in a picture, by content hash.
+    pub fn raw_objects(&self, hash: &str) -> Result<Vec<crate::objects::Object>> {
         let r = self.db.begin_read()?;
         let t = r.open_table(OBJECTS)?;
         match t.get(hash)? {
             Some(v) => Ok(serde_json::from_slice(v.value()).unwrap_or_default()),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Every correction of things and the kinds never in the house.
+    pub fn fixes(&self) -> Result<crate::fixes::Fixes> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(THING_FIXES)?;
+        let mut things = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            things.insert(
+                k.value().to_string(),
+                serde_json::from_slice(v.value()).unwrap_or_default(),
+            );
+        }
+        let t = r.open_table(KIND_OFF)?;
+        let mut off = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(m) = serde_json::from_slice(v.value()) {
+                off.insert(k.value(), m);
+            }
+        }
+        Ok(crate::fixes::Fixes::new(things, off))
+    }
+
+    /// Put a word about a thing found, replacing an earlier word about the
+    /// same find; with `undo`, the word number `undo` is taken out instead.
+    pub fn fix_thing(
+        &self,
+        hash: &str,
+        fix: Option<crate::fixes::ThingFix>,
+        undo: Option<usize>,
+    ) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(THING_FIXES)?;
+            let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
+                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+                None => Vec::new(),
+            };
+            if let Some(i) = undo.filter(|i| *i < v.len()) {
+                v.remove(i);
+            }
+            if let Some(f) = fix {
+                crate::fixes::put(&mut v, f);
+            }
+            if v.is_empty() {
+                t.remove(hash)?;
+            } else {
+                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Mark a kind as never in the house, or take the mark off.
+    pub fn set_kind_off(&self, kind: u8, mark: Option<&crate::fixes::Mark>) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(KIND_OFF)?;
+            match mark {
+                Some(m) => {
+                    t.insert(kind, serde_json::to_vec(m)?.as_slice())?;
+                }
+                None => {
+                    t.remove(kind)?;
+                }
+            }
+        }
+        w.commit()?;
+        Ok(())
     }
 
     /// The things found in the live photos of `labels` that `keep` lets
@@ -1229,6 +1384,7 @@ impl Index {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
         let objects = r.open_table(OBJECTS)?;
+        let fixes = self.fixes()?;
         let mut seen = std::collections::HashSet::new();
         // kind -> (photos, best score, its id)
         let mut by: HashMap<u8, (u64, f32, u64)> = HashMap::new();
@@ -1247,8 +1403,10 @@ impl Index {
             let Some(raw) = objects.get(rec.hash.as_str())? else {
                 continue;
             };
-            let found: Vec<crate::objects::Object> =
-                serde_json::from_slice(raw.value()).unwrap_or_default();
+            let found = fixes.apply(
+                &rec.hash,
+                serde_json::from_slice(raw.value()).unwrap_or_default(),
+            );
             let mut kinds: Vec<(u8, f32)> = Vec::new();
             for o in found {
                 match kinds.iter_mut().find(|(k, _)| *k == o.kind) {

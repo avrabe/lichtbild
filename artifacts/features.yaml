@@ -344,3 +344,26 @@ artifacts:
       - type: satisfies
         target: REQ-FACE-003
 
+
+  - id: FEAT-016
+    type: feature
+    title: Correct what the looking got wrong
+    status: implemented
+    release: v0.8.0
+    description: >
+      Owner request 2026-11-20: collect what is not right, fix it where it
+      shows, and keep it to refine the models one day. In this release
+      (owner's decision), shared in the house.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A snowboard that is not there is gone from the photo, Things and search after one tap, for everyone
+        - After two wrong snowboards, other photos' unsure snowboards are left out too
+        - "\"No snowboards in our house\" leaves out every snowboard, and can be taken back"
+        - A misread line is corrected in place and search finds the right word
+        - The corrections download teaches a model which find was wrong, with no picture in it
+    links:
+      - type: satisfies
+        target: REQ-FIX-001
+      - type: satisfies
+        target: REQ-FIX-002

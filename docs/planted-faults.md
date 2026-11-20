@@ -158,6 +158,13 @@ at nice 0.
 | F147 | REQ-FACE-003 | naming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
 | F148 | REQ-FACE-003 | renaming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
 | F150 | REQ-FACE-002 | a batch runs on past a path that is not UTF-8 | `a_bad_picture_or_a_hang_fails_alone_in_a_batch` |
+| F151 | REQ-FIX-001 | search keeps a find marked wrong | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F152 | REQ-FIX-001 | a photo the viewer may not see can be corrected | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F153 | REQ-FIX-001 | the corrections page lists others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F154 | REQ-FIX-001 | a kind never in the house is still found | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F155 | REQ-FIX-001 | wrong finds never raise their kind's bar | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F156 | REQ-FIX-002 | a corrected line is searched as first read | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F157 | REQ-FIX-001 | the download holds others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

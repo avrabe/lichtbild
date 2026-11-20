@@ -8,6 +8,7 @@ pub mod datadir;
 pub mod dups;
 pub mod embed;
 pub mod faces;
+pub mod fixes;
 pub mod index;
 pub mod map;
 pub mod media;

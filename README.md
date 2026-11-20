@@ -9,6 +9,7 @@ lichtbild indexes photo folders read-only, in place, without copying or moving t
 - a world map of where photos and videos were taken, and trips found from it;
 - one search box over what was said in videos, the text in pictures, the things in them (Katze, Fahrrad), places, dates, seasons and holidays, or a description in your own words, with suggestions as you type;
 - the people in the photos: faces grouped by person, named once for the whole house, found by name in search; each person sees only their own photos of anyone.
+- corrections where the mistake shows: a thing found that is not there, another kind, a kind never in the house, a line misread; they hold for the house, survive the next look at the photos, raise the bar for a kind that keeps being wrong, and download as a file to teach a model one day.
 
 Everything runs on the home server. The map tiles come from a local file, and no photo, place or face leaves the house.
 

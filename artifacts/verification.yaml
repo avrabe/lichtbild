@@ -1516,3 +1516,35 @@ artifacts:
       - type: verifies
         target: REQ-FACE-002
 
+
+  - id: VER-108
+    type: verification
+    title: Corrections are the house's and seen only with one's photos
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "corrections_are_the_houses_and_seen_only_with_ones_photos"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth corrections_are_the_houses_and_seen_only_with_ones_photos"
+    links:
+      - type: verifies
+        target: REQ-FIX-001
+      - type: verifies
+        target: REQ-FIX-002
+
+  - id: VER-109
+    type: verification
+    title: Corrections match the next model's finds and teach a bar per kind
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "fixes::tests"
+      test-location: src/fixes.rs
+      steps:
+        - run: "cargo test --lib fixes"
+    links:
+      - type: verifies
+        target: REQ-FIX-001
+      - type: verifies
+        target: REQ-FIX-002

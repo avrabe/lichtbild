@@ -479,12 +479,13 @@ impl Search {
         let mut vocab = Vocab::default();
         // The same content twice in a library counts once.
         let mut seen: HashSet<(String, String)> = HashSet::new();
+        let fixes = idx.fixes()?;
         for (id, rec) in items {
             if rec.missing {
                 continue;
             }
             let at = pos.get(&id).map(|p| (p.lat, p.lon));
-            let objects = idx.objects(&rec.hash)?;
+            let objects = fixes.apply(&rec.hash, idx.raw_objects(&rec.hash)?);
             let count = seen.insert((rec.label.clone(), rec.hash.clone()));
             let label = rec.label.as_str();
             if count {
