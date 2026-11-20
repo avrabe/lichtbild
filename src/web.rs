@@ -1705,18 +1705,25 @@ async fn show(
             },
             None => None,
         };
-        let items = idx.timeline_where(
-            &labels,
-            start.as_ref().map(|(t, i)| (t.as_str(), *i)),
-            SHOW_MAX,
-            |id, rec| {
-                rec.video.is_none()
-                    && match &favs {
-                        Some(f) => f.contains(&id) && !hidden.contains(&id),
-                        None => dups.shown(id, &labels, &hidden).shown,
-                    }
-            },
-        )?;
+        let items = match &favs {
+            // A chosen set is read by id, not by scanning the library.
+            Some(f) => {
+                let mut v = idx.items_of(f.iter().copied(), &labels, |id, rec| {
+                    rec.video.is_none() && !hidden.contains(&id)
+                })?;
+                if let Some((t, i)) = &start {
+                    v.retain(|it| (it.taken_local.as_str(), it.id) < (t.as_str(), *i));
+                }
+                v.truncate(SHOW_MAX);
+                v
+            }
+            None => idx.timeline_where(
+                &labels,
+                start.as_ref().map(|(t, i)| (t.as_str(), *i)),
+                SHOW_MAX,
+                |id, rec| rec.video.is_none() && dups.shown(id, &labels, &hidden).shown,
+            )?,
+        };
         let runs = match favs {
             Some(_) => vec![1; items.len()],
             None => series(&items, space.as_deref()),
@@ -2053,14 +2060,23 @@ async fn suggest(
     let typing = !q.ends_with(char::is_whitespace);
     let last = q.split_whitespace().last().filter(|_| typing).unwrap_or("");
     let offer = crate::search::fav_completion(last).filter(|_| !fav);
-    let ask = match (fav, typing) {
+    // "Katze ♥": the favourites word was the last one typed, so "Katze"
+    // is finished, not being typed.
+    let done = !typing || crate::search::split_fav(last).1;
+    let ask = match (fav, done) {
         (false, _) => q.clone(),
-        (true, false) if !rest.is_empty() => format!("{rest} "),
+        (true, true) if !rest.is_empty() => format!("{rest} "),
         (true, _) => rest,
     };
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // As many as the Favourites page shows: in these libraries and
+        // not hidden.
         let n = match offer {
-            Some(_) => idx.favs(&me)?.len(),
+            Some(_) => {
+                let hidden = idx.hidden(&me)?;
+                idx.items_of(idx.favs(&me)?, &labels, |id, _| !hidden.contains(&id))?
+                    .len()
+            }
             None => 0,
         };
         let found = if fav && ask.trim().is_empty() {
@@ -2634,11 +2650,18 @@ async fn unfav_many(
     .await
 }
 
-/// Favourites one page shows at most, newest first.
-const FAVS_MAX: usize = 2000;
+/// Pictures a favourites or album page shows at most, newest first.
+const SET_MAX: usize = 5000;
 
-/// Pictures an album page shows at most.
-const ALBUM_MAX: usize = 5000;
+/// The count in a favourites or album header: all of them, or which part
+/// a capped page shows.
+fn set_count(total: usize) -> String {
+    if total > SET_MAX {
+        format!("newest {SET_MAX} of {total}")
+    } else {
+        total.to_string()
+    }
+}
 
 /// An album name as given: trimmed, spaces folded, at most 80 characters;
 /// None when nothing is left.
@@ -2977,28 +3000,29 @@ async fn album_page(
     let dups = st.dups.clone();
     let me = person(&viewer);
     let res = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<Option<(index::Album, Vec<index::Item>)>> {
+        move || -> anyhow::Result<Option<(index::Album, Vec<index::Item>, usize)>> {
             let Some(a) = own_album(&idx, album, &me)? else {
                 return Ok(None);
             };
             let held = idx.album_items(album)?;
             if held.is_empty() {
-                return Ok(Some((a, Vec::new())));
+                return Ok(Some((a, Vec::new(), 0)));
             }
             let hidden = idx.hidden(&me)?;
             let favs = idx.favs(&me)?;
-            let mut items = idx.timeline_where(&labels, None, ALBUM_MAX, |id, _| {
-                held.contains(&id) && !hidden.contains(&id)
-            })?;
+            let mut items =
+                idx.items_of(held.iter().copied(), &labels, |id, _| !hidden.contains(&id))?;
+            let total = items.len();
+            items.truncate(SET_MAX);
             for it in &mut items {
                 it.copies = dups.shown(it.id, &labels, &hidden).copies;
                 it.fav = favs.contains(&it.id);
             }
-            Ok(Some((a, items)))
+            Ok(Some((a, items, total)))
         },
     )
     .await;
-    let (a, items) = match res {
+    let (a, items, total) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such album").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -3020,7 +3044,7 @@ async fn album_page(
         format!(
             "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?album={album}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline album\" data-album=\"{album}\">\n{}</div>\n{albums}",
             render_items(&who, &items, &ones, None, false, ""),
-            n = items.len(),
+            n = set_count(total),
             albums = album_template(&albums_of(&st, person(&viewer)).await),
         )
     };
@@ -3044,23 +3068,24 @@ async fn favourites_page(
     let idx = st.index.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
-    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<index::Item>> {
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<index::Item>, usize)> {
         let favs = idx.favs(&me)?;
         if favs.is_empty() {
-            return Ok(Vec::new());
+            return Ok((Vec::new(), 0));
         }
         let hidden = idx.hidden(&me)?;
-        let mut items = idx.timeline_where(&labels, None, FAVS_MAX, |id, _| {
-            favs.contains(&id) && !hidden.contains(&id)
-        })?;
+        let mut items =
+            idx.items_of(favs.iter().copied(), &labels, |id, _| !hidden.contains(&id))?;
+        let total = items.len();
+        items.truncate(SET_MAX);
         for it in &mut items {
             it.copies = dups.shown(it.id, &labels, &hidden).copies;
             it.fav = true;
         }
-        Ok(items)
+        Ok((items, total))
     })
     .await;
-    let items = match res {
+    let (items, total) = match res {
         Ok(Ok(i)) => i,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -3073,7 +3098,7 @@ async fn favourites_page(
         format!(
             "<div class=\"thead\"><h1>Favourites</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?fav=1\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline favs\">\n{}</div>\n{albums}",
             render_items(&who, &items, &ones, None, false, ""),
-            n = items.len(),
+            n = set_count(total),
             w = esc(&who),
             albums = album_template(&albums_of(&st, person(&viewer)).await),
         )

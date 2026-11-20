@@ -60,6 +60,9 @@ const FAVS: TableDefinition<(&str, u64), ()> = TableDefinition::new("favourites"
 const ALBUMS: TableDefinition<u64, &[u8]> = TableDefinition::new("albums");
 /// (album id, item id) -> (): what an album holds.
 const ALBUM_ITEMS: TableDefinition<(u64, u64), ()> = TableDefinition::new("album_items");
+/// The last album id given out; ids are never given out twice, so an old
+/// link to a deleted album never opens a newer one.
+const ALBUM_SEQ: TableDefinition<&str, u64> = TableDefinition::new("album_seq");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -145,6 +148,24 @@ pub struct Album {
     pub created: u64,
 }
 
+impl Item {
+    fn of(id: u64, rec: Record) -> Item {
+        Item {
+            id,
+            label: rec.label,
+            taken_local: rec.taken_local,
+            date_source: rec.date_source,
+            thumb_ok: rec.thumb == "ok",
+            hash: rec.hash,
+            width: rec.width,
+            height: rec.height,
+            video_ms: rec.video.map(|v| v.duration_ms),
+            copies: 1,
+            fav: false,
+        }
+    }
+}
+
 pub struct Index {
     db: Database,
     /// Counts committed write batches, so caches built from the index
@@ -191,6 +212,7 @@ impl Index {
             w.open_table(FAVS)?;
             w.open_table(ALBUMS)?;
             w.open_table(ALBUM_ITEMS)?;
+            w.open_table(ALBUM_SEQ)?;
             w.open_table(PLACED)?;
             w.open_table(TEXTS)?;
             w.open_table(OBJECTS)?;
@@ -437,19 +459,7 @@ impl Index {
             };
             let rec = decode(raw.value())?;
             if keep(id, &rec) {
-                out.push(Item {
-                    id,
-                    label: rec.label,
-                    taken_local: rec.taken_local,
-                    date_source: rec.date_source,
-                    thumb_ok: rec.thumb == "ok",
-                    hash: rec.hash,
-                    width: rec.width,
-                    height: rec.height,
-                    video_ms: rec.video.map(|v| v.duration_ms),
-                    copies: 1,
-                    fav: false,
-                });
+                out.push(Item::of(id, rec));
             }
             Ok(out.len() >= limit)
         };
@@ -669,13 +679,39 @@ impl Index {
         self.marked(FAVS, person)
     }
 
+    /// Given ids in `labels` that `keep` accepts, newest first as in the
+    /// timeline: for a small chosen set (favourites, an album) without
+    /// reading the whole library.
+    pub fn items_of(
+        &self,
+        ids: impl IntoIterator<Item = u64>,
+        labels: &[String],
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<Vec<Item>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let mut out = Vec::new();
+        for id in ids {
+            let Some(raw) = items.get(id)? else { continue };
+            let rec = decode(raw.value())?;
+            if labels.contains(&rec.label) && keep(id, &rec) {
+                out.push(Item::of(id, rec));
+            }
+        }
+        out.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        Ok(out)
+    }
+
     /// A new, empty album; its id.
     pub fn create_album(&self, owner: &str, name: &str, now: u64) -> Result<u64> {
         let w = self.db.begin_write()?;
         let id;
         {
+            let mut seq = w.open_table(ALBUM_SEQ)?;
+            let last = seq.get("albums")?.map_or(0, |v| v.value());
             let mut t = w.open_table(ALBUMS)?;
-            id = t.last()?.map_or(1, |(k, _)| k.value() + 1);
+            id = last.max(t.last()?.map_or(0, |(k, _)| k.value())) + 1;
+            seq.insert("albums", id)?;
             let a = Album {
                 owner: owner.to_string(),
                 name: name.to_string(),
@@ -712,14 +748,21 @@ impl Index {
         Ok(out)
     }
 
+    /// Rename an album, read and written in one transaction, so a delete
+    /// in between cannot bring it back.
     pub fn rename_album(&self, id: u64, name: &str) -> Result<()> {
-        let Some(mut a) = self.album(id)? else {
-            return Ok(());
-        };
-        a.name = name.to_string();
         let w = self.db.begin_write()?;
-        w.open_table(ALBUMS)?
-            .insert(id, serde_json::to_vec(&a)?.as_slice())?;
+        {
+            let mut t = w.open_table(ALBUMS)?;
+            let a = match t.get(id)? {
+                Some(v) => serde_json::from_slice::<Album>(v.value()).ok(),
+                None => None,
+            };
+            if let Some(mut a) = a {
+                a.name = name.to_string();
+                t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
+            }
+        }
         w.commit()?;
         Ok(())
     }

@@ -1287,7 +1287,22 @@ async fn favourites_are_kept_per_person() {
     let r = req_with(&e.app, "GET", "/search?q=Favoriten", Some(&c1), false, &[]).await;
     assert!(location(&r).ends_with("/favourites"), "{}", location(&r));
     let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c1), false, &[]).await;
-    assert!(sug.body.contains("<b>Favoriten</b>"), "{}", sug.body);
+    assert!(
+        sug.body
+            .contains("<b>Favoriten</b></span><span class=\"dim\">2<"),
+        "{}",
+        sug.body
+    );
+    // Counted as the page shows them: a hidden favourite is not.
+    e.idx.set_hidden("p1", mine[1], true).unwrap();
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c1), false, &[]).await;
+    assert!(
+        sug.body
+            .contains("<b>Favoriten</b></span><span class=\"dim\">1<"),
+        "{}",
+        sug.body
+    );
+    e.idx.set_hidden("p1", mine[1], false).unwrap();
 
     // p2 sees p1's photos but not p1's favourites.
     {
@@ -1487,4 +1502,12 @@ async fn albums_are_each_persons_own() {
     assert!(e.idx.album(1).unwrap().is_none());
     assert!(e.idx.album_items(1).unwrap().is_empty());
     assert!(e.idx.locate(mine[0]).unwrap().is_some());
+    // Ids are never given out twice: after the newest album goes, a new
+    // one gets a new id, so an old link to it finds nothing.
+    let r = post("/album/2/delete".into(), c1.clone(), String::new(), FORM).await;
+    assert!(location(&r).ends_with("/albums"));
+    let r = post("/albums".into(), c1.clone(), "name=Herbst".into(), FORM).await;
+    assert!(location(&r).ends_with("/album/3"), "{}", location(&r));
+    let r = req_with(&e.app, "GET", "/album/2", Some(&c1), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
 }

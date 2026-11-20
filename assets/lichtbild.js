@@ -859,7 +859,8 @@
       }
     });
     function addNew() {
-      var name = nameIn.value.trim();
+      // As the server keeps it: spaces folded, at most 80 characters.
+      var name = nameIn.value.replace(/\s+/g, " ").trim().slice(0, 80);
       if (name) addTo("new", name);
     }
     addBtn.addEventListener("click", addNew);
@@ -980,7 +981,7 @@
   plus.addEventListener("click", function () { set(row + 1); });
   document.addEventListener("keydown", function (e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+    if (e.target && e.target.closest && e.target.closest("input, textarea, select")) return;
     if (e.key === "-") set(row - 1);
     else if (e.key === "+" || e.key === "=") set(row + 1);
   });
