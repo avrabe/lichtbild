@@ -291,6 +291,7 @@ artifacts:
         - A burst of ten shots shows as one tile with "10", and opens in place
         - On the iPad, a slideshow runs from any photo with the screen kept on
         - Searching "Hund" offers "2021 (12)" and "Katze (3)" to narrow down
+        - Twenty screenshots are chosen and hidden in one go, and the undo brings them back
     links:
       - type: satisfies
         target: REQ-SEARCH-002
@@ -300,3 +301,5 @@ artifacts:
         target: REQ-WEB-013
       - type: satisfies
         target: REQ-SEARCH-003
+      - type: satisfies
+        target: REQ-WEB-014

@@ -741,3 +741,36 @@ html.showing, html.showing body { overflow: hidden; }
 .narrow a:hover, .narrow a:focus-visible { border-color: var(--ai); background: var(--paper-2); }
 .narrow a span[aria-hidden] { color: var(--ai); }
 .narrow .n { color: var(--ink-faint); font-size: 12px; }
+
+/* Selecting in the timeline (REQ-WEB-014). */
+.thead .tbtn {
+  margin-left: 8px; font: inherit; font-size: 14px; padding: 5px 12px; border-radius: 14px;
+  border: 1px solid var(--line); background: transparent; color: var(--ink); text-decoration: none;
+  cursor: pointer;
+}
+.thead .tbtn[aria-pressed="true"] { background: var(--ai); border-color: var(--ai); color: var(--paper); }
+body.selecting .timeline .item { cursor: pointer; }
+body.selecting .timeline .item:hover { transform: none; }
+body.selecting .timeline .item::before {
+  content: ""; position: absolute; right: 6px; top: 6px; width: 22px; height: 22px; z-index: 2;
+  border-radius: 50%; border: 2px solid #fff; background: rgba(0, 0, 0, .25);
+}
+body.selecting .timeline .item.sel { box-shadow: 0 0 0 3px var(--shu); }
+body.selecting .timeline .item.sel img { opacity: .78; }
+body.selecting .timeline .item.sel::before {
+  content: "✓"; color: #fff; background: var(--shu); border-color: var(--shu);
+  display: flex; align-items: center; justify-content: center; font-size: 14px; font-weight: 700;
+}
+.selbar, .toast {
+  position: fixed; left: 50%; bottom: max(16px, env(safe-area-inset-bottom)); transform: translateX(-50%);
+  z-index: 150; display: flex; align-items: center; gap: 10px; padding: 8px 10px 8px 16px;
+  background: var(--ink); color: var(--paper); border-radius: 24px; box-shadow: var(--shadow);
+  max-width: calc(100vw - 32px);
+}
+.selbar[hidden] { display: none; }
+.selbar button, .toast button {
+  font: inherit; font-size: 14px; min-height: 36px; padding: 0 14px; border-radius: 18px; border: 0;
+  background: rgba(255, 255, 255, .16); color: inherit; cursor: pointer;
+}
+.selbar .selhide { background: var(--shu); color: #fff; }
+.selbar .selhide:disabled { opacity: .5; cursor: default; }

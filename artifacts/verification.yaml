@@ -1301,3 +1301,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-SEARCH-003
+
+  - id: VER-093
+    type: verification
+    title: Several items hidden at once and shown again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "several_items_are_hidden_at_once_and_shown_again"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth several_items_are_hidden_at_once_and_shown_again"
+    links:
+      - type: verifies
+        target: REQ-WEB-014

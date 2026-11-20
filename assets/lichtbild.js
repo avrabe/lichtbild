@@ -643,3 +643,94 @@
   go(0);
   setPlaying(true);
 })();
+
+// Selecting in the timeline (REQ-WEB-014): "Select" turns taps on tiles
+// into choosing them (a series counts whole); the bar hides the chosen
+// ones for this person, with an undo.
+(function () {
+  "use strict";
+  var btn = document.querySelector(".thead .select");
+  var tl = document.querySelector(".timeline");
+  if (!btn || !tl || !window.fetch) return;
+  btn.hidden = false;
+  var bar = document.createElement("div");
+  bar.className = "selbar";
+  bar.setAttribute("role", "toolbar");
+  bar.hidden = true;
+  bar.innerHTML = '<span class="seln" aria-live="polite"></span>' +
+    '<button type="button" class="selhide">Hide for me</button>' +
+    '<button type="button" class="selcancel">Cancel</button>';
+  document.body.appendChild(bar);
+  var count = bar.querySelector(".seln"), hideBtn = bar.querySelector(".selhide");
+  function ids(tile) {
+    var series = tile.closest(".series");
+    if (series && !series.classList.contains("open") && !tile.classList.contains("later")) {
+      return Array.prototype.map.call(series.querySelectorAll(".item"), function (a) { return a.id.slice(1); });
+    }
+    return [tile.id.slice(1)];
+  }
+  function chosen() {
+    var out = [];
+    tl.querySelectorAll(".item.sel").forEach(function (t) { out = out.concat(ids(t)); });
+    return out;
+  }
+  function update() {
+    var n = chosen().length;
+    count.textContent = n === 1 ? "1 chosen" : n + " chosen";
+    hideBtn.disabled = n === 0;
+  }
+  function setMode(on) {
+    document.body.classList.toggle("selecting", on);
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.textContent = on ? "Done" : "Select";
+    bar.hidden = !on;
+    if (!on) tl.querySelectorAll(".item.sel").forEach(function (t) { t.classList.remove("sel"); t.removeAttribute("aria-pressed"); });
+    update();
+  }
+  btn.addEventListener("click", function () { setMode(!document.body.classList.contains("selecting")); });
+  bar.querySelector(".selcancel").addEventListener("click", function () { setMode(false); });
+  tl.addEventListener("click", function (e) {
+    if (!document.body.classList.contains("selecting")) return;
+    var tile = e.target.closest && e.target.closest("a.item");
+    if (!tile || e.target.closest(".stack")) return;
+    e.preventDefault();
+    var on = tile.classList.toggle("sel");
+    tile.setAttribute("aria-pressed", on ? "true" : "false");
+    update();
+  });
+  function post(url, list) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "ids=" + encodeURIComponent(list.join(","))
+    }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); });
+  }
+  hideBtn.addEventListener("click", function () {
+    var list = chosen();
+    if (!list.length) return;
+    hideBtn.disabled = true;
+    post("hide-many", list).then(function () {
+      list.forEach(function (id) {
+        var t = document.getElementById("i" + id);
+        if (t) t.remove();
+      });
+      tl.querySelectorAll(".series").forEach(function (s) { if (!s.querySelector(".item")) s.remove(); });
+      setMode(false);
+      toast(list);
+    }, function () { hideBtn.disabled = false; count.textContent = "Could not hide, try again"; });
+  });
+  function toast(list) {
+    var t = document.createElement("div");
+    t.className = "toast";
+    t.setAttribute("role", "status");
+    t.innerHTML = '<span></span><button type="button">Undo</button>';
+    t.querySelector("span").textContent = (list.length === 1 ? "1 item" : list.length + " items") + " hidden for you.";
+    document.body.appendChild(t);
+    var gone = setTimeout(function () { t.remove(); }, 10000);
+    t.querySelector("button").addEventListener("click", function () {
+      clearTimeout(gone);
+      post("unhide-many", list).then(function () { window.location.reload(); });
+    });
+  }
+})();

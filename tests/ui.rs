@@ -444,13 +444,13 @@ async fn search_results_offer_terms_that_narrow_them_down() {
     let (_, page) = get(&app, "/search?q=img", false).await;
     assert!(page.contains("<nav class=\"narrow\""), "{page}");
     assert!(page.contains("href=\"search?q=img%202020\""), "{page}");
-    let narrowed = page
-        .split("href=\"search?q=img%202020\"")
-        .nth(1)
-        .unwrap();
+    let narrowed = page.split("href=\"search?q=img%202020\"").nth(1).unwrap();
     assert!(narrowed.starts_with("><span aria-hidden=\"true\">◷</span> 2020 <span class=\"n\">"));
     let (_, page) = get(&app, "/search?q=img&kind=photo", false).await;
-    assert!(page.contains("href=\"search?q=img%202020&amp;kind=photo\""), "{page}");
+    assert!(
+        page.contains("href=\"search?q=img%202020&amp;kind=photo\""),
+        "{page}"
+    );
     // Narrowed to one year: that year is not offered again.
     let (_, page) = get(&app, "/search?q=img%202020", false).await;
     assert!(!page.contains("search?q=img%202020%202020"), "{page}");

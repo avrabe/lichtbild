@@ -119,6 +119,8 @@ pub fn router(state: AppState) -> Router {
         .route("/suggest", get(suggest))
         .route("/hide/{id}", axum::routing::post(hide))
         .route("/unhide/{id}", axum::routing::post(unhide))
+        .route("/hide-many", axum::routing::post(hide_many))
+        .route("/unhide-many", axum::routing::post(unhide_many))
         .route("/keep/{id}", axum::routing::post(keep))
         .route("/hidden", get(hidden_page))
         .route("/status", get(status_page))
@@ -1183,7 +1185,7 @@ async fn timeline(
         }
     };
     let body = format!(
-        "<div class=\"thead\"><h1>{}</h1>{}</div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
+        "<div class=\"thead\"><h1>{}</h1>{}<a class=\"tbtn\" href=\"show/{w}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
         esc(&title),
         kind_switch(&format!("t/{}", esc(&who)), kind),
         render_jump(&who, &months, kq),
@@ -1193,7 +1195,8 @@ async fn timeline(
             "<p>No items yet. Run <code>lichtbild scan</code>.</p>"
         } else {
             ""
-        }
+        },
+        w = esc(&who),
     );
     page_for(&st, &title, &body).into_response()
 }
@@ -2307,6 +2310,77 @@ async fn hide(
         idx.set_hidden(me, id, true)
     })
     .await
+}
+
+/// Items one request hides or shows again at most.
+const MANY: usize = 2000;
+
+#[derive(Deserialize)]
+pub struct Many {
+    /// Item ids, separated by commas.
+    ids: String,
+    back: Option<String>,
+}
+
+/// Hide (or show again) the listed items the viewer may see, for this
+/// person (REQ-WEB-014); others are left alone. Answers with how many
+/// changed, or goes back when a `back` is given (a form without
+/// JavaScript).
+async fn many(
+    st: AppState,
+    viewer: Viewer,
+    headers: axum::http::HeaderMap,
+    m: Many,
+    hidden: bool,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = m
+        .ids
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let mut n = 0;
+        for id in ids {
+            if idx.locate(id)?.is_some_and(|r| viewer.may_see(&r.label)) {
+                idx.set_hidden(&me, id, hidden)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+    .await;
+    match res {
+        Ok(Ok(_)) if m.back.is_some() => back_to(&st, m.back.as_deref()),
+        Ok(Ok(n)) => n.to_string().into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /hide-many: hide the selected items for this person.
+async fn hide_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, true).await
+}
+
+/// POST /unhide-many: show them again (the undo after hiding).
+async fn unhide_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, false).await
 }
 
 /// POST /unhide/{id}: show the item again.

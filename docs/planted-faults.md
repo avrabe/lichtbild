@@ -124,6 +124,8 @@ at nice 0.
 | F113 | REQ-WEB-013 | the slideshow shows every photo of a series | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
 | F114 | REQ-SEARCH-003 | a term every result holds is offered to narrow down | `narrowing_offers_terms_that_split_the_results` |
 | F115 | REQ-SEARCH-003 | narrowing drops the photo/video filter | `search_results_offer_terms_that_narrow_them_down` |
+| F116 | REQ-WEB-014 | hiding several items reaches libraries the person may not see | `several_items_are_hidden_at_once_and_shown_again` |
+| F117 | REQ-WEB-014 | hiding several items accepts requests from another site | `several_items_are_hidden_at_once_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

@@ -816,6 +816,23 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-014
+    type: requirement
+    title: Several items are chosen in the timeline and hidden at once
+    status: implemented
+    release: v0.7.0
+    description: >
+      "Select" in the timeline turns taps on tiles into choosing them; a
+      closed series counts whole. "Hide for me" hides the chosen items for
+      this person only, with an undo that shows them again. Only items the
+      person may see change, and only on a request from the same site.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

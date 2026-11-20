@@ -1081,3 +1081,52 @@ async fn only_the_owner_places_a_picture_by_hand() {
         page.body
     );
 }
+
+// Several items hidden at once, and shown again: only those the person may
+// see, only for them, only from the same site.
+// rivet: verifies REQ-WEB-014
+#[tokio::test]
+async fn several_items_are_hidden_at_once_and_shown_again() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1")
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let body = format!("ids={}%2C{}%2C{other}%2Cnope", mine[0], mine[1]);
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(&e.app, "POST", "/hide-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    let hidden = e.idx.hidden("p1").unwrap();
+    assert_eq!(hidden.len(), 2);
+    assert!(mine.iter().all(|id| hidden.contains(id)));
+    let page = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[0])));
+    assert!(page.body.contains("class=\"tbtn select\""), "{}", page.body);
+    // From another site: refused, nothing changes.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(&e.app, "POST", "/unhide-many", Some(&c1), &body, &cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(e.idx.hidden("p1").unwrap().len(), 2);
+    // The undo.
+    let r = req_with_body(&e.app, "POST", "/unhide-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    assert!(e.idx.hidden("p1").unwrap().is_empty());
+}
