@@ -821,3 +821,14 @@ dialog.keys button {
 .viewer button.heart.on { color: var(--shu); }
 .viewer button.heart:hover { color: var(--shu); }
 .selbar .selfav { color: var(--shu); }
+
+/* Row height in the timeline, chosen by pinch, + and − (lichtbild.js). */
+.timeline.row0 .item, .timeline.row0 .item img { height: 64px; }
+.timeline.row1 .item, .timeline.row1 .item img { height: 104px; }
+.timeline.row2 .item, .timeline.row2 .item img { height: 150px; }
+.timeline.row3 .item, .timeline.row3 .item img { height: 210px; }
+.timeline.row4 .item, .timeline.row4 .item img { height: 270px; }
+.timeline.row0 .grid { gap: 2px; }
+.timeline.row0 .item .dur, .timeline.row0 .item .copies, .timeline.row0 .item .stack { transform: scale(.8); transform-origin: left top; }
+.thead .zoom { display: inline-flex; gap: 2px; }
+.thead .zoom button { min-width: 32px; }

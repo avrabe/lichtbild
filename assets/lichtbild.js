@@ -864,6 +864,61 @@
   }
 })();
 
+// Row height in the timeline: − and + (buttons or keys), a pinch on the
+// iPad or a trackpad. Remembered in this browser only.
+(function () {
+  "use strict";
+  var tl = document.querySelector(".timeline");
+  var head = document.querySelector(".thead");
+  if (!tl || !head) return;
+  var KEY = "lichtbild.row", MAX = 4;
+  var small = window.matchMedia && window.matchMedia("(max-width: 600px)").matches;
+  var row = small ? 1 : 2;
+  try {
+    var v = parseInt(localStorage.getItem(KEY), 10);
+    if (v >= 0 && v <= MAX) row = v;
+  } catch (e) { /* private window: the default */ }
+  var zoom = document.createElement("span");
+  zoom.className = "zoom";
+  zoom.innerHTML = '<button type="button" class="tbtn" aria-label="Smaller pictures" title="Smaller (\u2212)">\u2212</button>' +
+    '<button type="button" class="tbtn" aria-label="Larger pictures" title="Larger (+)">+</button>';
+  head.appendChild(zoom);
+  var minus = zoom.children[0], plus = zoom.children[1];
+  function set(r) {
+    row = Math.max(0, Math.min(MAX, r));
+    for (var i = 0; i <= MAX; i++) tl.classList.toggle("row" + i, i === row);
+    minus.disabled = row === 0;
+    plus.disabled = row === MAX;
+    try { localStorage.setItem(KEY, String(row)); } catch (e) { /* not kept */ }
+  }
+  set(row);
+  minus.addEventListener("click", function () { set(row - 1); });
+  plus.addEventListener("click", function () { set(row + 1); });
+  document.addEventListener("keydown", function (e) {
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+    if (e.key === "-") set(row - 1);
+    else if (e.key === "+" || e.key === "=") set(row + 1);
+  });
+  // Safari's pinch (iPad), and a trackpad pinch (wheel with ctrl).
+  var start = row;
+  tl.addEventListener("gesturestart", function (e) { e.preventDefault(); start = row; });
+  tl.addEventListener("gesturechange", function (e) {
+    e.preventDefault();
+    var step = e.scale > 1.35 ? 1 : e.scale < 0.74 ? -1 : 0;
+    if (e.scale > 2.2) step = 2;
+    if (e.scale < 0.45) step = -2;
+    if (start + step !== row) set(start + step);
+  });
+  var acc = 0;
+  tl.addEventListener("wheel", function (e) {
+    if (!e.ctrlKey) return;
+    e.preventDefault();
+    acc += e.deltaY;
+    if (Math.abs(acc) > 40) { set(row + (acc < 0 ? 1 : -1)); acc = 0; }
+  }, { passive: false });
+})();
+
 // Keys and gestures (REQ-WEB-015): "?" or the menu entry shows them.
 (function () {
   "use strict";
@@ -879,6 +934,7 @@
     ["Slideshow", "← →", "previous, next (or swipe)"],
     ["Slideshow", "Esc", "close"],
     ["Search", "↓ ↑", "move through the suggestions"],
+    ["Timeline", "\u2212 +", "smaller, larger pictures (or pinch)"],
     ["Timeline", "Select", "choose several, then make them favourites or hide them"],
     ["Anywhere", "?", "this list"]
   ];
