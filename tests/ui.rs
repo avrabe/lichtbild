@@ -102,6 +102,7 @@ fn env() -> Env {
 // Every page behind login carries the app menu with all places; the
 // house's nav stays beside it.
 // rivet: verifies REQ-WEB-011
+// rivet: verifies REQ-WEB-015
 #[tokio::test]
 async fn every_page_has_the_app_menu() {
     let e = env();
@@ -113,6 +114,8 @@ async fn every_page_has_the_app_menu() {
         "/status",
         "/words",
         "/things",
+        "/trips",
+        "/show/p1",
         "/map",
         "/hidden",
         "/duplicates",
@@ -134,7 +137,10 @@ async fn every_page_has_the_app_menu() {
             "./",
             "map",
             "things",
+            "trips",
             "words",
+            "favourites",
+            "albums",
             "hidden",
             "duplicates",
             "status",
@@ -144,6 +150,8 @@ async fn every_page_has_the_app_menu() {
                 "{uri}: {href}"
             );
         }
+        // Keys and gestures are one tap away everywhere (REQ-WEB-015).
+        assert!(header.contains(r#"class="keyhelp""#), "{uri}");
     }
 }
 
@@ -353,4 +361,168 @@ async fn the_filter_holds_in_the_chooser_and_the_viewer() {
     let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
     assert_ne!(arrow(&page, "prev"), Some(beside), "{page}");
     assert_ne!(arrow(&page, "next"), Some(beside), "{page}");
+}
+
+// Suggestions as the search box is typed: things (in German and English),
+// dates, words said; the earlier words kept, with nothing that finds
+// nothing; only what the viewer's libraries hold; common words and single
+// letters suggest nothing.
+// rivet: verifies REQ-SEARCH-002
+#[tokio::test]
+async fn the_search_box_suggests_what_the_libraries_hold() {
+    let e = env();
+    let (_, photo) = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.label == "p1" && r.video.is_none() && r.taken_local.starts_with("2020"))
+        .unwrap();
+    let look = lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: "none".into(),
+            model: "test".into(),
+            lines: vec![],
+            docs: vec![],
+        },
+        objects: vec![lichtbild::objects::Object {
+            kind: 15,
+            score: 0.9,
+            bbox: [0.1, 0.1, 0.6, 0.8],
+        }],
+        vector: vec![],
+    };
+    e.idx.set_look(&photo.hash, "test", &look).unwrap();
+    e.state.search.rebuild(&e.idx, None).unwrap();
+    let app = web::router(e.state.clone());
+
+    let (s, l) = get(&app, "/suggest?q=Leu", true).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(l.contains(r#"href="search?q=leuchtturm""#), "{l}");
+    for q in ["kat", "Cat", "katzen"] {
+        let (_, l) = get(&app, &format!("/suggest?q={q}"), true).await;
+        assert!(l.contains(r#"href="search?q=Katze""#), "{q}: {l}");
+        assert!(l.contains("cat · 1"), "{q}: {l}");
+    }
+    let (_, l) = get(&app, "/suggest?q=jul", true).await;
+    assert!(l.contains(r#"href="search?q=Juli%202019""#), "{l}");
+    // The earlier words stay, and only what still finds something is
+    // offered: the cat was photographed in 2020, not in 2019 or 2022.
+    let (_, l) = get(&app, "/suggest?q=katze%2020", true).await;
+    assert!(l.contains(r#"href="search?q=katze%202020""#), "{l}");
+    assert!(l.contains("katze <b>2020</b>"), "{l}");
+    assert!(!l.contains("2019") && !l.contains("2022"), "{l}");
+    let (_, l) = get(&app, "/suggest?q=20", true).await;
+    assert!(l.contains("2019") && l.contains("2022"), "{l}");
+    // And it runs: the suggested query finds the photo.
+    let (_, hits) = get(&app, "/search?q=katze%202020", false).await;
+    assert!(
+        hits.contains(&format!("/{}\"", photo_id(&e, &photo.hash))),
+        "{hits}"
+    );
+    for q in ["l", "abe", "katze%20"] {
+        let (_, l) = get(&app, &format!("/suggest?q={q}"), true).await;
+        assert!(!l.contains("<a"), "{q}: {l}");
+    }
+    // Only what the viewer's libraries hold.
+    let p1 = e.state.search.suggest("leu", &["p1".into()], 8);
+    assert_eq!(p1.len(), 1);
+    assert_eq!(p1[0].items, 1);
+    assert!(e.state.search.suggest("leu", &["p2".into()], 8).is_empty());
+    assert!(e.state.search.suggest("kat", &["p2".into()], 8).is_empty());
+}
+
+fn photo_id(e: &Env, hash: &str) -> u64 {
+    e.idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.hash == hash)
+        .unwrap()
+        .0
+}
+
+// Results that differ offer terms to narrow them down, each a link to the
+// query with the term added; the photo/video filter is kept.
+// rivet: verifies REQ-SEARCH-003
+#[tokio::test]
+async fn search_results_offer_terms_that_narrow_them_down() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, "/search?q=img", false).await;
+    assert!(page.contains("<nav class=\"narrow\""), "{page}");
+    assert!(page.contains("href=\"search?q=img%202020\""), "{page}");
+    let narrowed = page.split("href=\"search?q=img%202020\"").nth(1).unwrap();
+    assert!(narrowed.starts_with("><span aria-hidden=\"true\">◷</span> 2020 <span class=\"n\">"));
+    let (_, page) = get(&app, "/search?q=img&kind=photo", false).await;
+    assert!(
+        page.contains("href=\"search?q=img%202020&amp;kind=photo\""),
+        "{page}"
+    );
+    // Narrowed to one year: that year is not offered again.
+    let (_, page) = get(&app, "/search?q=img%202020", false).await;
+    assert!(!page.contains("search?q=img%202020%202020"), "{page}");
+}
+
+// Dates are found by season and holiday, in German and English, and the
+// box suggests them.
+// rivet: verifies REQ-SEARCH-004
+#[tokio::test]
+async fn pictures_are_found_by_season_and_holiday() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    for q in ["winter", "Winter%202020"] {
+        let (_, hits) = get(&app, &format!("/search?q={q}"), false).await;
+        assert!(hits.contains("2020-01-02 03:04:05"), "{q}: {hits}");
+        assert!(!hits.contains("2019-07-04"), "{q}: {hits}");
+    }
+    let (_, hits) = get(&app, "/search?q=sommer", false).await;
+    assert!(hits.contains("2019-07-04"), "{hits}");
+    let (_, l) = get(&app, "/suggest?q=som", true).await;
+    assert!(l.contains(r#"href="search?q=Sommer%202019""#), "{l}");
+}
+
+// A chip finds what it promises: text read in pictures holds no year, so
+// a search that matches only that text offers no year that would find
+// nothing.
+// rivet: verifies REQ-SEARCH-003
+#[tokio::test]
+async fn narrowing_never_offers_a_dead_end() {
+    let e = env();
+    let photos: Vec<_> = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|(_, r)| r.video.is_none() && r.thumb == "ok")
+        .collect();
+    assert!(photos.len() >= 4, "{}", photos.len());
+    let years: std::collections::HashSet<_> = photos
+        .iter()
+        .map(|(_, r)| r.taken_local[..4].to_string())
+        .collect();
+    assert!(years.len() >= 2, "{years:?}");
+    for (_, r) in &photos {
+        let look = lichtbild::vision::Look {
+            text: lichtbild::ocr::Text {
+                state: "ok".into(),
+                model: "test".into(),
+                lines: vec![lichtbild::ocr::Line {
+                    quad: [0.1, 0.1, 0.5, 0.1, 0.5, 0.2, 0.1, 0.2],
+                    block: 0,
+                    text: "Geburtstag".into(),
+                    conf: 0.95,
+                }],
+                docs: vec![0],
+            },
+            objects: vec![],
+            vector: vec![],
+        };
+        e.idx.set_look(&r.hash, "test", &look).unwrap();
+    }
+    e.state.search.rebuild(&e.idx, None).unwrap();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, "/search?q=geburtstag", false).await;
+    assert!(page.contains("results for"), "{page}");
+    assert!(!page.contains("<nav class=\"narrow\""), "{page}");
 }

@@ -32,6 +32,9 @@ pub const IDLE: std::time::Duration = std::time::Duration::from_secs(600);
 
 /// Pictures look alike from this cosine on.
 pub const SIMILAR_MIN: f32 = 0.80;
+/// Pictures taken one after another that look at least this alike are one
+/// series (REQ-WEB-012): a burst, or the same scene taken again.
+pub const SERIES_MIN: f32 = 0.92;
 
 fn unit(v: &[f32]) -> Vec<f32> {
     let n = v.iter().map(|x| x * x).sum::<f32>().sqrt().max(1e-9);
@@ -152,6 +155,13 @@ struct Entry {
     norm: f32,
 }
 
+/// The vectors, and where each content hash is among them.
+#[derive(Default)]
+struct Vectors {
+    list: Vec<Entry>,
+    at: HashMap<String, usize>,
+}
+
 /// The loaded text encoder and when it was last used.
 type Slot = Arc<Mutex<Option<(Arc<TextEncoder>, std::time::Instant)>>>;
 
@@ -159,7 +169,7 @@ type Slot = Arc<Mutex<Option<(Arc<TextEncoder>, std::time::Instant)>>>;
 /// encoder, loaded on first use.
 #[derive(Default)]
 pub struct Space {
-    vectors: RwLock<Vec<Entry>>,
+    vectors: RwLock<Vectors>,
     /// The text encoder and when it was last used; dropped after IDLE.
     text: Slot,
     reaper: std::sync::OnceLock<()>,
@@ -198,12 +208,17 @@ impl Space {
             })
             .collect();
         let n = v.len();
-        *self.vectors.write().expect("space lock") = v;
+        let at = v
+            .iter()
+            .enumerate()
+            .map(|(i, e)| (e.hash.clone(), i))
+            .collect();
+        *self.vectors.write().expect("space lock") = Vectors { list: v, at };
         Ok(n)
     }
 
     pub fn len(&self) -> usize {
-        self.vectors.read().expect("space lock").len()
+        self.vectors.read().expect("space lock").list.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -257,6 +272,7 @@ impl Space {
         let q = enc.encode(query)?;
         let vs = self.vectors.read().expect("space lock");
         let scored: Vec<(&Entry, f32)> = vs
+            .list
             .iter()
             .map(|e| (e, cos_i8_f32(&e.v, e.norm, &q)))
             .collect();
@@ -265,14 +281,23 @@ impl Space {
         Ok(best(scored.into_iter(), min, labels, limit))
     }
 
+    /// How alike the pictures with contents `a` and `b` look (cosine),
+    /// when both have been looked at.
+    pub fn alike(&self, a: &str, b: &str) -> Option<f32> {
+        let vs = self.vectors.read().expect("space lock");
+        let (x, y) = (&vs.list[*vs.at.get(a)?], &vs.list[*vs.at.get(b)?]);
+        Some(cos_i8(&x.v, x.norm, &y.v, y.norm))
+    }
+
     /// Pictures that look like the one with content `hash`, best first.
     pub fn similar(&self, hash: &str, labels: &[String], limit: usize) -> Vec<(Vec<u64>, f32)> {
         let vs = self.vectors.read().expect("space lock");
-        let Some(me) = vs.iter().find(|e| e.hash == hash) else {
+        let Some(me) = vs.at.get(hash).map(|i| &vs.list[*i]) else {
             return Vec::new();
         };
         best(
-            vs.iter()
+            vs.list
+                .iter()
                 .filter(|e| e.hash != hash)
                 .map(|e| (e, cos_i8(&e.v, e.norm, &me.v, me.norm))),
             SIMILAR_MIN,

@@ -164,6 +164,10 @@ async fn neighbours_in_time_place_a_picture_as_estimated() {
 
     let hits = get(&app, "/search?q=ostdorf").await;
     assert!(hits.contains(&format!("/{near}\"")), "{hits}");
+    // The result names the estimated place, as the recorded one does.
+    let tile = &hits[hits.find(&format!("/{near}\"")).unwrap()..];
+    let tile = &tile[..tile.find("</div></div>").unwrap()];
+    assert!(tile.contains(" · Ostdorf"), "{tile}");
 
     let status = get(&app, "/status").await;
     assert!(

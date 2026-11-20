@@ -185,6 +185,7 @@ async fn env(public_url: &str) -> Env {
     let issuer = mock.lock().unwrap().issuer.clone();
     let auth = make_auth(&issuer, &secret, public_url, true).with_store(idx.clone());
     let state = AppState::new(&cfg, idx.clone()).with_auth(Some(auth));
+    state.search.rebuild(&idx, None).unwrap();
     let auth = state.auth.clone().unwrap();
     let app = web::router(state);
     Env {
@@ -1080,4 +1081,560 @@ async fn only_the_owner_places_a_picture_by_hand() {
         "no placing in p1: {}",
         page.body
     );
+}
+
+// Several items hidden at once, and shown again: only those the person may
+// see, only for them, only from the same site.
+// rivet: verifies REQ-WEB-014
+#[tokio::test]
+async fn several_items_are_hidden_at_once_and_shown_again() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1")
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let body = format!("ids={}%2C{}%2C{other}%2Cnope", mine[0], mine[1]);
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(&e.app, "POST", "/hide-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    let hidden = e.idx.hidden("p1").unwrap();
+    assert_eq!(hidden.len(), 2);
+    assert!(mine.iter().all(|id| hidden.contains(id)));
+    let page = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[0])));
+    assert!(page.body.contains("class=\"tbtn select\""), "{}", page.body);
+    // From another site: refused, nothing changes.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(&e.app, "POST", "/unhide-many", Some(&c1), &body, &cross).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(e.idx.hidden("p1").unwrap().len(), 2);
+    // The undo.
+    let r = req_with_body(&e.app, "POST", "/unhide-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    assert!(e.idx.hidden("p1").unwrap().is_empty());
+}
+
+// Favourites are each person's own: p1 marks some, alone or several at
+// once, only items they may see and only from the same site; p2, who also
+// sees p1's library, finds none of them among their own.
+// rivet: verifies REQ-WEB-016
+#[tokio::test]
+async fn favourites_are_kept_per_person() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    // One from the viewer, then several from a selection; p2's item and
+    // nonsense are left alone.
+    let back = format!("back=v%2Fp1%2F{}", mine[0]);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/fav/{}", mine[0]),
+        Some(&c1),
+        &back,
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{}", r.status);
+    let body = format!("ids={}%2C{other}%2Cnope", mine[1]);
+    let r = req_with_body(&e.app, "POST", "/fav-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let favs = e.idx.favs("p1").unwrap();
+    assert_eq!(favs.len(), 2);
+    assert!(mine.iter().all(|id| favs.contains(id)));
+    // From another site: refused.
+    let cross = [
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/unfav/{}", mine[0]),
+        Some(&c1),
+        &back,
+        &cross,
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert_eq!(e.idx.favs("p1").unwrap().len(), 2);
+
+    // The page, the timeline's hearts, the viewer's heart, the slideshow.
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c1), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    for id in &mine {
+        assert!(
+            page.body.contains(&format!("id=\"i{id}\"")),
+            "{}",
+            page.body
+        );
+    }
+    assert!(!page.body.contains(&format!("id=\"i{other}\"")));
+    assert_eq!(
+        page.body.matches("class=\"heart\"").count(),
+        2,
+        "{}",
+        page.body
+    );
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert_eq!(tl.body.matches("class=\"heart\"").count(), 2, "{}", tl.body);
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains(&format!("action=\"unfav/{}\"", mine[0])),
+        "{}",
+        v.body
+    );
+    assert!(v.body.contains("aria-pressed=\"true\""));
+    let show = req_with(&e.app, "GET", "/show/p1?fav=1", Some(&c1), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        2,
+        "{}",
+        show.body
+    );
+    assert!(show.body.contains("class=\"close\" href=\"favourites\""));
+    // A hidden favourite is not shown.
+    e.idx.set_hidden("p1", mine[1], true).unwrap();
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c1), false, &[]).await;
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[1])));
+    e.idx.set_hidden("p1", mine[1], false).unwrap();
+
+    // In search, "♥" or "Favoriten" keeps only favourites; alone it is the
+    // Favourites page, and "Fav" is completed.
+    let year = &all
+        .iter()
+        .find(|(id, _)| *id == mine[0])
+        .unwrap()
+        .1
+        .taken_local[..4];
+    let plain = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q={year}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    let only = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q=%E2%99%A5+{year}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    let found = |page: &str| -> Vec<u64> {
+        page.split("class=\"item")
+            .skip(1)
+            .filter_map(|p| p.split("href=\"v/p1/").nth(1))
+            .filter_map(|p| p.split(|c: char| !c.is_ascii_digit()).next()?.parse().ok())
+            .collect()
+    };
+    let (plain, only) = (found(&plain.body), found(&only.body));
+    assert!(plain.contains(&mine[0]), "{plain:?}");
+    assert!(
+        plain.iter().any(|id| !mine.contains(id)),
+        "the year finds others too: {plain:?}"
+    );
+    assert!(only.contains(&mine[0]), "{only:?}");
+    assert!(only.iter().all(|id| mine.contains(id)), "{only:?}");
+    let r = req_with(&e.app, "GET", "/search?q=Favoriten", Some(&c1), false, &[]).await;
+    assert!(location(&r).ends_with("/favourites"), "{}", location(&r));
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c1), false, &[]).await;
+    assert!(
+        sug.body
+            .contains("<b>Favoriten</b></span><span class=\"dim\">2<"),
+        "{}",
+        sug.body
+    );
+    // Counted as the page shows them: a hidden favourite is not.
+    e.idx.set_hidden("p1", mine[1], true).unwrap();
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c1), false, &[]).await;
+    assert!(
+        sug.body
+            .contains("<b>Favoriten</b></span><span class=\"dim\">1<"),
+        "{}",
+        sug.body
+    );
+    e.idx.set_hidden("p1", mine[1], false).unwrap();
+
+    // p2 sees p1's photos but not p1's favourites.
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    let page = req_with(&e.app, "GET", "/favourites", Some(&c2), false, &[]).await;
+    assert!(page.body.contains("None yet"), "{}", page.body);
+    let only = req_with(
+        &e.app,
+        "GET",
+        &format!("/search?q=%E2%99%A5+{year}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(found(&only.body).is_empty(), "{}", only.body);
+    let sug = req_with(&e.app, "GET", "/suggest?q=Fav", Some(&c2), false, &[]).await;
+    assert!(!sug.body.contains("Favoriten"), "{}", sug.body);
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains(&format!("action=\"fav/{}\"", mine[0])),
+        "{}",
+        v.body
+    );
+    assert!(e.idx.favs("p2").unwrap().is_empty());
+
+    // p1 takes them out again.
+    let body = format!("ids={}%2C{}", mine[0], mine[1]);
+    let r = req_with_body(&e.app, "POST", "/unfav-many", Some(&c1), &body, &form).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
+    assert!(e.idx.favs("p1").unwrap().is_empty());
+}
+
+// Albums are each person's own: p1 makes them, fills them only with
+// items they may see, renames, empties and deletes them; p2, who sees
+// p1's library, can neither see nor change them.
+// rivet: verifies REQ-WEB-017
+#[tokio::test]
+async fn albums_are_each_persons_own() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let post = |uri: String,
+                cookie: String,
+                body: String,
+                headers: &'static [(&'static str, &'static str)]| {
+        let app = e.app.clone();
+        async move { req_with_body(&app, "POST", &uri, Some(&cookie), &body, headers).await }
+    };
+    const FORM: &[(&str, &str)] = &[
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    const CROSS: &[(&str, &str)] = &[
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+
+    // Made from the albums page, then filled from a selection.
+    let r = post("/albums".into(), c1.clone(), "name=Sommer".into(), FORM).await;
+    assert!(location(&r).ends_with("/album/1"), "{}", location(&r));
+    let r = post("/albums".into(), c1.clone(), "name=+++".into(), FORM).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let body = format!("album=1&ids={}%2C{}%2C{other}%2Cnope", mine[0], mine[1]);
+    let r = post("/album-add".into(), c1.clone(), body.clone(), FORM).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let held = e.idx.album_items(1).unwrap();
+    assert_eq!(held.len(), 2);
+    assert!(mine.iter().all(|id| held.contains(id)));
+    let r = post("/album-add".into(), c1.clone(), body, CROSS).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // A new one named in place, from the viewer's form.
+    let body = format!(
+        "album=new&name=++Neues+++Album+&ids={}&back=v%2Fp1%2F{}",
+        mine[0], mine[0]
+    );
+    let r = post("/album-add".into(), c1.clone(), body, FORM).await;
+    assert!(r.status.is_redirection());
+    assert_eq!(e.idx.album(2).unwrap().unwrap().name, "Neues Album");
+    assert_eq!(e.idx.album_items(2).unwrap().len(), 1);
+
+    // The pages.
+    let page = req_with(&e.app, "GET", "/albums", Some(&c1), false, &[]).await;
+    assert!(page.body.contains("<b>Sommer</b><i>2</i>"), "{}", page.body);
+    assert!(
+        page.body.contains("<b>Neues Album</b><i>1</i>"),
+        "{}",
+        page.body
+    );
+    let page = req_with(&e.app, "GET", "/album/1", Some(&c1), false, &[]).await;
+    for id in &mine {
+        assert!(
+            page.body.contains(&format!("id=\"i{id}\"")),
+            "{}",
+            page.body
+        );
+    }
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c1), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        2,
+        "{}",
+        show.body
+    );
+    assert!(show.body.contains("class=\"close\" href=\"album/1\""));
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains("<option value=\"1\">Sommer</option>"),
+        "{}",
+        v.body
+    );
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert!(tl.body.contains("<template id=\"albumopts\"><option value=\"2\">Neues Album</option><option value=\"1\">Sommer</option></template>"), "{}", tl.body);
+
+    // p2 sees p1's photos, not p1's albums.
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let page = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(!page.body.contains("Sommer"), "{}", page.body);
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c2), false, &[]).await;
+    assert_eq!(show.body.matches("<li data-src=").count(), 0);
+    let ids = format!("ids={}", mine[0]);
+    for (uri, body) in [
+        ("/album-add".to_string(), format!("album=1&{ids}")),
+        ("/album/1/remove".into(), ids.clone()),
+        ("/album/1/rename".into(), "name=Meins".into()),
+        ("/album/1/delete".into(), String::new()),
+    ] {
+        let r = post(uri.clone(), c2.clone(), body, FORM).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(e.idx.album(1).unwrap().unwrap().name, "Sommer");
+    assert_eq!(e.idx.album_items(1).unwrap().len(), 2);
+
+    // p1 takes one out, renames, deletes; the pictures stay.
+    let r = post(
+        "/album/1/remove".into(),
+        c1.clone(),
+        format!("ids={}%2C{other}", mine[1]),
+        FORM,
+    )
+    .await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let r = post(
+        "/album/1/rename".into(),
+        c1.clone(),
+        "name=Sommer+2021".into(),
+        FORM,
+    )
+    .await;
+    assert!(location(&r).ends_with("/album/1"));
+    assert_eq!(e.idx.album(1).unwrap().unwrap().name, "Sommer 2021");
+    let r = post("/album/1/delete".into(), c1.clone(), String::new(), FORM).await;
+    assert!(location(&r).ends_with("/albums"));
+    assert!(e.idx.album(1).unwrap().is_none());
+    assert!(e.idx.album_items(1).unwrap().is_empty());
+    assert!(e.idx.locate(mine[0]).unwrap().is_some());
+    // Ids are never given out twice: after the newest album goes, a new
+    // one gets a new id, so an old link to it finds nothing.
+    let r = post("/album/2/delete".into(), c1.clone(), String::new(), FORM).await;
+    assert!(location(&r).ends_with("/albums"));
+    let r = post("/albums".into(), c1.clone(), "name=Herbst".into(), FORM).await;
+    assert!(location(&r).ends_with("/album/3"), "{}", location(&r));
+    let r = req_with(&e.app, "GET", "/album/2", Some(&c1), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+}
+
+// Sharing an album is the owner's choice, off by default: shared, p2 sees
+// it among "Shared with you" and opens it (only what p2 may see, without
+// what p2 hid), but cannot change it; unshared, it is gone for p2 again.
+// rivet: verifies REQ-WEB-017
+#[tokio::test]
+async fn a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner() {
+    let e = env("https://photos.example").await;
+    const FORM: &[(&str, &str)] = &[
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let mine: Vec<u64> = e
+        .idx
+        .all()
+        .unwrap()
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let body = format!("album=new&name=Ferien&ids={}%2C{}", mine[0], mine[1]);
+    let r = req_with_body(&e.app, "POST", "/album-add", Some(&c1), &body, FORM).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    assert!(!e.idx.album(1).unwrap().unwrap().shared);
+
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    // Not shared: nothing for p2.
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    // p2 cannot share it either.
+    let r = req_with_body(&e.app, "POST", "/album/1/share", Some(&c2), "name=on", FORM).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(!e.idx.album(1).unwrap().unwrap().shared);
+
+    // p1 shares it.
+    let r = req_with_body(&e.app, "POST", "/album/1/share", Some(&c1), "name=on", FORM).await;
+    assert!(location(&r).ends_with("/album/1"), "{}", location(&r));
+    let own = req_with(&e.app, "GET", "/albums", Some(&c1), false, &[]).await;
+    assert!(
+        own.body
+            .contains("<b>Ferien</b><i>2</i><small>shared</small>"),
+        "{}",
+        own.body
+    );
+    assert!(!own.body.contains("Shared with you"));
+    assert_eq!(own.body.matches("<b>Ferien</b>").count(), 1, "{}", own.body);
+    let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(
+        list.body.contains("<h2>Shared with you</h2>"),
+        "{}",
+        list.body
+    );
+    assert!(
+        list.body
+            .contains("<b>Ferien</b><i>2</i><small>from p1</small>"),
+        "{}",
+        list.body
+    );
+    // p2 hides one: the album shows p2 the other only.
+    e.idx.set_hidden("p2", mine[1], true).unwrap();
+    let page = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains(&format!("id=\"i{}\"", mine[0])),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[1])));
+    assert!(page.body.contains("Shared by p1."));
+    assert!(!page.body.contains("album/1/rename"), "no tools for p2");
+    assert!(!page.body.contains("data-album="), "no removing for p2");
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c2), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        1,
+        "{}",
+        show.body
+    );
+    // Seen, never changed by p2; and not offered to add to.
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c2), false, &[]).await;
+    assert!(!tl.body.contains("Ferien"), "{}", tl.body);
+    let ids = format!("ids={}", mine[0]);
+    for (uri, body) in [
+        ("/album-add".to_string(), format!("album=1&{ids}")),
+        ("/album/1/remove".into(), ids.clone()),
+        ("/album/1/rename".into(), "name=Meins".into()),
+        ("/album/1/share".into(), "name=off".into()),
+        ("/album/1/delete".into(), String::new()),
+    ] {
+        let r = req_with_body(&e.app, "POST", &uri, Some(&c2), &body, FORM).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let a = e.idx.album(1).unwrap().unwrap();
+    assert!(a.shared && a.name == "Ferien");
+    assert_eq!(e.idx.album_items(1).unwrap().len(), 2);
+
+    // p1 stops sharing: gone for p2.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/album/1/share",
+        Some(&c1),
+        "name=off",
+        FORM,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(!list.body.contains("Ferien"));
 }

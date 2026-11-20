@@ -244,7 +244,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
     assert_eq!(html.matches("<h3 class=\"month\">May</h3>").count(), 1);
     assert!(html.contains("<h4 class=\"day\">2023-05-12</h4>"));
     let more = html
-        .split("hx-get=\"")
+        .split("class=\"more\" hx-get=\"")
         .nth(1)
         .expect("no continuation")
         .split('"')
@@ -284,7 +284,7 @@ async fn timeline_groups_by_day_and_pages_with_htmx() {
         let page = String::from_utf8(body).unwrap();
         total += page.matches("class=\"item").count();
         from_p1 += page.matches("2021-06-15").count();
-        match page.split("hx-get=\"").nth(1) {
+        match page.split("class=\"more\" hx-get=\"").nth(1) {
             Some(rest) => {
                 uri = format!("/{}", rest.split('"').next().unwrap().replace("&amp;", "&"))
             }
@@ -755,6 +755,15 @@ async fn viewer_info_panel_shows_date_place_and_camera() {
         assert!(page.contains(want), "info panel lacks {want:?}");
     }
     assert!(!page.contains(" style="), "inline style in viewer");
+    // The original goes along under its own name: a download, and a share
+    // button the browser shows where it can share files.
+    assert!(
+        page.contains(&format!(
+            r#"<a class="dl" href="original/{exif_id}" download="IMG_exif.jpg">"#
+        )),
+        "{page}"
+    );
+    assert!(page.contains(r#"class="share" hidden"#), "{page}");
 
     // No GPS: said so, no place.
     let (_, _, body) = get(&with_places, &format!("/v/p1/{named_id}"), false).await;

@@ -8,6 +8,7 @@ listen = "127.0.0.1:8080"           # loopback until login exists (REQ-AUTH-001)
 workers = 2                         # scan workers
 scan_interval_hours = 24            # serve rescans this often; 0 = only at start
 allowed_hosts = ["photos.example"]  # Host names answered besides localhost (REQ-WEB-005)
+vision_dir = "/srv/vision"          # optional: text, things and picture vectors (DD-023, DD-024); scripts/fetch-vision-models.sh fills it
 
 [transcribe]                        # transcripts of videos (REQ-MEDIA-004); optional
 model_dir = "/srv/whisper/base"     # config.json, tokenizer.json, model.safetensors (openai/whisper-base refs/pr/22, sha256-pinned)

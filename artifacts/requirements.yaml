@@ -735,6 +735,212 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-SEARCH-002
+    type: requirement
+    title: The search box suggests what the libraries hold as it is typed
+    status: implemented
+    release: v0.7.0
+    description: >
+      While a word is typed into the search box, a list under it offers
+      completions of the last word: things found in pictures (German, found
+      by their English name too), places, years and months, and words said
+      in videos or written in pictures, each with how many items hold it.
+      Earlier words of the query are kept, and a completion that would find
+      nothing together with them is not offered. Only terms that items in the
+      libraries the viewer may see hold are offered; common words and a
+      single letter offer nothing. The results page keeps the query in the
+      box so it can be refined.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-012
+    type: requirement
+    title: Photos taken one after another that look alike show as one series
+    status: implemented
+    release: v0.7.0
+    description: >
+      In the timeline, photos of one day, each taken at most two minutes
+      after the one before and looking alike by their picture vectors
+      (cosine at least 0.92), show as one tile with a count: a burst, or
+      the same scene taken again. The count opens the rest of the series in
+      place and closes it again; the tile still opens the viewer, whose
+      arrows pass through every photo. Without picture vectors nothing is
+      grouped.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-013
+    type: requirement
+    title: A slideshow from any photo on
+    status: implemented
+    release: v0.7.0
+    description: >
+      The viewer starts a slideshow from the photo shown (button or key s):
+      the timeline's photos from there on, older and older, one every five
+      seconds, cross-faded and loaded ahead, full screen where the browser
+      allows it. It shows one photo of each series, no videos, and nothing
+      the viewer hid or may not see. A tap or the space bar pauses, arrows
+      and swipes step, Escape closes to the viewer at the photo last shown;
+      the screen stays on while it plays where the browser allows it.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-SEARCH-003
+    type: requirement
+    title: Search results offer terms that narrow them down
+    status: implemented
+    release: v0.7.0
+    description: >
+      Above four or more results, the results page offers the things found
+      in them, their places and their years that some but not all results
+      hold, with how many hold each: up to four things, three places and
+      four years, the most held first. Each is a link to the query with the
+      term added, keeping the photo/video filter and the library searched;
+      terms already in the query, and terms that would find nothing with
+      it, are not offered, and each count is what the link finds.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-014
+    type: requirement
+    title: Several items are chosen in the timeline and hidden at once
+    status: implemented
+    release: v0.7.0
+    description: >
+      "Select" in the timeline turns taps on tiles into choosing them; a
+      closed series counts whole. "Hide for me" hides the chosen items for
+      this person only, with an undo that shows them again. Only items the
+      person may see change, and only on a request from the same site.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-SEARCH-004
+    type: requirement
+    title: Pictures are found by season and holiday
+    status: implemented
+    release: v0.7.0
+    description: >
+      Besides year, month and day, search knows each item's season
+      (Frühling/spring March to May, Sommer/summer June to August,
+      Herbst/autumn September to November, Winter December to February) and
+      holiday (Weihnachten/Christmas 24 to 26 December, Silvester and
+      Neujahr, Ostern/Easter from Good Friday to Easter Monday), in German
+      and English; the search box suggests them with their year.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-TRIP-001
+    type: requirement
+    title: Trips are found from where pictures were taken
+    status: implemented
+    release: v0.7.0
+    description: >
+      A Trips page lists the times away from home, newest first: days whose
+      pictures (by their recorded, hand-set or estimated positions) were
+      taken more than 50 km from home, at most two days apart, with no day
+      at home between, holding at least three items. Home is the place with
+      the most days of pictures. Each trip shows its places (most days
+      first), its days, how many items it holds and a photo, and opens the
+      timeline at its last day. Only items the viewer may see and has not
+      hidden count; nothing leaves the house.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-015
+    type: requirement
+    title: Keys and gestures are listed one tap away
+    status: implemented
+    release: v0.7.0
+    description: >
+      Every page's menu has "Keys and gestures", and "?" outside a text
+      field opens the same list: the viewer's, the slideshow's, the search
+      box's and the timeline's keys and gestures, in a dialog closed by
+      Escape, a tap outside or its button. The automated check covers the
+      menu entry on every page; the dialog itself runs in the browser.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-016
+    type: requirement
+    title: Each person keeps their own favourites
+    status: implemented
+    release: v0.7.0
+    description: >
+      A person marks a picture as a favourite with the heart in the viewer
+      (or "."), or several at once from a timeline selection, and takes
+      the mark off the same ways. Only items they may see can be marked,
+      only by a same-site request. Favourites are per person: another
+      person who sees the same library never sees them. The timeline shows
+      a heart on each favourite; a Favourites page lists them newest first
+      (not the hidden ones) with a slideshow of them alone. In search,
+      "♥" or "Favoriten" next to other words keeps only favourites, alone
+      it opens the Favourites page, and a partly typed "Fav" is suggested
+      to whoever has favourites. Nothing in the libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-017
+    type: requirement
+    title: Each person keeps their own albums
+    status: implemented
+    release: v0.7.0
+    description: >
+      A person makes named albums (from the Albums page, or a new one named
+      while adding), puts pictures in from a timeline selection or a
+      photo's details, takes them out, renames and deletes albums; deleting
+      an album leaves its pictures. Only items the viewer may see go in,
+      only by a same-site request. Albums are per person: anyone else,
+      even someone who sees the same library, finds no such album and
+      cannot change it. The owner may share an album with the household
+      (off until turned on, and turned off again the same way): then
+      everyone signed in finds it under "Shared with you" with its owner
+      named and opens it, but only the owner adds to, takes from,
+      renames, shares or deletes it. An album page shows its pictures the
+      viewer may see, newest first, without the ones the viewer hid, with
+      a slideshow of the album alone.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

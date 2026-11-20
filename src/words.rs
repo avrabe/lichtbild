@@ -335,6 +335,11 @@ const STOP: &[&str] = &[
     "let",
 ];
 
+/// Whether a word is too common to be worth a search.
+pub(crate) fn is_common(word: &str) -> bool {
+    STOP.contains(&word)
+}
+
 /// One word of the cloud: in how many pictures and videos, how often in all.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word {
@@ -343,7 +348,7 @@ pub struct Word {
     pub times: u64,
 }
 
-fn words_of(text: &str) -> impl Iterator<Item = String> + '_ {
+pub(crate) fn words_of(text: &str) -> impl Iterator<Item = String> + '_ {
     text.split(|c: char| !(c.is_alphanumeric() || c == '\'' || c == '-'))
         .map(|w| w.trim_matches(|c| c == '\'' || c == '-').to_lowercase())
         .filter(|w| {

@@ -115,6 +115,35 @@ at nice 0.
 | F102 | REQ-TEXT-001 | without a search every line is marked as a hit | `what_was_seen_is_stored_searched_and_shown` |
 | F103 | REQ-SEE-001 | unsure detections are kept as things | `whole_picture_boxes_need_a_sure_find` |
 | F104 | REQ-SEE-001 | things are searchable in English only | `what_was_seen_is_stored_searched_and_shown` |
+| F107 | REQ-SEARCH-002 | suggestions come from libraries the viewer may not see | `the_search_box_suggests_what_the_libraries_hold` |
+| F108 | REQ-SEARCH-002 | common words are suggested | `the_search_box_suggests_what_the_libraries_hold` |
+| F109 | REQ-SEARCH-002 | a completion that finds nothing with the earlier words is offered | `the_search_box_suggests_what_the_libraries_hold` |
+| F110 | REQ-WEB-012 | photos far apart in time join a series | `photos_taken_one_after_another_that_look_alike_are_one_series` |
+| F111 | REQ-WEB-012 | photos that do not look alike join a series | `photos_taken_one_after_another_that_look_alike_are_one_series` |
+| F112 | REQ-WEB-013 | the slideshow shows videos | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
+| F113 | REQ-WEB-013 | the slideshow shows every photo of a series | `a_slideshow_shows_one_photo_of_each_series_from_where_it_starts` |
+| F114 | REQ-SEARCH-003 | a term every result holds is offered to narrow down | `narrowing_offers_terms_that_split_the_results` |
+| F115 | REQ-SEARCH-003 | narrowing drops the photo/video filter | `search_results_offer_terms_that_narrow_them_down` |
+| F116 | REQ-WEB-014 | hiding several items reaches libraries the person may not see | `several_items_are_hidden_at_once_and_shown_again` |
+| F117 | REQ-WEB-014 | hiding several items accepts requests from another site | `several_items_are_hidden_at_once_and_shown_again` |
+| F118 | REQ-PLACE-002 | search results name only recorded places, not estimated ones | `neighbours_in_time_place_a_picture_as_estimated` |
+| F119 | REQ-SEARCH-004 | January and February are not winter | `pictures_are_found_by_season_and_holiday` |
+| F120 | REQ-SEARCH-004 | Easter runs a day too long | `dates_are_found_by_season_and_holiday` |
+| F121 | REQ-TRIP-001 | a town 90 km away counts as home | `days_away_from_home_are_one_trip_named_by_place` |
+| F122 | REQ-TRIP-001 | a day without pictures splits a trip | `days_away_from_home_are_one_trip_named_by_place` |
+| F123 | REQ-SEARCH-003 | a narrowing chip that finds nothing is offered | `narrowing_never_offers_a_dead_end` |
+| F124 | REQ-WEB-016 | everyone shares one person's favourites | `favourites_are_kept_per_person` |
+| F125 | REQ-WEB-016 | a hidden favourite still shows on the Favourites page | `favourites_are_kept_per_person` |
+| F126 | REQ-WEB-016 | the timeline shows no heart on favourites | `favourites_are_kept_per_person` |
+| F127 | REQ-WEB-016 | "♥" in a search keeps every hit, not only favourites | `favourites_are_kept_per_person` |
+| F128 | REQ-WEB-016 | "Favoriten" is suggested to someone with no favourites | `favourites_are_kept_per_person` |
+| F129 | REQ-WEB-017 | anyone may open and change anyone's album | `albums_are_each_persons_own` |
+| F130 | REQ-WEB-017 | an item the viewer may not see goes into their album | `albums_are_each_persons_own` |
+| F131 | REQ-WEB-017 | a deleted album leaves what it held behind | `albums_are_each_persons_own` |
+| F132 | REQ-WEB-017 | a new album gets the id of a deleted one | `albums_are_each_persons_own` |
+| F133 | REQ-WEB-017 | an album nobody shared opens for others | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
+| F134 | REQ-WEB-017 | one's own shared album is listed as shared with oneself | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
+| F135 | REQ-WEB-017 | someone else's shared album offers its owner's tools | `a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

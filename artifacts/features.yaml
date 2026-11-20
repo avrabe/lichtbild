@@ -273,3 +273,46 @@ artifacts:
       - type: satisfies
         target: REQ-SEE-002
 
+
+  - id: FEAT-014
+    type: feature
+    title: Usability round beyond the big photo apps
+    status: implemented
+    release: v0.7.0
+    description: >
+      Owner request 2026-11-19: work through the night on one big release;
+      lichtbild should be more usable than the photo apps of the big
+      vendors. Search that helps while typing comes first.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - Typing "kat" offers "Katze" with its count, and picking it runs the search
+        - The results page keeps the query in the box
+        - A burst of ten shots shows as one tile with "10", and opens in place
+        - On the iPad, a slideshow runs from any photo with the screen kept on
+        - Searching "Hund" offers "2021 (12)" and "Katze (3)" to narrow down
+        - Twenty screenshots are chosen and hidden in one go, and the undo brings them back
+        - A holiday shows on the Trips page under the town visited, with its days
+        - A heart on a photo puts it among one's favourites, with its own slideshow
+        - Twenty holiday photos go into a new album "Sommer" from one selection, shared with the house if wanted
+    links:
+      - type: satisfies
+        target: REQ-SEARCH-002
+      - type: satisfies
+        target: REQ-WEB-012
+      - type: satisfies
+        target: REQ-WEB-013
+      - type: satisfies
+        target: REQ-SEARCH-003
+      - type: satisfies
+        target: REQ-WEB-014
+      - type: satisfies
+        target: REQ-SEARCH-004
+      - type: satisfies
+        target: REQ-TRIP-001
+      - type: satisfies
+        target: REQ-WEB-015
+      - type: satisfies
+        target: REQ-WEB-016
+      - type: satisfies
+        target: REQ-WEB-017

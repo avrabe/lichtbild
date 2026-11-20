@@ -53,6 +53,16 @@ const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new(
 /// (REQ-DUP-002). Per person: one person's choice never changes another's
 /// view; nothing in the libraries changes.
 const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
+/// (person, item id) -> (): each person's favourites (REQ-WEB-016), kept
+/// apart like what they hid.
+const FAVS: TableDefinition<(&str, u64), ()> = TableDefinition::new("favourites");
+/// Album id -> JSON `Album` (REQ-WEB-017): each person's own albums.
+const ALBUMS: TableDefinition<u64, &[u8]> = TableDefinition::new("albums");
+/// (album id, item id) -> (): what an album holds.
+const ALBUM_ITEMS: TableDefinition<(u64, u64), ()> = TableDefinition::new("album_items");
+/// The last album id given out; ids are never given out twice, so an old
+/// link to a deleted album never opens a newer one.
+const ALBUM_SEQ: TableDefinition<&str, u64> = TableDefinition::new("album_seq");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -126,6 +136,38 @@ pub struct Item {
     pub video_ms: Option<u64>,
     /// Copies of this picture the viewer may see, this one included.
     pub copies: usize,
+    /// The viewer's favourite.
+    pub fav: bool,
+}
+
+/// An album (REQ-WEB-017): whose it is, its name, when it was made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Album {
+    pub owner: String,
+    pub name: String,
+    pub created: u64,
+    /// Shown to everyone in the household (only what each may see);
+    /// off unless the owner turns it on.
+    #[serde(default)]
+    pub shared: bool,
+}
+
+impl Item {
+    fn of(id: u64, rec: Record) -> Item {
+        Item {
+            id,
+            label: rec.label,
+            taken_local: rec.taken_local,
+            date_source: rec.date_source,
+            thumb_ok: rec.thumb == "ok",
+            hash: rec.hash,
+            width: rec.width,
+            height: rec.height,
+            video_ms: rec.video.map(|v| v.duration_ms),
+            copies: 1,
+            fav: false,
+        }
+    }
 }
 
 pub struct Index {
@@ -171,6 +213,10 @@ impl Index {
             w.open_table(FINGERPRINTS)?;
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
+            w.open_table(FAVS)?;
+            w.open_table(ALBUMS)?;
+            w.open_table(ALBUM_ITEMS)?;
+            w.open_table(ALBUM_SEQ)?;
             w.open_table(PLACED)?;
             w.open_table(TEXTS)?;
             w.open_table(OBJECTS)?;
@@ -417,18 +463,7 @@ impl Index {
             };
             let rec = decode(raw.value())?;
             if keep(id, &rec) {
-                out.push(Item {
-                    id,
-                    label: rec.label,
-                    taken_local: rec.taken_local,
-                    date_source: rec.date_source,
-                    thumb_ok: rec.thumb == "ok",
-                    hash: rec.hash,
-                    width: rec.width,
-                    height: rec.height,
-                    video_ms: rec.video.map(|v| v.duration_ms),
-                    copies: 1,
-                });
+                out.push(Item::of(id, rec));
             }
             Ok(out.len() >= limit)
         };
@@ -561,10 +596,25 @@ impl Index {
 
     /// Hide or show again an item for one person.
     pub fn set_hidden(&self, person: &str, id: u64, hidden: bool) -> Result<()> {
+        self.mark(HIDDEN, person, id, hidden)
+    }
+
+    /// Make an item one person's favourite, or not any more.
+    pub fn set_fav(&self, person: &str, id: u64, fav: bool) -> Result<()> {
+        self.mark(FAVS, person, id, fav)
+    }
+
+    fn mark(
+        &self,
+        table: TableDefinition<(&str, u64), ()>,
+        person: &str,
+        id: u64,
+        on: bool,
+    ) -> Result<()> {
         let w = self.db.begin_write()?;
         {
-            let mut t = w.open_table(HIDDEN)?;
-            if hidden {
+            let mut t = w.open_table(table)?;
+            if on {
                 t.insert((person, id), ())?;
             } else {
                 t.remove((person, id))?;
@@ -572,6 +622,20 @@ impl Index {
         }
         w.commit()?;
         Ok(())
+    }
+
+    fn marked(
+        &self,
+        table: TableDefinition<(&str, u64), ()>,
+        person: &str,
+    ) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(table)?;
+        let mut out = std::collections::HashSet::new();
+        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
+            out.insert(e?.0.value().1);
+        }
+        Ok(out)
     }
 
     /// Set (Some) or remove (None) the position of an item set by hand.
@@ -611,10 +675,168 @@ impl Index {
 
     /// The items one person has hidden.
     pub fn hidden(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
+        self.marked(HIDDEN, person)
+    }
+
+    /// One person's favourites.
+    pub fn favs(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
+        self.marked(FAVS, person)
+    }
+
+    /// Given ids in `labels` that `keep` accepts, newest first as in the
+    /// timeline: for a small chosen set (favourites, an album) without
+    /// reading the whole library.
+    pub fn items_of(
+        &self,
+        ids: impl IntoIterator<Item = u64>,
+        labels: &[String],
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<Vec<Item>> {
         let r = self.db.begin_read()?;
-        let t = r.open_table(HIDDEN)?;
+        let items = r.open_table(ITEMS)?;
+        let mut out = Vec::new();
+        for id in ids {
+            let Some(raw) = items.get(id)? else { continue };
+            let rec = decode(raw.value())?;
+            if labels.contains(&rec.label) && keep(id, &rec) {
+                out.push(Item::of(id, rec));
+            }
+        }
+        out.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        Ok(out)
+    }
+
+    /// A new, empty album; its id.
+    pub fn create_album(&self, owner: &str, name: &str, now: u64) -> Result<u64> {
+        let w = self.db.begin_write()?;
+        let id;
+        {
+            let mut seq = w.open_table(ALBUM_SEQ)?;
+            let last = seq.get("albums")?.map_or(0, |v| v.value());
+            let mut t = w.open_table(ALBUMS)?;
+            id = last.max(t.last()?.map_or(0, |(k, _)| k.value())) + 1;
+            seq.insert("albums", id)?;
+            let a = Album {
+                owner: owner.to_string(),
+                name: name.to_string(),
+                created: now,
+                shared: false,
+            };
+            t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(id)
+    }
+
+    pub fn album(&self, id: u64) -> Result<Option<Album>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        Ok(match t.get(id)? {
+            Some(v) => serde_json::from_slice(v.value()).ok(),
+            None => None,
+        })
+    }
+
+    /// One person's albums, newest first.
+    pub fn albums(&self, owner: &str) -> Result<Vec<(u64, Album)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        let mut out = Vec::new();
+        for e in t.iter()?.rev() {
+            let (k, v) = e?;
+            if let Ok(a) = serde_json::from_slice::<Album>(v.value()) {
+                if a.owner == owner {
+                    out.push((k.value(), a));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Rename an album.
+    pub fn rename_album(&self, id: u64, name: &str) -> Result<()> {
+        self.change_album(id, |a| a.name = name.to_string())
+    }
+
+    /// Share an album with the household, or stop sharing it.
+    pub fn share_album(&self, id: u64, shared: bool) -> Result<()> {
+        self.change_album(id, |a| a.shared = shared)
+    }
+
+    /// Change an album, read and written in one transaction, so a delete
+    /// in between cannot bring it back.
+    fn change_album(&self, id: u64, change: impl FnOnce(&mut Album)) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(ALBUMS)?;
+            let a = match t.get(id)? {
+                Some(v) => serde_json::from_slice::<Album>(v.value()).ok(),
+                None => None,
+            };
+            if let Some(mut a) = a {
+                change(&mut a);
+                t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Albums others share with the household, newest first.
+    pub fn shared_albums(&self, me: &str) -> Result<Vec<(u64, Album)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        let mut out = Vec::new();
+        for e in t.iter()?.rev() {
+            let (k, v) = e?;
+            if let Ok(a) = serde_json::from_slice::<Album>(v.value()) {
+                if a.shared && a.owner != me {
+                    out.push((k.value(), a));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Remove an album and what it holds; the pictures stay.
+    pub fn delete_album(&self, id: u64) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(ALBUMS)?.remove(id)?;
+            let mut t = w.open_table(ALBUM_ITEMS)?;
+            let ids: Vec<u64> = t
+                .range((id, 0u64)..=(id, u64::MAX))?
+                .map(|e| e.map(|(k, _)| k.value().1))
+                .collect::<std::result::Result<_, _>>()?;
+            for i in ids {
+                t.remove((id, i))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Put an item into an album, or take it out.
+    pub fn set_in_album(&self, album: u64, item: u64, on: bool) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(ALBUM_ITEMS)?;
+            if on {
+                t.insert((album, item), ())?;
+            } else {
+                t.remove((album, item))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// What an album holds.
+    pub fn album_items(&self, album: u64) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUM_ITEMS)?;
         let mut out = std::collections::HashSet::new();
-        for e in t.range((person, 0u64)..=(person, u64::MAX))? {
+        for e in t.range((album, 0u64)..=(album, u64::MAX))? {
             out.insert(e?.0.value().1);
         }
         Ok(out)

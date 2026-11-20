@@ -114,16 +114,33 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(home))
         .route("/t/{who}", get(timeline))
         .route("/v/{who}/{id}", get(viewer))
+        .route("/show/{who}", get(show))
         .route("/search", get(search))
+        .route("/suggest", get(suggest))
         .route("/hide/{id}", axum::routing::post(hide))
         .route("/unhide/{id}", axum::routing::post(unhide))
+        .route("/hide-many", axum::routing::post(hide_many))
+        .route("/unhide-many", axum::routing::post(unhide_many))
         .route("/keep/{id}", axum::routing::post(keep))
         .route("/hidden", get(hidden_page))
+        .route("/fav/{id}", axum::routing::post(fav))
+        .route("/unfav/{id}", axum::routing::post(unfav))
+        .route("/fav-many", axum::routing::post(fav_many))
+        .route("/unfav-many", axum::routing::post(unfav_many))
+        .route("/favourites", get(favourites_page))
+        .route("/albums", get(albums_page).post(album_create))
+        .route("/album/{id}", get(album_page))
+        .route("/album-add", axum::routing::post(album_add))
+        .route("/album/{id}/remove", axum::routing::post(album_remove))
+        .route("/album/{id}/rename", axum::routing::post(album_rename))
+        .route("/album/{id}/delete", axum::routing::post(album_delete))
+        .route("/album/{id}/share", axum::routing::post(album_share))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
         .route("/words", get(words_page))
         .route("/things", get(things_page))
+        .route("/trips", get(trips_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
@@ -508,11 +525,15 @@ fn app_menu(st: &AppState) -> String {
          <ul>\
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
+         <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
-         <li class=\"sep\"><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
+         <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
+         <li><a href=\"albums\"><b>Albums</b><span>Your own collections</span></a></li>\
+         <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
+         <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
          {signout}</ul></details>"
     )
 }
@@ -566,7 +587,7 @@ fn page(
 <script src="static/lichtbild.js?v={v}" defer></script>
 </head>
 <body>
-<header><a href="./" class="brand">lichtbild</a>{menu}<form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200"></form>{nav}</header>
+<header><a href="./" class="brand">lichtbild</a>{menu}<form class="search" action="search" method="get" role="search"><input type="search" name="q" placeholder="Search" aria-label="Search" maxlength="200" autocomplete="off" autocapitalize="off" spellcheck="false" hx-get="suggest" hx-trigger="input changed delay:120ms" hx-target="next .suggest" hx-sync="this:replace" aria-autocomplete="list" aria-controls="suggest"><div id="suggest" class="suggest" role="listbox" aria-label="Suggestions"></div></form>{nav}</header>
 <main>
 {body}
 </main>
@@ -788,7 +809,10 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
         body += "</div></section>";
     }
     body += "<nav class=\"tiles\">\
+             <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
+             <a href=\"albums\"><b>Albums</b><span>Your own collections</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
+             <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
@@ -928,20 +952,58 @@ const MONTHS: [&str; 12] = [
 
 /// Render items grouped by year, month and day; `prev_day` is the last day
 /// already on the page, so a continuation does not repeat headings.
+/// Seconds apart at most between two pictures of one series.
+const SERIES_GAP: i64 = 120;
+
+/// For each item: how many items its series holds when it leads one
+/// (REQ-WEB-012), 0 when it belongs to the series before it, 1 when alone.
+/// A series is photos of one day, each taken at most SERIES_GAP seconds
+/// after the one before and looking at least SERIES_MIN alike.
+pub fn series(items: &[index::Item], space: Option<&crate::embed::Space>) -> Vec<usize> {
+    let mut out = vec![1; items.len()];
+    let Some(space) = space else {
+        return out;
+    };
+    let t = |it: &index::Item| {
+        chrono::NaiveDateTime::parse_from_str(&it.taken_local, "%Y-%m-%dT%H:%M:%S").ok()
+    };
+    let mut lead = 0;
+    for i in 1..items.len() {
+        let (a, b) = (&items[i - 1], &items[i]);
+        let joined = a.video_ms.is_none()
+            && b.video_ms.is_none()
+            && a.taken_local.get(..10) == b.taken_local.get(..10)
+            && matches!((t(a), t(b)), (Some(x), Some(y)) if (x - y).num_seconds().abs() <= SERIES_GAP)
+            && space
+                .alike(&a.hash, &b.hash)
+                .is_some_and(|c| c >= crate::embed::SERIES_MIN);
+        if joined {
+            out[lead] += 1;
+            out[i] = 0;
+        } else {
+            lead = i;
+        }
+    }
+    out
+}
+
 pub fn render_items(
     who: &str,
     items: &[index::Item],
+    series: &[usize],
     prev_day: Option<&str>,
     more: bool,
     kq: &str,
 ) -> String {
     let mut s = String::new();
+    // Items of the open series still to come.
+    let mut left = 0usize;
     let mut prev = prev_day.map(str::to_string);
     let mut open = prev.is_some();
     if open {
         s += "<div class=\"grid\">";
     }
-    for it in items {
+    for (i, it) in items.iter().enumerate() {
         let day = it.taken_local.get(..10).unwrap_or("").to_string();
         if prev.as_deref() != Some(day.as_str()) {
             if open {
@@ -995,8 +1057,27 @@ pub fn render_items(
         } else {
             dur
         };
+        let dur = if it.fav {
+            format!(
+                "{dur}<span class=\"heart\" title=\"Favourite\" aria-label=\"Favourite\">♥</span>"
+            )
+        } else {
+            dur
+        };
+        let n = series.get(i).copied().unwrap_or(1);
+        let follows = n == 0 && left > 0;
+        let dur = if n >= 2 {
+            left = n - 1;
+            s += &format!("<span class=\"series\" id=\"s{}\">", it.id);
+            format!(
+                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another\">{n}</span>"
+            )
+        } else {
+            dur
+        };
         s += &format!(
-            "<a class=\"item{cls}{vid}\" id=\"i{id}\" href=\"v/{who}/{id}{vq}\" title=\"{t}\">{img}{dur}</a>",
+            "<a class=\"item{cls}{vid}{later}\" id=\"i{id}\" href=\"v/{who}/{id}{vq}\" title=\"{t}\">{img}{dur}</a>",
+            later = if follows { " later" } else { "" },
             cls = if weak { " weak" } else { "" },
             vid = if it.video_ms.is_some() { " video" } else { "" },
             id = it.id,
@@ -1004,6 +1085,15 @@ pub fn render_items(
             t = esc(&title),
             vq = viewer_query(kq),
         );
+        if follows {
+            left -= 1;
+            if left == 0 {
+                s += "</span>";
+            }
+        }
+    }
+    if left > 0 {
+        s += "</span>";
     }
     if open {
         s += "</div>\n";
@@ -1057,6 +1147,7 @@ async fn timeline(
         // One copy of each duplicate group, the best the viewer may see,
         // and nothing this person hid (REQ-DUP-001, REQ-DUP-002).
         let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
         let mut items = idx.timeline_where(
             &labels,
             before.as_ref().map(|(t, i)| (t.as_str(), *i)),
@@ -1068,6 +1159,7 @@ async fn timeline(
         )?;
         for it in &mut items {
             it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
         }
         // The chooser counts what this timeline shows (REQ-WEB-010).
         let months = if full_page {
@@ -1085,7 +1177,8 @@ async fn timeline(
     };
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
-    let fragment = render_items(&who, &items, cur.day.as_deref(), more, kq);
+    let runs = series(&items, st.vision_on.then_some(st.space.as_ref()));
+    let fragment = render_items(&who, &items, &runs, cur.day.as_deref(), more, kq);
     if !full_page {
         return Html(fragment).into_response();
     }
@@ -1120,8 +1213,9 @@ async fn timeline(
             format!("<p class=\"newer\"><a href=\"{href}\">↑ Newer photos</a></p>\n")
         }
     };
+    let albums = album_template(&albums_of(&st, person(&viewer)).await);
     let body = format!(
-        "<div class=\"thead\"><h1>{}</h1>{}</div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
+        "<div class=\"thead\"><h1>{}</h1>{}<a class=\"tbtn\" href=\"show/{w}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}{albums}",
         esc(&title),
         kind_switch(&format!("t/{}", esc(&who)), kind),
         render_jump(&who, &months, kq),
@@ -1131,7 +1225,8 @@ async fn timeline(
             "<p>No items yet. Run <code>lichtbild scan</code>.</p>"
         } else {
             ""
-        }
+        },
+        w = esc(&who),
     );
     page_for(&st, &title, &body).into_response()
 }
@@ -1146,6 +1241,7 @@ type ViewerItem = (
     Vec<(&'static str, String)>,
     Option<crate::stt::Transcript>,
     Vec<(u64, index::Record)>,
+    bool,
     bool,
 );
 
@@ -1547,6 +1643,146 @@ pub fn photo_src(id: u64, rec: &index::Record) -> String {
     }
 }
 
+/// Photos a slideshow holds at most.
+const SHOW_MAX: usize = 500;
+
+#[derive(Deserialize)]
+pub struct ShowQuery {
+    /// Start at this photo; without it, at the newest.
+    at: Option<u64>,
+    /// Only this person's favourites (REQ-WEB-016), each one shown.
+    fav: Option<u8>,
+    /// Only this album of theirs (REQ-WEB-017), each picture shown.
+    album: Option<u64>,
+}
+
+/// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
+fn long_date(taken: &str) -> String {
+    let m: usize = taken.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(0);
+    match (
+        taken.get(8..10).and_then(|d| d.parse::<u32>().ok()),
+        MONTHS.get(m.wrapping_sub(1)),
+        taken.get(..4),
+        taken.get(11..16),
+    ) {
+        (Some(d), Some(name), Some(y), Some(hm)) => format!("{d} {name} {y}, {hm}"),
+        _ => taken.replace('T', " "),
+    }
+}
+
+/// GET /show/{who}?at=: a slideshow of the timeline's photos from `at` on,
+/// older and older (REQ-WEB-013): full screen, one photo of each series,
+/// no videos, nothing hidden. assets/lichtbild.js plays it.
+async fn show(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(who): UrlPath<String>,
+    Query(sq): Query<ShowQuery>,
+) -> Response {
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let space = st.vision_on.then(|| st.space.clone());
+    let fav_only = sq.fav.is_some();
+    let album = sq.album;
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
+        let hidden = idx.hidden(&me)?;
+        // A chosen set: favourites, or one of this person's albums.
+        let favs = match (sq.fav, sq.album) {
+            (_, Some(a)) => match seen_album(&idx, a, &me)? {
+                Some(_) => Some(idx.album_items(a)?),
+                None => return Ok(Vec::new()),
+            },
+            (Some(_), None) => Some(idx.favs(&me)?),
+            (None, None) => None,
+        };
+        let start = match sq.at {
+            Some(at) => match idx.locate(at)?.filter(|r| labels.contains(&r.label)) {
+                Some(r) => Some((r.taken_local, at + 1)),
+                None => return Ok(Vec::new()),
+            },
+            None => None,
+        };
+        let items = match &favs {
+            // A chosen set is read by id, not by scanning the library.
+            Some(f) => {
+                let mut v = idx.items_of(f.iter().copied(), &labels, |id, rec| {
+                    rec.video.is_none() && !hidden.contains(&id)
+                })?;
+                if let Some((t, i)) = &start {
+                    v.retain(|it| (it.taken_local.as_str(), it.id) < (t.as_str(), *i));
+                }
+                v.truncate(SHOW_MAX);
+                v
+            }
+            None => idx.timeline_where(
+                &labels,
+                start.as_ref().map(|(t, i)| (t.as_str(), *i)),
+                SHOW_MAX,
+                |id, rec| rec.video.is_none() && dups.shown(id, &labels, &hidden).shown,
+            )?,
+        };
+        let runs = match favs {
+            Some(_) => vec![1; items.len()],
+            None => series(&items, space.as_deref()),
+        };
+        let mut out = Vec::new();
+        for (it, n) in items.iter().zip(runs) {
+            if n == 0 {
+                continue;
+            }
+            if let Some(rec) = idx.locate(it.id)? {
+                out.push((it.id, photo_src(it.id, &rec), long_date(&it.taken_local)));
+            }
+        }
+        Ok(out)
+    })
+    .await;
+    let slides = match res {
+        Ok(Ok(s)) => s,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let back = match (album, slides.first()) {
+        (Some(a), _) => format!("album/{a}"),
+        _ if fav_only => "favourites".to_string(),
+        (None, Some((id, _, _))) => format!("v/{}/{id}", esc(&who)),
+        (None, None) => format!("t/{}", esc(&who)),
+    };
+    let list: String = slides
+        .iter()
+        .map(|(id, src, when)| {
+            format!(
+                "<li data-src=\"{}\" data-when=\"{}\" data-href=\"v/{}/{id}\"></li>",
+                esc(src),
+                esc(when),
+                esc(&who)
+            )
+        })
+        .collect();
+    let body = format!(
+        "<div class=\"show\" data-interval=\"5000\" role=\"region\" aria-label=\"Slideshow\">\
+         <img class=\"slide on\" alt=\"\"><img class=\"slide\" alt=\"\">\
+         <div class=\"sbar\"><span class=\"cap\" aria-live=\"polite\"></span>\
+         <span class=\"sctl\"><button type=\"button\" class=\"sprev\" aria-label=\"Previous\">‹</button>\
+         <button type=\"button\" class=\"play\" aria-label=\"Pause\">❚❚</button>\
+         <button type=\"button\" class=\"snext\" aria-label=\"Next\">›</button>\
+         <button type=\"button\" class=\"sfs\" hidden aria-label=\"Full screen\">⛶</button>\
+         <a class=\"close\" href=\"{back}\" aria-label=\"Close\">✕</a></span></div>\
+         <p class=\"send\" hidden>The end. <a href=\"{back}\">Back</a></p>\
+         <ol class=\"slides\" hidden>{list}</ol></div>{empty}",
+        empty = if slides.is_empty() {
+            "<p>No photos to show.</p>"
+        } else {
+            ""
+        }
+    );
+    page_for(&st, "lichtbild slideshow", &body).into_response()
+}
+
 /// GET /v/{who}/{id}: one photo, large, with the previous (newer) and next
 /// (older) photo of the same timeline. Arrow keys and swipes in
 /// assets/lichtbild.js follow the same links; without JavaScript they are
@@ -1611,12 +1847,13 @@ async fn viewer(
             }
         }
         let is_hidden = hidden.contains(&id);
+        let is_fav = idx.favs(&me)?.contains(&id);
         Ok(Some((
-            rec, newer, older, prefetch, exif, transcript, copies, is_hidden,
+            rec, newer, older, prefetch, exif, transcript, copies, is_hidden, is_fav,
         )))
     })
     .await;
-    let (rec, newer, older, prefetch, exif, transcript, copies, is_hidden) = match res {
+    let (rec, newer, older, prefetch, exif, transcript, copies, is_hidden, is_fav) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such photo").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -1707,6 +1944,29 @@ async fn viewer(
     } else {
         esc(&rec.taken_local.replace('T', " "))
     };
+    // Take the original along: a download under its own name, and the
+    // system share sheet where the browser offers one (assets/lichtbild.js
+    // shows the button), so a photo goes straight to Photos or a message.
+    let get = {
+        let name = index::rel_from_bytes(&rec.rel)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        format!(
+            "<p class=\"getrow\"><a class=\"dl\" href=\"original/{id}\" download=\"{n}\">Download</a><button type=\"button\" class=\"share\" hidden data-src=\"original/{id}\" data-name=\"{n}\">Share…</button></p>",
+            n = esc(&name)
+        )
+    };
+    // Into one of this person's albums, or a new one (REQ-WEB-017).
+    let to_album = {
+        let opts = album_options(&albums_of(&st, person(&viewer)).await);
+        format!(
+            "<form class=\"albumf\" method=\"post\" action=\"album-add\"><input type=\"hidden\" name=\"ids\" value=\"{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\">\
+             <select name=\"album\" aria-label=\"Album\">{opts}<option value=\"new\">New album…</option></select>\
+             <input type=\"text\" name=\"name\" maxlength=\"80\" placeholder=\"Name of the new album\" aria-label=\"Name of the new album\">\
+             <button type=\"submit\">Add to album</button></form>"
+        )
+    };
     let hide = {
         // Back to the timeline where this item was; showing it again
         // stays in the viewer.
@@ -1724,7 +1984,7 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}<button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <span class=\"when\">{when}</span>{tr}{textp}{things}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
@@ -1748,10 +2008,17 @@ async fn viewer(
             + &render_info(&rec, &exif, st.places.as_deref(), pos.as_ref(), act)
                 .replace(
                     "</dl></details>",
-                    &format!("<div class=\"hiderow\">{hide}</div></dl></details>"),
+                    &format!("<div class=\"hiderow\">{get}{to_album}{hide}</div></dl></details>"),
                 ),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
+        // A favourite (REQ-WEB-016): a form, so it works without JavaScript;
+        // assets/lichtbild.js toggles it in place.
+        heart = if is_fav {
+            format!("<form class=\"favf\" method=\"post\" action=\"unfav/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\"><button type=\"submit\" class=\"heart on\" aria-pressed=\"true\" title=\"Favourite (.)\" aria-label=\"Favourite\">♥</button></form>")
+        } else {
+            format!("<form class=\"favf\" method=\"post\" action=\"fav/{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\"><button type=\"submit\" class=\"heart\" aria-pressed=\"false\" title=\"Favourite (.)\" aria-label=\"Favourite\">♡</button></form>")
+        },
     );
     page_for(&st, "lichtbild", &body).into_response()
 }
@@ -1763,15 +2030,109 @@ pub struct SearchQuery {
     kind: Option<String>,
 }
 
-/// GET /search?q=: one search box over transcripts, places, dates and
-/// names (REQ-SEARCH-001), in the viewer's libraries only.
-/// Search results: exact hits with their records, and pictures that look
-/// like the words (REQ-SEE-002).
+/// Search results: exact hits with their records, pictures that look like
+/// the words (REQ-SEE-002), and terms that narrow them down
+/// (REQ-SEARCH-003).
 type Found = (
     Vec<(crate::search::Hit, index::Record)>,
     Vec<(u64, index::Record)>,
+    Vec<crate::search::Narrow>,
 );
 
+/// Completions for the search box as it is typed (REQ-SEARCH-002): only
+/// terms that items in the viewer's libraries hold.
+async fn suggest(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(sq): Query<SearchQuery>,
+) -> Response {
+    let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
+    let labels = viewer.labels.clone();
+    let sx = st.search.clone();
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    // Favourites words (REQ-WEB-016) are not in the index: the rest is
+    // completed and the word kept in front; a partly typed one is offered.
+    let (rest, fav) = crate::search::split_fav(&q);
+    let fav_word = q
+        .split_whitespace()
+        .find(|w| crate::search::split_fav(w).1)
+        .map(str::to_string);
+    let typing = !q.ends_with(char::is_whitespace);
+    let last = q.split_whitespace().last().filter(|_| typing).unwrap_or("");
+    let offer = crate::search::fav_completion(last).filter(|_| !fav);
+    // "Katze ♥": the favourites word was the last one typed, so "Katze"
+    // is finished, not being typed.
+    let done = !typing || crate::search::split_fav(last).1;
+    let ask = match (fav, done) {
+        (false, _) => q.clone(),
+        (true, true) if !rest.is_empty() => format!("{rest} "),
+        (true, _) => rest,
+    };
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        // As many as the Favourites page shows: in these libraries and
+        // not hidden.
+        let n = match offer {
+            Some(_) => {
+                let hidden = idx.hidden(&me)?;
+                idx.items_of(idx.favs(&me)?, &labels, |id, _| !hidden.contains(&id))?
+                    .len()
+            }
+            None => 0,
+        };
+        let found = if fav && ask.trim().is_empty() {
+            Vec::new()
+        } else {
+            sx.suggest(&ask, &labels, 8)
+        };
+        Ok((found, n))
+    })
+    .await;
+    let (mut found, favs) = match res {
+        Ok(Ok(f)) => f,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut h = String::new();
+    if let (Some(word), true) = (offer, favs > 0) {
+        let head = q.trim_end().strip_suffix(last).unwrap_or("");
+        h += &format!(
+            "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"your favourites\" aria-label=\"your favourites\">♥</span><span class=\"st\">{head}<b>{word}</b></span><span class=\"dim\">{favs}</span></a>",
+            q = urlencode(&format!("{head}{word}")),
+            head = esc(head),
+        );
+    }
+    if let Some(w) = fav_word {
+        for s in &mut found {
+            s.query = format!("{w} {}", s.query);
+        }
+    }
+    for s in found {
+        let (icon, what) = match s.kind {
+            crate::search::Kind::Thing => ("◎", "thing"),
+            crate::search::Kind::Place => ("⌖", "place"),
+            crate::search::Kind::Date => ("◷", "date"),
+            crate::search::Kind::Word => ("❝", "said or written"),
+        };
+        let head = s.query.strip_suffix(&s.term).unwrap_or("");
+        let mut note = s.hint.clone();
+        if !note.is_empty() {
+            note += " · ";
+        }
+        note += &s.items.to_string();
+        h += &format!(
+            "<a role=\"option\" href=\"search?q={q}\"><span class=\"sk\" title=\"{what}\" aria-label=\"{what}\">{icon}</span><span class=\"st\">{head}<b>{term}</b></span><span class=\"dim\">{note}</span></a>",
+            q = urlencode(&s.query),
+            head = esc(head),
+            term = esc(&s.term),
+            note = esc(&note),
+        );
+    }
+    ([(axum::http::header::CACHE_CONTROL, "no-store")], Html(h)).into_response()
+}
+
+/// GET /search?q=: one search box over transcripts, places, dates and
+/// names (REQ-SEARCH-001), in the viewer's libraries only.
 async fn search(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -1780,6 +2141,7 @@ async fn search(
     let q: String = sq.q.unwrap_or_default().chars().take(200).collect();
     // Without `who`, every library the viewer may see; result links open
     // the merged timeline, or the single one when there is only one.
+    let explicit_who = sq.who.clone();
     let who = match sq.who {
         Some(w) => w,
         None if viewer.labels.len() == 1 => viewer.labels[0].clone(),
@@ -1790,13 +2152,28 @@ async fn search(
     };
     let idx = st.index.clone();
     let sx = st.search.clone();
+    let places = st.places.clone();
+    let positions = st.positions.clone();
     let dups = st.dups.clone();
     let me = person(&viewer);
     let (kind, _) = kind_filter(sq.kind.as_deref());
-    let q2 = q.clone();
+    // "Favoriten" or "♥" asks for the viewer's favourites (REQ-WEB-016):
+    // the other words are searched, then only favourites are kept; alone,
+    // it is the Favourites page.
+    let (q2, fav_only) = crate::search::split_fav(&q);
+    if fav_only && q2.is_empty() {
+        return Redirect::to(&format!("{}/favourites", st.base_path)).into_response();
+    }
     let space = st.vision_on.then(|| st.space.clone());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Found> {
         let hidden = idx.hidden(&me)?;
+        let favs = if fav_only { Some(idx.favs(&me)?) } else { None };
+        // A favourite counts through any of its copies.
+        let wanted = |id: u64| {
+            favs.as_ref().is_none_or(|f| {
+                f.contains(&id) || dups.copies(id, &labels).iter().any(|c| f.contains(c))
+            })
+        };
         let mut out: Vec<(crate::search::Hit, index::Record)> = Vec::new();
         for mut h in sx.query(&q2, &labels)?.into_iter().take(200) {
             // A hit on a copy shows the copy the timeline shows; a hit
@@ -1810,6 +2187,9 @@ async fn search(
                     Some(best) => h.id = best,
                     None => continue,
                 }
+            }
+            if !wanted(h.id) {
+                continue;
             }
             if let Some((prev, _)) = out.iter_mut().find(|(p, _)| p.id == h.id) {
                 for s in h.speech {
@@ -1843,7 +2223,10 @@ async fn search(
                 }) else {
                     continue;
                 };
-                if out.iter().any(|(h, _)| h.id == id) || looks.iter().any(|(l, _)| *l == id) {
+                if !wanted(id)
+                    || out.iter().any(|(h, _)| h.id == id)
+                    || looks.iter().any(|(l, _)| *l == id)
+                {
                     continue;
                 }
                 if let Some(rec) = idx.locate(id)? {
@@ -1854,26 +2237,128 @@ async fn search(
                 }
             }
         }
-        Ok((out, looks))
+        // What the results hold, to narrow them down (REQ-SEARCH-003).
+        let pos = positions.get(&idx)?;
+        let mut held: Vec<Vec<(crate::search::Kind, String)>> = Vec::new();
+        for (h, rec) in &out {
+            let mut terms = Vec::new();
+            if let Some(y) = rec
+                .taken_local
+                .get(..4)
+                .filter(|y| y.bytes().all(|b| b.is_ascii_digit()))
+            {
+                terms.push((crate::search::Kind::Date, y.to_string()));
+            }
+            if rec.video.is_none() {
+                let mut kinds: Vec<u8> = idx.objects(&rec.hash)?.iter().map(|o| o.kind).collect();
+                kinds.sort_unstable();
+                kinds.dedup();
+                for k in kinds {
+                    if let Some((_, de, _)) = crate::objects::KINDS.get(k as usize) {
+                        terms.push((crate::search::Kind::Thing, de.to_string()));
+                    }
+                }
+            }
+            if let (Some(p), Some(at)) = (places.as_deref(), pos.get(&h.id)) {
+                if let Some(n) = p.nearest(at.lat, at.lon) {
+                    terms.push((crate::search::Kind::Place, n.label));
+                }
+            }
+            held.push(terms);
+        }
+        // A chip must find what it promises: words match within one
+        // document, and the year or place of a hit on what was said is
+        // not in that document. Each chip is run, counted as the results
+        // page would count it, and dropped when it finds nothing.
+        let mut narrow = Vec::new();
+        for mut n in crate::search::narrow(&q2, &held) {
+            let query = format!("{} {}", q2.trim(), crate::search::plain(&n.term));
+            let ids: std::collections::HashSet<u64> = sx
+                .query(&query, &labels)?
+                .into_iter()
+                .map(|h| h.id)
+                .filter(|id| dups.shown(*id, &labels, &hidden).shown && wanted(*id))
+                .filter(|id| {
+                    kind.is_none_or(|v| {
+                        idx.locate(*id)
+                            .ok()
+                            .flatten()
+                            .is_some_and(|r| r.video.is_some() == v)
+                    })
+                })
+                .collect();
+            if !ids.is_empty() {
+                n.items = ids.len();
+                narrow.push(n);
+            }
+        }
+        Ok((out, looks, narrow))
     })
     .await;
-    let (hits, looks) = match res {
+    let (hits, looks, narrow) = match res {
         Ok(Ok(h)) => h,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let body = format!(
-        "{}{}{}",
+        "{}{}{}{}",
         kind_switch(&format!("search?q={}", esc(&q)), kind),
+        render_narrow(&q, &narrow, &narrow_query(kind, explicit_who.as_deref())),
         // No exact hit but look-alikes: their heading says enough.
         if hits.is_empty() && !looks.is_empty() {
             String::new()
         } else {
-            render_search(&who, &q, &hits, st.places.as_deref())
+            render_search(
+                &who,
+                &q,
+                &hits,
+                st.places.as_deref(),
+                &st.positions.get(&st.index).unwrap_or_default(),
+            )
         },
         render_looks(&who, &q, &looks)
     );
     page_for(&st, "lichtbild search", &body).into_response()
+}
+
+/// `&kind=…&who=…` for a link that keeps the photo/video filter and the
+/// library searched.
+fn narrow_query(kind: Option<bool>, who: Option<&str>) -> String {
+    let mut s = match kind {
+        Some(true) => "&amp;kind=video".to_string(),
+        Some(false) => "&amp;kind=photo".to_string(),
+        None => String::new(),
+    };
+    if let Some(w) = who {
+        s += &format!("&amp;who={}", urlencode(w));
+    }
+    s
+}
+
+/// Terms that narrow the results down (REQ-SEARCH-003), each a link to
+/// the query with it added.
+pub fn render_narrow(q: &str, narrow: &[crate::search::Narrow], kq: &str) -> String {
+    if narrow.is_empty() {
+        return String::new();
+    }
+    let mut s = String::from(
+        "<nav class=\"narrow\" aria-label=\"Narrow down\"><span class=\"dim\">Narrow down:</span>",
+    );
+    for n in narrow {
+        let icon = match n.kind {
+            crate::search::Kind::Thing => "◎",
+            crate::search::Kind::Place => "⌖",
+            crate::search::Kind::Date => "◷",
+            crate::search::Kind::Word => "❝",
+        };
+        s += &format!(
+            "<a href=\"search?q={q}{kq}\"><span aria-hidden=\"true\">{icon}</span> {term} <span class=\"n\">{c}</span></a>",
+            q = urlencode(&format!("{} {}", q.trim(), crate::search::plain(&n.term))),
+            term = esc(&n.term),
+            c = n.items,
+        );
+    }
+    s + "</nav>"
 }
 
 /// Pictures that look like what was searched (REQ-SEE-002): tiles, best
@@ -1905,6 +2390,7 @@ pub fn render_search(
     q: &str,
     hits: &[(crate::search::Hit, index::Record)],
     places: Option<&crate::places::Places>,
+    pos: &HashMap<u64, crate::place::Position>,
 ) -> String {
     let who = esc(who);
     let mut s = format!(
@@ -1928,9 +2414,10 @@ pub fn render_search(
         } else {
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
-        let place = match (places, rec.lat, rec.lon) {
-            (Some(p), Some(lat), Some(lon)) => p
-                .nearest(lat, lon)
+        // Recorded, set by hand or estimated (REQ-PLACE-002).
+        let place = match (places, pos.get(&id)) {
+            (Some(p), Some(at)) => p
+                .nearest(at.lat, at.lon)
                 .map(|n| format!(" · {}", esc(&n.label)))
                 .unwrap_or_default(),
             _ => String::new(),
@@ -2031,6 +2518,667 @@ async fn hide(
         idx.set_hidden(me, id, true)
     })
     .await
+}
+
+/// Items one request hides or shows again at most.
+const MANY: usize = 2000;
+
+#[derive(Deserialize)]
+pub struct Many {
+    /// Item ids, separated by commas.
+    ids: String,
+    back: Option<String>,
+}
+
+/// Hide (or show again) the listed items the viewer may see, for this
+/// person (REQ-WEB-014); others are left alone. Answers with how many
+/// changed, or goes back when a `back` is given (a form without
+/// JavaScript).
+async fn many(
+    st: AppState,
+    viewer: Viewer,
+    headers: axum::http::HeaderMap,
+    m: Many,
+    set: fn(&index::Index, &str, u64) -> anyhow::Result<()>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = m
+        .ids
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<usize> {
+        let mut n = 0;
+        for id in ids {
+            if idx.locate(id)?.is_some_and(|r| viewer.may_see(&r.label)) {
+                set(&idx, &me, id)?;
+                n += 1;
+            }
+        }
+        Ok(n)
+    })
+    .await;
+    match res {
+        Ok(Ok(_)) if m.back.is_some() => back_to(&st, m.back.as_deref()),
+        Ok(Ok(n)) => n.to_string().into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /hide-many: hide the selected items for this person.
+async fn hide_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_hidden(me, id, true)
+    })
+    .await
+}
+
+/// POST /unhide-many: show them again (the undo after hiding).
+async fn unhide_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_hidden(me, id, false)
+    })
+    .await
+}
+
+/// POST /fav/{id}: the item becomes this person's favourite (REQ-WEB-016).
+async fn fav(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_fav(me, id, true)
+    })
+    .await
+}
+
+/// POST /unfav/{id}: not a favourite any more.
+async fn unfav(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(b): axum::Form<Back>,
+) -> Response {
+    choice(st, viewer, id, headers, b.back, |idx, _, _, me, id| {
+        idx.set_fav(me, id, false)
+    })
+    .await
+}
+
+/// POST /fav-many: the selected items become favourites.
+async fn fav_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_fav(me, id, true)
+    })
+    .await
+}
+
+/// POST /unfav-many: the selected items are favourites no more.
+async fn unfav_many(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(m): axum::Form<Many>,
+) -> Response {
+    many(st, viewer, headers, m, |idx, me, id| {
+        idx.set_fav(me, id, false)
+    })
+    .await
+}
+
+/// Pictures a favourites or album page shows at most, newest first.
+const SET_MAX: usize = 5000;
+
+/// The count in a favourites or album header: all of them, or which part
+/// a capped page shows.
+fn set_count(total: usize) -> String {
+    if total > SET_MAX {
+        format!("newest {SET_MAX} of {total}")
+    } else {
+        total.to_string()
+    }
+}
+
+/// An album name as given: trimmed, spaces folded, at most 80 characters;
+/// None when nothing is left.
+fn album_name(s: &str) -> Option<String> {
+    let n: String = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect();
+    (!n.is_empty()).then_some(n)
+}
+
+/// The album if it is this person's own (REQ-WEB-017); anyone else's
+/// album does not exist for them.
+fn own_album(idx: &index::Index, id: u64, me: &str) -> anyhow::Result<Option<index::Album>> {
+    Ok(idx.album(id)?.filter(|a| a.owner == me))
+}
+
+/// The album if this person may look at it: their own, or one its owner
+/// shares with the household. Changing it still needs `own_album`.
+fn seen_album(idx: &index::Index, id: u64, me: &str) -> anyhow::Result<Option<index::Album>> {
+    Ok(idx.album(id)?.filter(|a| a.owner == me || a.shared))
+}
+
+/// The timeline to link pictures into: the viewer's one library, or all.
+fn default_who(viewer: &Viewer) -> String {
+    if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `<option>`s for this person's albums, to add pictures to one.
+pub fn album_options(albums: &[(u64, index::Album)]) -> String {
+    albums
+        .iter()
+        .map(|(id, a)| format!("<option value=\"{id}\">{}</option>", esc(&a.name)))
+        .collect()
+}
+
+/// This person's albums for the selection bar (assets/lichtbild.js).
+fn album_template(albums: &[(u64, index::Album)]) -> String {
+    format!(
+        "<template id=\"albumopts\">{}</template>",
+        album_options(albums)
+    )
+}
+
+/// This person's albums, or none when they cannot be read.
+async fn albums_of(st: &AppState, me: String) -> Vec<(u64, index::Album)> {
+    let idx = st.index.clone();
+    tokio::task::spawn_blocking(move || idx.albums(&me))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default()
+}
+
+/// GET /albums: this person's albums, newest first, each with its cover
+/// and count, and a field to make a new one.
+async fn albums_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let me2 = me.clone();
+    let labels = viewer.labels.clone();
+    type Row = (u64, index::Album, usize, Option<(u64, String)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Row>> {
+        let hidden = idx.hidden(&me)?;
+        let mut out = Vec::new();
+        let mut all = idx.albums(&me)?;
+        all.extend(idx.shared_albums(&me)?);
+        for (id, a) in all {
+            let mut shown: Vec<(String, u64, String)> = Vec::new();
+            for i in idx.album_items(id)? {
+                if hidden.contains(&i) {
+                    continue;
+                }
+                if let Some(r) = idx.locate(i)?.filter(|r| labels.contains(&r.label)) {
+                    if r.thumb == "ok" {
+                        shown.push((r.taken_local.clone(), i, r.hash.clone()));
+                    } else {
+                        shown.push((String::new(), i, String::new()));
+                    }
+                }
+            }
+            let n = shown.len();
+            shown.sort();
+            let cover = shown
+                .into_iter()
+                .rev()
+                .find(|(_, _, h)| !h.is_empty())
+                .map(|(_, i, h)| (i, h));
+            out.push((id, a, n, cover));
+        }
+        Ok(out)
+    })
+    .await;
+    let rows = match res {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<h1>Albums</h1>\
+         <form class=\"newalbum\" method=\"post\" action=\"albums\"><input type=\"text\" name=\"name\" maxlength=\"80\" required placeholder=\"New album\" aria-label=\"Name of a new album\"><button type=\"submit\">Make</button></form>",
+    );
+    let (mine, theirs): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.1.owner == me2);
+    if mine.is_empty() {
+        body += "<p class=\"dim\">No albums yet. Make one here, or choose pictures in a timeline with Select and add them to a new album.</p>";
+    }
+    for (head, rows) in [("", &mine), ("<h2>Shared with you</h2>", &theirs)] {
+        if rows.is_empty() {
+            continue;
+        }
+        body += head;
+        body += "<section class=\"thingtiles albums\">";
+        for (id, a, n, cover) in rows.iter() {
+            let img = match cover {
+                Some((i, h)) => format!(
+                    "<img src=\"thumb/{i}?h={}\" loading=\"lazy\" alt=\"\">",
+                    esc(h.get(..12).unwrap_or(""))
+                ),
+                None => "<span class=\"nothumb\">empty</span>".to_string(),
+            };
+            let by = if a.owner == me2 {
+                if a.shared {
+                    "<small>shared</small>".to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                format!("<small>from {}</small>", esc(&a.owner))
+            };
+            body += &format!(
+                "<a class=\"thing\" href=\"album/{id}\">{img}<b>{}</b><i>{n}</i>{by}</a>",
+                esc(&a.name)
+            );
+        }
+        body += "</section>";
+    }
+    page_for(&st, "lichtbild albums", &body).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct AlbumForm {
+    /// An album id, or "new" (with `name`).
+    album: Option<String>,
+    name: Option<String>,
+    /// Item ids, separated by commas.
+    ids: Option<String>,
+    back: Option<String>,
+}
+
+/// POST /albums: a new album, then to it.
+async fn album_create(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "an album needs a name").into_response();
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    match tokio::task::spawn_blocking(move || idx.create_album(&me, &name, now_secs())).await {
+        Ok(Ok(id)) => back_to(&st, Some(&format!("album/{id}"))),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album-add: put the listed items the viewer may see into one of
+/// their albums, or into a new one ("new" and a name). Answers with the
+/// album's id, or goes back when a `back` is given (a form without
+/// JavaScript).
+async fn album_add(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = f
+        .ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let target = match f.album.as_deref() {
+        Some("new") => match f.name.as_deref().and_then(album_name) {
+            Some(n) => Err(n),
+            None => return (StatusCode::BAD_REQUEST, "an album needs a name").into_response(),
+        },
+        Some(a) => match a.parse::<u64>() {
+            Ok(id) => Ok(id),
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<u64>> {
+        let album = match target {
+            Ok(id) => match own_album(&idx, id, &me)? {
+                Some(_) => id,
+                None => return Ok(None),
+            },
+            Err(name) => idx.create_album(&me, &name, now_secs())?,
+        };
+        for id in ids {
+            if idx.locate(id)?.is_some_and(|r| viewer.may_see(&r.label)) {
+                idx.set_in_album(album, id, true)?;
+            }
+        }
+        Ok(Some(album))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(_))) if f.back.is_some() => back_to(&st, f.back.as_deref()),
+        Ok(Ok(Some(a))) => a.to_string().into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/remove: take the listed items out of the album.
+async fn album_remove(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = f
+        .ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<usize>> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(None);
+        }
+        let held = idx.album_items(album)?;
+        let mut n = 0;
+        for id in ids.into_iter().filter(|i| held.contains(i)) {
+            idx.set_in_album(album, id, false)?;
+            n += 1;
+        }
+        Ok(Some(n))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(_))) if f.back.is_some() => back_to(&st, f.back.as_deref()),
+        Ok(Ok(Some(n))) => n.to_string().into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/rename.
+async fn album_rename(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "an album needs a name").into_response();
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.rename_album(album, &name)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("album/{album}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/share: `name=on` shares the album with the
+/// household, anything else stops sharing it. Only the owner.
+async fn album_share(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let on = f.name.as_deref() == Some("on");
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.share_album(album, on)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("album/{album}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/delete: the album goes; its pictures stay.
+async fn album_delete(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.delete_album(album)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some("albums")),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /album/{id}: the album's pictures the viewer may see, newest
+/// first, without the hidden ones, with its slideshow, renaming and
+/// deleting.
+async fn album_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+) -> Response {
+    let who = default_who(&viewer);
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Option<(index::Album, Vec<index::Item>, usize)>> {
+            let Some(a) = seen_album(&idx, album, &me)? else {
+                return Ok(None);
+            };
+            let held = idx.album_items(album)?;
+            if held.is_empty() {
+                return Ok(Some((a, Vec::new(), 0)));
+            }
+            let hidden = idx.hidden(&me)?;
+            let favs = idx.favs(&me)?;
+            let mut items =
+                idx.items_of(held.iter().copied(), &labels, |id, _| !hidden.contains(&id))?;
+            let total = items.len();
+            items.truncate(SET_MAX);
+            for it in &mut items {
+                it.copies = dups.shown(it.id, &labels, &hidden).copies;
+                it.fav = favs.contains(&it.id);
+            }
+            Ok(Some((a, items, total)))
+        },
+    )
+    .await;
+    let (a, items, total) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such album").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let ones = vec![1; items.len()];
+    let w = esc(&who);
+    let name = esc(&a.name);
+    let owner = a.owner == person(&viewer);
+    // Sharing is the owner's choice, off until turned on (REQ-WEB-017).
+    let share = if a.shared {
+        format!("<form method=\"post\" action=\"album/{album}/share\"><input type=\"hidden\" name=\"name\" value=\"off\"><button type=\"submit\">Stop sharing</button> <span class=\"dim\">Everyone in the house sees this album, each only the pictures they may see.</span></form>")
+    } else {
+        format!("<form method=\"post\" action=\"album/{album}/share\"><input type=\"hidden\" name=\"name\" value=\"on\"><button type=\"submit\">Share with the house</button> <span class=\"dim\">Only you see it now. Others could look, not change it.</span></form>")
+    };
+    let manage = format!(
+        "<details class=\"albumtools\"><summary>Share, rename or delete</summary>\
+         {share}<form method=\"post\" action=\"album/{album}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Album name\"><button type=\"submit\">Rename</button></form>\
+         <form method=\"post\" action=\"album/{album}/delete\"><button type=\"submit\" class=\"danger\">Delete this album</button> <span class=\"dim\">The pictures stay where they are.</span></form></details>"
+    );
+    let mark = if a.shared { " · shared" } else { "" };
+    // Someone else's shared album: to look at, with its owner named; only
+    // the owner shares, renames, deletes or takes pictures out.
+    let (manage, from, data) = if owner {
+        (manage, String::new(), format!(" data-album=\"{album}\""))
+    } else {
+        (
+            String::new(),
+            format!("<p class=\"dim\">Shared by {}.</p>", esc(&a.owner)),
+            String::new(),
+        )
+    };
+    let body = if items.is_empty() {
+        format!(
+            "<h1>{name}</h1>{from}<p class=\"dim\">Empty. Choose pictures in a timeline with Select and add them here, or use “Add to album” in a photo’s details.</p>{manage}"
+        )
+    } else {
+        format!(
+            "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}{mark}</span><a class=\"tbtn\" href=\"show/{w}?album={album}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{from}{manage}<div class=\"timeline album\"{data}>\n{}</div>\n{albums}",
+            render_items(&who, &items, &ones, None, false, ""),
+            n = set_count(total),
+            albums = album_template(&albums_of(&st, person(&viewer)).await),
+        )
+    };
+    page_for(&st, "lichtbild album", &body).into_response()
+}
+
+/// GET /favourites: this person's favourites in the libraries they may
+/// see, newest first, as a timeline (REQ-WEB-016).
+async fn favourites_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<index::Item>, usize)> {
+        let favs = idx.favs(&me)?;
+        if favs.is_empty() {
+            return Ok((Vec::new(), 0));
+        }
+        let hidden = idx.hidden(&me)?;
+        let mut items =
+            idx.items_of(favs.iter().copied(), &labels, |id, _| !hidden.contains(&id))?;
+        let total = items.len();
+        items.truncate(SET_MAX);
+        for it in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = true;
+        }
+        Ok((items, total))
+    })
+    .await;
+    let (items, total) = match res {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    // Each favourite is its own choice: no series folding here.
+    let ones = vec![1; items.len()];
+    let body = if items.is_empty() {
+        "<h1>Favourites</h1><p class=\"dim\">None yet. Tap ♡ on a photo, press <kbd>.</kbd>, or choose several in a timeline with Select.</p>".to_string()
+    } else {
+        format!(
+            "<div class=\"thead\"><h1>Favourites</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?fav=1\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline favs\">\n{}</div>\n{albums}",
+            render_items(&who, &items, &ones, None, false, ""),
+            n = set_count(total),
+            w = esc(&who),
+            albums = album_template(&albums_of(&st, person(&viewer)).await),
+        )
+    };
+    page_for(&st, "lichtbild favourites", &body).into_response()
 }
 
 /// POST /unhide/{id}: show the item again.
@@ -2596,6 +3744,101 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     }
     body += "</section>";
     page_for(&st, "lichtbild things", &body).into_response()
+}
+
+/// "3–9 July 2021", "30 June – 2 July 2021", "30 December 2021 – 2 January
+/// 2022".
+fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
+    use chrono::Datelike;
+    let m = |d: chrono::NaiveDate| MONTHS[d.month0() as usize];
+    if a == b {
+        format!("{} {} {}", a.day(), m(a), a.year())
+    } else if a.year() != b.year() {
+        format!(
+            "{} {} {} – {} {} {}",
+            a.day(),
+            m(a),
+            a.year(),
+            b.day(),
+            m(b),
+            b.year()
+        )
+    } else if a.month() != b.month() {
+        format!("{} {} – {} {} {}", a.day(), m(a), b.day(), m(b), b.year())
+    } else {
+        format!("{}–{} {} {}", a.day(), b.day(), m(b), b.year())
+    }
+}
+
+/// GET /trips: days away from home, grouped and named by place
+/// (REQ-TRIP-001); a trip opens the timeline at its last day.
+async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let (pc, places) = (st.positions.clone(), st.places.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
+        let hidden = idx.hidden(&me)?;
+        let items: Vec<(u64, index::Record)> = idx
+            .all()?
+            .into_iter()
+            .filter(|(id, r)| {
+                !r.missing && labels.contains(&r.label) && dups.shown(*id, &labels, &hidden).shown
+            })
+            .collect();
+        let pos = pc.get(&idx)?;
+        let trips = crate::trips::find(&items, &pos, places.as_deref());
+        let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
+        Ok(trips
+            .into_iter()
+            .map(|t| {
+                let h = hashes.get(&t.cover).cloned().unwrap_or_default();
+                (t, h)
+            })
+            .collect::<Vec<_>>())
+    })
+    .await;
+    let trips = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let mut body = String::from(
+        "<h1>Trips</h1><p class=\"dim\">Days on which your pictures were taken more than 50 km from home, one after another. Home is where most days of pictures were taken. A trip opens the timeline at its last day.</p>",
+    );
+    if trips.is_empty() {
+        body += "<p>No trips found yet. Trips come from the positions of pictures: recorded, estimated from neighbours or set by hand.</p>";
+        return page_for(&st, "lichtbild trips", &body).into_response();
+    }
+    body += "<section class=\"thingtiles trips\">";
+    for (t, hash) in &trips {
+        let title = match t.places.as_slice() {
+            [] => "Away".to_string(),
+            [one] => one.clone(),
+            [one, two] => format!("{one} and {two}"),
+            [one, rest @ ..] => format!("{one} and {} more places", rest.len()),
+        };
+        body += &format!(
+            "<a class=\"thing\" href=\"t/{w}?before={end}T99&amp;id=0\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small></a>",
+            w = esc(&who),
+            end = t.end.format("%Y-%m-%d"),
+            id = t.cover,
+            h = esc(hash.get(..12).unwrap_or("")),
+            title = esc(&title),
+            n = t.items,
+            when = esc(&day_span(t.start, t.end)),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild trips", &body).into_response()
 }
 
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);

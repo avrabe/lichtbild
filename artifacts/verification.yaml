@@ -1245,3 +1245,159 @@ artifacts:
       - type: verifies
         target: REQ-SEE-002
 
+  - id: VER-089
+    type: verification
+    title: Search suggestions from what the viewer's libraries hold
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_search_box_suggests_what_the_libraries_hold"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_search_box_suggests_what_the_libraries_hold"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-002
+
+  - id: VER-090
+    type: verification
+    title: Series of photos taken one after another
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "photos_taken_one_after_another_that_look_alike_are_one_series"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series"
+    links:
+      - type: verifies
+        target: REQ-WEB-012
+
+  - id: VER-091
+    type: verification
+    title: Slideshow from a photo on, one photo of each series
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_shows_one_photo_of_each_series_from_where_it_starts"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series a_slideshow_shows_one_photo_of_each_series_from_where_it_starts"
+    links:
+      - type: verifies
+        target: REQ-WEB-013
+
+  - id: VER-092
+    type: verification
+    title: Narrowing search results down
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "search_results_offer_terms_that_narrow_them_down"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui search_results_offer_terms_that_narrow_them_down"
+        - run: "cargo test --lib search::tests::narrowing_offers_terms_that_split_the_results"
+        - run: "cargo test --test ui narrowing_never_offers_a_dead_end"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-003
+
+  - id: VER-093
+    type: verification
+    title: Several items hidden at once and shown again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "several_items_are_hidden_at_once_and_shown_again"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth several_items_are_hidden_at_once_and_shown_again"
+    links:
+      - type: verifies
+        target: REQ-WEB-014
+
+  - id: VER-094
+    type: verification
+    title: Season and holiday search
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "pictures_are_found_by_season_and_holiday"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui pictures_are_found_by_season_and_holiday"
+        - run: "cargo test --lib search::tests::dates_are_found_by_season_and_holiday"
+    links:
+      - type: verifies
+        target: REQ-SEARCH-004
+
+  - id: VER-095
+    type: verification
+    title: Days away from home are one trip, named by place
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "days_away_from_home_are_one_trip_named_by_place"
+      test-location: tests/trips.rs
+      steps:
+        - run: "cargo test --test trips"
+    links:
+      - type: verifies
+        target: REQ-TRIP-001
+
+  - id: VER-096
+    type: verification
+    title: Keys and gestures in every page's menu
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "every_page_has_the_app_menu"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui every_page_has_the_app_menu"
+    links:
+      - type: verifies
+        target: REQ-WEB-015
+
+  - id: VER-097
+    type: verification
+    title: Favourites are kept per person
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "favourites_are_kept_per_person"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth favourites_are_kept_per_person"
+    links:
+      - type: verifies
+        target: REQ-WEB-016
+
+  - id: VER-098
+    type: verification
+    title: Albums are each person's own
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "albums_are_each_persons_own"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth albums_are_each_persons_own"
+    links:
+      - type: verifies
+        target: REQ-WEB-017
+
+  - id: VER-099
+    type: verification
+    title: A shared album is seen by the house and changed only by its owner
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner"
+    links:
+      - type: verifies
+        target: REQ-WEB-017
