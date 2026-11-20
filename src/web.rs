@@ -128,6 +128,12 @@ pub fn router(state: AppState) -> Router {
         .route("/fav-many", axum::routing::post(fav_many))
         .route("/unfav-many", axum::routing::post(unfav_many))
         .route("/favourites", get(favourites_page))
+        .route("/albums", get(albums_page).post(album_create))
+        .route("/album/{id}", get(album_page))
+        .route("/album-add", axum::routing::post(album_add))
+        .route("/album/{id}/remove", axum::routing::post(album_remove))
+        .route("/album/{id}/rename", axum::routing::post(album_rename))
+        .route("/album/{id}/delete", axum::routing::post(album_delete))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
@@ -522,6 +528,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
          <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
+         <li><a href=\"albums\"><b>Albums</b><span>Your own collections</span></a></li>\
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
@@ -802,6 +809,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
+             <a href=\"albums\"><b>Albums</b><span>Your own collections</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
@@ -1204,8 +1212,9 @@ async fn timeline(
             format!("<p class=\"newer\"><a href=\"{href}\">↑ Newer photos</a></p>\n")
         }
     };
+    let albums = album_template(&albums_of(&st, person(&viewer)).await);
     let body = format!(
-        "<div class=\"thead\"><h1>{}</h1>{}<a class=\"tbtn\" href=\"show/{w}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}",
+        "<div class=\"thead\"><h1>{}</h1>{}<a class=\"tbtn\" href=\"show/{w}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{}{}<div class=\"timeline\">\n{}</div>\n{}{albums}",
         esc(&title),
         kind_switch(&format!("t/{}", esc(&who)), kind),
         render_jump(&who, &months, kq),
@@ -1642,6 +1651,8 @@ pub struct ShowQuery {
     at: Option<u64>,
     /// Only this person's favourites (REQ-WEB-016), each one shown.
     fav: Option<u8>,
+    /// Only this album of theirs (REQ-WEB-017), each picture shown.
+    album: Option<u64>,
 }
 
 /// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
@@ -1675,11 +1686,17 @@ async fn show(
     let me = person(&viewer);
     let space = st.vision_on.then(|| st.space.clone());
     let fav_only = sq.fav.is_some();
+    let album = sq.album;
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
         let hidden = idx.hidden(&me)?;
-        let favs = match sq.fav {
-            Some(_) => Some(idx.favs(&me)?),
-            None => None,
+        // A chosen set: favourites, or one of this person's albums.
+        let favs = match (sq.fav, sq.album) {
+            (_, Some(a)) => match own_album(&idx, a, &me)? {
+                Some(_) => Some(idx.album_items(a)?),
+                None => return Ok(Vec::new()),
+            },
+            (Some(_), None) => Some(idx.favs(&me)?),
+            (None, None) => None,
         };
         let start = match sq.at {
             Some(at) => match idx.locate(at)?.filter(|r| labels.contains(&r.label)) {
@@ -1721,10 +1738,11 @@ async fn show(
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
-    let back = match slides.first() {
+    let back = match (album, slides.first()) {
+        (Some(a), _) => format!("album/{a}"),
         _ if fav_only => "favourites".to_string(),
-        Some((id, _, _)) => format!("v/{}/{id}", esc(&who)),
-        None => format!("t/{}", esc(&who)),
+        (None, Some((id, _, _))) => format!("v/{}/{id}", esc(&who)),
+        (None, None) => format!("t/{}", esc(&who)),
     };
     let list: String = slides
         .iter()
@@ -1931,6 +1949,16 @@ async fn viewer(
             n = esc(&name)
         )
     };
+    // Into one of this person's albums, or a new one (REQ-WEB-017).
+    let to_album = {
+        let opts = album_options(&albums_of(&st, person(&viewer)).await);
+        format!(
+            "<form class=\"albumf\" method=\"post\" action=\"album-add\"><input type=\"hidden\" name=\"ids\" value=\"{id}\"><input type=\"hidden\" name=\"back\" value=\"v/{w}/{id}{vqs}\">\
+             <select name=\"album\" aria-label=\"Album\">{opts}<option value=\"new\">New album…</option></select>\
+             <input type=\"text\" name=\"name\" maxlength=\"80\" placeholder=\"Name of the new album\" aria-label=\"Name of the new album\">\
+             <button type=\"submit\">Add to album</button></form>"
+        )
+    };
     let hide = {
         // Back to the timeline where this item was; showing it again
         // stays in the viewer.
@@ -1972,7 +2000,7 @@ async fn viewer(
             + &render_info(&rec, &exif, st.places.as_deref(), pos.as_ref(), act)
                 .replace(
                     "</dl></details>",
-                    &format!("<div class=\"hiderow\">{get}{hide}</div></dl></details>"),
+                    &format!("<div class=\"hiderow\">{get}{to_album}{hide}</div></dl></details>"),
                 ),
         prev = link("prev", "Newer photo", newer),
         next = link("next", "Older photo", older),
@@ -2025,10 +2053,10 @@ async fn suggest(
     let typing = !q.ends_with(char::is_whitespace);
     let last = q.split_whitespace().last().filter(|_| typing).unwrap_or("");
     let offer = crate::search::fav_completion(last).filter(|_| !fav);
-    let ask = if fav && !typing && !rest.is_empty() {
-        format!("{rest} ")
-    } else {
-        rest
+    let ask = match (fav, typing) {
+        (false, _) => q.clone(),
+        (true, false) if !rest.is_empty() => format!("{rest} "),
+        (true, _) => rest,
     };
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
         let n = match offer {
@@ -2609,6 +2637,396 @@ async fn unfav_many(
 /// Favourites one page shows at most, newest first.
 const FAVS_MAX: usize = 2000;
 
+/// Pictures an album page shows at most.
+const ALBUM_MAX: usize = 5000;
+
+/// An album name as given: trimmed, spaces folded, at most 80 characters;
+/// None when nothing is left.
+fn album_name(s: &str) -> Option<String> {
+    let n: String = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .chars()
+        .take(80)
+        .collect();
+    (!n.is_empty()).then_some(n)
+}
+
+/// The album if it is this person's own (REQ-WEB-017); anyone else's
+/// album does not exist for them.
+fn own_album(idx: &index::Index, id: u64, me: &str) -> anyhow::Result<Option<index::Album>> {
+    Ok(idx.album(id)?.filter(|a| a.owner == me))
+}
+
+/// The timeline to link pictures into: the viewer's one library, or all.
+fn default_who(viewer: &Viewer) -> String {
+    if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    }
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
+/// `<option>`s for this person's albums, to add pictures to one.
+pub fn album_options(albums: &[(u64, index::Album)]) -> String {
+    albums
+        .iter()
+        .map(|(id, a)| format!("<option value=\"{id}\">{}</option>", esc(&a.name)))
+        .collect()
+}
+
+/// This person's albums for the selection bar (assets/lichtbild.js).
+fn album_template(albums: &[(u64, index::Album)]) -> String {
+    format!(
+        "<template id=\"albumopts\">{}</template>",
+        album_options(albums)
+    )
+}
+
+/// This person's albums, or none when they cannot be read.
+async fn albums_of(st: &AppState, me: String) -> Vec<(u64, index::Album)> {
+    let idx = st.index.clone();
+    tokio::task::spawn_blocking(move || idx.albums(&me))
+        .await
+        .ok()
+        .and_then(|r| r.ok())
+        .unwrap_or_default()
+}
+
+/// GET /albums: this person's albums, newest first, each with its cover
+/// and count, and a field to make a new one.
+async fn albums_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    type Row = (u64, index::Album, usize, Option<(u64, String)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Row>> {
+        let hidden = idx.hidden(&me)?;
+        let mut out = Vec::new();
+        for (id, a) in idx.albums(&me)? {
+            let mut shown: Vec<(String, u64, String)> = Vec::new();
+            for i in idx.album_items(id)? {
+                if hidden.contains(&i) {
+                    continue;
+                }
+                if let Some(r) = idx.locate(i)?.filter(|r| labels.contains(&r.label)) {
+                    if r.thumb == "ok" {
+                        shown.push((r.taken_local.clone(), i, r.hash.clone()));
+                    } else {
+                        shown.push((String::new(), i, String::new()));
+                    }
+                }
+            }
+            let n = shown.len();
+            shown.sort();
+            let cover = shown
+                .into_iter()
+                .rev()
+                .find(|(_, _, h)| !h.is_empty())
+                .map(|(_, i, h)| (i, h));
+            out.push((id, a, n, cover));
+        }
+        Ok(out)
+    })
+    .await;
+    let rows = match res {
+        Ok(Ok(r)) => r,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<h1>Albums</h1>\
+         <form class=\"newalbum\" method=\"post\" action=\"albums\"><input type=\"text\" name=\"name\" maxlength=\"80\" required placeholder=\"New album\" aria-label=\"Name of a new album\"><button type=\"submit\">Make</button></form>",
+    );
+    if rows.is_empty() {
+        body += "<p class=\"dim\">No albums yet. Make one here, or choose pictures in a timeline with Select and add them to a new album.</p>";
+    } else {
+        body += "<section class=\"thingtiles albums\">";
+        for (id, a, n, cover) in &rows {
+            let img = match cover {
+                Some((i, h)) => format!(
+                    "<img src=\"thumb/{i}?h={}\" loading=\"lazy\" alt=\"\">",
+                    esc(h.get(..12).unwrap_or(""))
+                ),
+                None => "<span class=\"nothumb\">empty</span>".to_string(),
+            };
+            body += &format!(
+                "<a class=\"thing\" href=\"album/{id}\">{img}<b>{}</b><i>{n}</i></a>",
+                esc(&a.name)
+            );
+        }
+        body += "</section>";
+    }
+    page_for(&st, "lichtbild albums", &body).into_response()
+}
+
+#[derive(Deserialize)]
+pub struct AlbumForm {
+    /// An album id, or "new" (with `name`).
+    album: Option<String>,
+    name: Option<String>,
+    /// Item ids, separated by commas.
+    ids: Option<String>,
+    back: Option<String>,
+}
+
+/// POST /albums: a new album, then to it.
+async fn album_create(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "an album needs a name").into_response();
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    match tokio::task::spawn_blocking(move || idx.create_album(&me, &name, now_secs())).await {
+        Ok(Ok(id)) => back_to(&st, Some(&format!("album/{id}"))),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album-add: put the listed items the viewer may see into one of
+/// their albums, or into a new one ("new" and a name). Answers with the
+/// album's id, or goes back when a `back` is given (a form without
+/// JavaScript).
+async fn album_add(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = f
+        .ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let target = match f.album.as_deref() {
+        Some("new") => match f.name.as_deref().and_then(album_name) {
+            Some(n) => Err(n),
+            None => return (StatusCode::BAD_REQUEST, "an album needs a name").into_response(),
+        },
+        Some(a) => match a.parse::<u64>() {
+            Ok(id) => Ok(id),
+            Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+        },
+        None => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<u64>> {
+        let album = match target {
+            Ok(id) => match own_album(&idx, id, &me)? {
+                Some(_) => id,
+                None => return Ok(None),
+            },
+            Err(name) => idx.create_album(&me, &name, now_secs())?,
+        };
+        for id in ids {
+            if idx.locate(id)?.is_some_and(|r| viewer.may_see(&r.label)) {
+                idx.set_in_album(album, id, true)?;
+            }
+        }
+        Ok(Some(album))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(_))) if f.back.is_some() => back_to(&st, f.back.as_deref()),
+        Ok(Ok(Some(a))) => a.to_string().into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/remove: take the listed items out of the album.
+async fn album_remove(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let ids: Vec<u64> = f
+        .ids
+        .as_deref()
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|i| i.trim().parse().ok())
+        .take(MANY)
+        .collect();
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<usize>> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(None);
+        }
+        let held = idx.album_items(album)?;
+        let mut n = 0;
+        for id in ids.into_iter().filter(|i| held.contains(i)) {
+            idx.set_in_album(album, id, false)?;
+            n += 1;
+        }
+        Ok(Some(n))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(_))) if f.back.is_some() => back_to(&st, f.back.as_deref()),
+        Ok(Ok(Some(n))) => n.to_string().into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/rename.
+async fn album_rename(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(name) = f.name.as_deref().and_then(album_name) else {
+        return (StatusCode::BAD_REQUEST, "an album needs a name").into_response();
+    };
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.rename_album(album, &name)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("album/{album}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /album/{id}/delete: the album goes; its pictures stay.
+async fn album_delete(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.delete_album(album)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some("albums")),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /album/{id}: the album's pictures the viewer may see, newest
+/// first, without the hidden ones, with its slideshow, renaming and
+/// deleting.
+async fn album_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+) -> Response {
+    let who = default_who(&viewer);
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<Option<(index::Album, Vec<index::Item>)>> {
+            let Some(a) = own_album(&idx, album, &me)? else {
+                return Ok(None);
+            };
+            let held = idx.album_items(album)?;
+            if held.is_empty() {
+                return Ok(Some((a, Vec::new())));
+            }
+            let hidden = idx.hidden(&me)?;
+            let favs = idx.favs(&me)?;
+            let mut items = idx.timeline_where(&labels, None, ALBUM_MAX, |id, _| {
+                held.contains(&id) && !hidden.contains(&id)
+            })?;
+            for it in &mut items {
+                it.copies = dups.shown(it.id, &labels, &hidden).copies;
+                it.fav = favs.contains(&it.id);
+            }
+            Ok(Some((a, items)))
+        },
+    )
+    .await;
+    let (a, items) = match res {
+        Ok(Ok(Some(x))) => x,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such album").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let ones = vec![1; items.len()];
+    let w = esc(&who);
+    let name = esc(&a.name);
+    let manage = format!(
+        "<details class=\"albumtools\"><summary>Rename or delete</summary>\
+         <form method=\"post\" action=\"album/{album}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Album name\"><button type=\"submit\">Rename</button></form>\
+         <form method=\"post\" action=\"album/{album}/delete\"><button type=\"submit\" class=\"danger\">Delete this album</button> <span class=\"dim\">The pictures stay where they are.</span></form></details>"
+    );
+    let body = if items.is_empty() {
+        format!(
+            "<h1>{name}</h1><p class=\"dim\">Empty. Choose pictures in a timeline with Select and add them here, or use “Add to album” in a photo’s details.</p>{manage}"
+        )
+    } else {
+        format!(
+            "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?album={album}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline album\" data-album=\"{album}\">\n{}</div>\n{albums}",
+            render_items(&who, &items, &ones, None, false, ""),
+            n = items.len(),
+            albums = album_template(&albums_of(&st, person(&viewer)).await),
+        )
+    };
+    page_for(&st, "lichtbild album", &body).into_response()
+}
+
 /// GET /favourites: this person's favourites in the libraries they may
 /// see, newest first, as a timeline (REQ-WEB-016).
 async fn favourites_page(
@@ -2653,10 +3071,11 @@ async fn favourites_page(
         "<h1>Favourites</h1><p class=\"dim\">None yet. Tap ♡ on a photo, press <kbd>.</kbd>, or choose several in a timeline with Select.</p>".to_string()
     } else {
         format!(
-            "<div class=\"thead\"><h1>Favourites</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?fav=1\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline favs\">\n{}</div>\n",
+            "<div class=\"thead\"><h1>Favourites</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?fav=1\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline favs\">\n{}</div>\n{albums}",
             render_items(&who, &items, &ones, None, false, ""),
             n = items.len(),
             w = esc(&who),
+            albums = album_template(&albums_of(&st, person(&viewer)).await),
         )
     };
     page_for(&st, "lichtbild favourites", &body).into_response()

@@ -167,6 +167,20 @@
   });
 })();
 
+// Add to album in the viewer's details: the name field only for a new one.
+(function () {
+  "use strict";
+  var f = document.querySelector(".viewer form.albumf");
+  if (!f) return;
+  var sel = f.querySelector("select"), name = f.querySelector("input[name=name]");
+  function sync() {
+    name.hidden = sel.value !== "new";
+    name.required = sel.value === "new";
+  }
+  sel.addEventListener("change", sync);
+  sync();
+})();
+
 // Share (iPad, iPhone, some desktops): the original goes to the system
 // share sheet, so it can be saved to Photos or sent. Fetching it may use
 // up the tap that allows sharing; then a second tap shares.
@@ -729,15 +743,25 @@
   bar.className = "selbar";
   bar.setAttribute("role", "toolbar");
   bar.hidden = true;
-  // On the favourites page the heart takes them out again.
+  // On the favourites page the heart takes them out again; in an album,
+  // "Remove" takes them out of it.
   var favPage = tl.classList.contains("favs");
+  var album = tl.getAttribute("data-album");
+  var opts = document.getElementById("albumopts");
   bar.innerHTML = '<span class="seln" aria-live="polite"></span>' +
     '<button type="button" class="selfav">' + (favPage ? "Not a favourite" : "\u2665 Favourite") + '</button>' +
+    (album ? '<button type="button" class="selout">Remove from album</button>' : '') +
+    (opts ? '<select class="selalbum" aria-label="Add to album"><option value="">Add to album\u2026</option>' +
+      opts.innerHTML + '<option value="new">New album\u2026</option></select>' +
+      '<input type="text" class="selname" maxlength="80" placeholder="Album name" aria-label="Name of the new album" hidden>' +
+      '<button type="button" class="seladd" hidden>Add</button>' : '') +
     '<button type="button" class="selhide">Hide for me</button>' +
     '<button type="button" class="selcancel">Cancel</button>';
   document.body.appendChild(bar);
   var count = bar.querySelector(".seln"), hideBtn = bar.querySelector(".selhide");
   var favBtn = bar.querySelector(".selfav");
+  var pick = bar.querySelector(".selalbum"), nameIn = bar.querySelector(".selname");
+  var addBtn = bar.querySelector(".seladd"), outBtn = bar.querySelector(".selout");
   function ids(tile) {
     var series = tile.closest(".series");
     if (series && !series.classList.contains("open") && !tile.classList.contains("later")) {
@@ -761,6 +785,8 @@
     count.textContent = n === 1 ? "1 chosen" : n + " chosen";
     hideBtn.disabled = n === 0;
     favBtn.disabled = n === 0;
+    if (pick) pick.disabled = n === 0;
+    if (outBtn) outBtn.disabled = n === 0;
   }
   function setMode(on) {
     document.body.classList.toggle("selecting", on);
@@ -787,14 +813,72 @@
     else tile.removeAttribute("data-ids");
     update();
   });
-  function post(url, list) {
+  function post(url, list, extra) {
     return fetch(url, {
       method: "POST",
       credentials: "same-origin",
       headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: "ids=" + encodeURIComponent(list.join(","))
+      body: "ids=" + encodeURIComponent(list.join(",")) + (extra || "")
     }).then(function (r) { if (!r.ok) throw new Error(r.status); return r.text(); });
   }
+  // Albums (REQ-WEB-017): into one, or a new one named in place.
+  function addTo(albumId, name) {
+    var list = chosen();
+    if (!list.length) return;
+    var extra = "&album=" + encodeURIComponent(albumId) +
+      (name ? "&name=" + encodeURIComponent(name) : "");
+    post("album-add", list, extra).then(function (id) {
+      var n = list.length === 1 ? "1 item" : list.length + " items";
+      setMode(false);
+      var t = document.createElement("div");
+      t.className = "toast";
+      t.setAttribute("role", "status");
+      t.innerHTML = '<span></span><a>Open</a>';
+      t.querySelector("span").textContent = n + " added to \u201c" + (name || pick.options[pick.selectedIndex].text) + "\u201d.";
+      t.querySelector("a").href = "album/" + String(id).replace(/\D/g, "");
+      document.body.appendChild(t);
+      setTimeout(function () { t.remove(); }, 8000);
+      if (name && opts) {
+        var o = document.createElement("option");
+        o.value = String(id).replace(/\D/g, "");
+        o.textContent = name;
+        pick.insertBefore(o, pick.options[1]);
+      }
+      pick.value = "";
+      nameIn.hidden = addBtn.hidden = true;
+      nameIn.value = "";
+    }, function () { count.textContent = "Could not add, try again"; });
+  }
+  if (pick) {
+    pick.addEventListener("change", function () {
+      if (pick.value === "new") {
+        nameIn.hidden = addBtn.hidden = false;
+        nameIn.focus();
+      } else if (pick.value) {
+        addTo(pick.value);
+      }
+    });
+    function addNew() {
+      var name = nameIn.value.trim();
+      if (name) addTo("new", name);
+    }
+    addBtn.addEventListener("click", addNew);
+    nameIn.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); addNew(); } });
+  }
+  if (outBtn) outBtn.addEventListener("click", function () {
+    var list = chosen();
+    if (!list.length) return;
+    outBtn.disabled = true;
+    post("album/" + album + "/remove", list).then(function () {
+      list.forEach(function (id) {
+        var t = document.getElementById("i" + id);
+        if (t) t.remove();
+      });
+      setMode(false);
+      toast(list, (list.length === 1 ? "1 item" : list.length + " items") + " taken out of the album.",
+        "album-add", false, "&album=" + encodeURIComponent(album));
+    }, function () { outBtn.disabled = false; count.textContent = "Could not remove, try again"; });
+  });
   hideBtn.addEventListener("click", function () {
     var list = chosen();
     if (!list.length) return;
@@ -846,7 +930,7 @@
     }, function () { favBtn.disabled = false; count.textContent = "Could not save, try again"; });
   });
   // Undo posts `undo`; it reloads unless only hearts changed in place.
-  function toast(list, text, undo, inPlace) {
+  function toast(list, text, undo, inPlace, extra) {
     var t = document.createElement("div");
     t.className = "toast";
     t.setAttribute("role", "status");
@@ -857,7 +941,7 @@
     var gone = setTimeout(function () { t.remove(); }, 10000);
     t.querySelector("button").addEventListener("click", function () {
       clearTimeout(gone);
-      post(undo || "unhide-many", list).then(function () {
+      post(undo || "unhide-many", list, extra).then(function () {
         if (inPlace) { hearts(list, false); t.remove(); } else window.location.reload();
       });
     });
@@ -935,7 +1019,7 @@
     ["Slideshow", "Esc", "close"],
     ["Search", "↓ ↑", "move through the suggestions"],
     ["Timeline", "\u2212 +", "smaller, larger pictures (or pinch)"],
-    ["Timeline", "Select", "choose several, then make them favourites or hide them"],
+    ["Timeline", "Select", "choose several: favourites, an album, or hide them"],
     ["Anywhere", "?", "this list"]
   ];
   var dlg = null;

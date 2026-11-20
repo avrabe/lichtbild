@@ -1373,3 +1373,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-016
+
+  - id: VER-098
+    type: verification
+    title: Albums are each person's own
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "albums_are_each_persons_own"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth albums_are_each_persons_own"
+    links:
+      - type: verifies
+        target: REQ-WEB-017

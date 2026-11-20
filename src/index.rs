@@ -56,6 +56,10 @@ const HIDDEN: TableDefinition<(&str, u64), ()> = TableDefinition::new("hidden");
 /// (person, item id) -> (): each person's favourites (REQ-WEB-016), kept
 /// apart like what they hid.
 const FAVS: TableDefinition<(&str, u64), ()> = TableDefinition::new("favourites");
+/// Album id -> JSON `Album` (REQ-WEB-017): each person's own albums.
+const ALBUMS: TableDefinition<u64, &[u8]> = TableDefinition::new("albums");
+/// (album id, item id) -> (): what an album holds.
+const ALBUM_ITEMS: TableDefinition<(u64, u64), ()> = TableDefinition::new("album_items");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
 
@@ -133,6 +137,14 @@ pub struct Item {
     pub fav: bool,
 }
 
+/// An album (REQ-WEB-017): whose it is, its name, when it was made.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Album {
+    pub owner: String,
+    pub name: String,
+    pub created: u64,
+}
+
 pub struct Index {
     db: Database,
     /// Counts committed write batches, so caches built from the index
@@ -177,6 +189,8 @@ impl Index {
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
             w.open_table(FAVS)?;
+            w.open_table(ALBUMS)?;
+            w.open_table(ALBUM_ITEMS)?;
             w.open_table(PLACED)?;
             w.open_table(TEXTS)?;
             w.open_table(OBJECTS)?;
@@ -653,6 +667,105 @@ impl Index {
     /// One person's favourites.
     pub fn favs(&self, person: &str) -> Result<std::collections::HashSet<u64>> {
         self.marked(FAVS, person)
+    }
+
+    /// A new, empty album; its id.
+    pub fn create_album(&self, owner: &str, name: &str, now: u64) -> Result<u64> {
+        let w = self.db.begin_write()?;
+        let id;
+        {
+            let mut t = w.open_table(ALBUMS)?;
+            id = t.last()?.map_or(1, |(k, _)| k.value() + 1);
+            let a = Album {
+                owner: owner.to_string(),
+                name: name.to_string(),
+                created: now,
+            };
+            t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
+        }
+        w.commit()?;
+        Ok(id)
+    }
+
+    pub fn album(&self, id: u64) -> Result<Option<Album>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        Ok(match t.get(id)? {
+            Some(v) => serde_json::from_slice(v.value()).ok(),
+            None => None,
+        })
+    }
+
+    /// One person's albums, newest first.
+    pub fn albums(&self, owner: &str) -> Result<Vec<(u64, Album)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        let mut out = Vec::new();
+        for e in t.iter()?.rev() {
+            let (k, v) = e?;
+            if let Ok(a) = serde_json::from_slice::<Album>(v.value()) {
+                if a.owner == owner {
+                    out.push((k.value(), a));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn rename_album(&self, id: u64, name: &str) -> Result<()> {
+        let Some(mut a) = self.album(id)? else {
+            return Ok(());
+        };
+        a.name = name.to_string();
+        let w = self.db.begin_write()?;
+        w.open_table(ALBUMS)?
+            .insert(id, serde_json::to_vec(&a)?.as_slice())?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Remove an album and what it holds; the pictures stay.
+    pub fn delete_album(&self, id: u64) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            w.open_table(ALBUMS)?.remove(id)?;
+            let mut t = w.open_table(ALBUM_ITEMS)?;
+            let ids: Vec<u64> = t
+                .range((id, 0u64)..=(id, u64::MAX))?
+                .map(|e| e.map(|(k, _)| k.value().1))
+                .collect::<std::result::Result<_, _>>()?;
+            for i in ids {
+                t.remove((id, i))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Put an item into an album, or take it out.
+    pub fn set_in_album(&self, album: u64, item: u64, on: bool) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(ALBUM_ITEMS)?;
+            if on {
+                t.insert((album, item), ())?;
+            } else {
+                t.remove((album, item))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// What an album holds.
+    pub fn album_items(&self, album: u64) -> Result<std::collections::HashSet<u64>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUM_ITEMS)?;
+        let mut out = std::collections::HashSet::new();
+        for e in t.range((album, 0u64)..=(album, u64::MAX))? {
+            out.insert(e?.0.value().1);
+        }
+        Ok(out)
     }
 
     /// Live videos (by content), how many have a transcript from `model`,

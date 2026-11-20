@@ -140,6 +140,7 @@ async fn every_page_has_the_app_menu() {
             "trips",
             "words",
             "favourites",
+            "albums",
             "hidden",
             "duplicates",
             "status",

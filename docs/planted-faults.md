@@ -137,6 +137,9 @@ at nice 0.
 | F126 | REQ-WEB-016 | the timeline shows no heart on favourites | `favourites_are_kept_per_person` |
 | F127 | REQ-WEB-016 | "♥" in a search keeps every hit, not only favourites | `favourites_are_kept_per_person` |
 | F128 | REQ-WEB-016 | "Favoriten" is suggested to someone with no favourites | `favourites_are_kept_per_person` |
+| F129 | REQ-WEB-017 | anyone may open and change anyone's album | `albums_are_each_persons_own` |
+| F130 | REQ-WEB-017 | an item the viewer may not see goes into their album | `albums_are_each_persons_own` |
+| F131 | REQ-WEB-017 | a deleted album leaves what it held behind | `albums_are_each_persons_own` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

@@ -832,3 +832,35 @@ dialog.keys button {
 .timeline.row0 .item .dur, .timeline.row0 .item .copies, .timeline.row0 .item .stack { transform: scale(.8); transform-origin: left top; }
 .thead .zoom { display: inline-flex; gap: 2px; }
 .thead .zoom button { min-width: 32px; }
+
+/* Albums (REQ-WEB-017). */
+.selbar { flex-wrap: wrap; justify-content: center; }
+.selbar select, .selbar input {
+  font: inherit; font-size: 14px; min-height: 36px; padding: 0 12px; border-radius: 18px; border: 0;
+  background: rgba(255, 255, 255, .16); color: inherit; max-width: 12em;
+}
+.selbar select option { color: var(--ink); background: var(--paper); }
+.selbar input::placeholder { color: rgba(255, 255, 255, .6); }
+.selbar [hidden] { display: none; }
+.toast a { color: inherit; font-weight: 600; padding: 0 10px; }
+form.newalbum { display: flex; gap: 8px; margin: 0 0 22px; max-width: 28em; }
+form.newalbum input, details.albumtools input {
+  flex: 1; font: inherit; min-height: 36px; padding: 0 12px; border: 1px solid var(--line, #d8cfbf);
+  border-radius: 6px; background: var(--paper); color: var(--ink);
+}
+form.newalbum button, details.albumtools button {
+  font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 0;
+  background: var(--ink); color: var(--paper); cursor: pointer;
+}
+details.albumtools { margin: 0 0 18px; }
+details.albumtools summary { cursor: pointer; color: var(--ink-faint); font-size: 13px; }
+details.albumtools form { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; max-width: 32em; }
+details.albumtools button.danger { background: var(--shu); color: #fff; }
+.viewer details.info form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.viewer details.info form.albumf select, .viewer details.info form.albumf input,
+.viewer details.info form.albumf button {
+  font: 400 13px/1.4 var(--sans); min-height: 30px; padding: 0 8px; border-radius: 6px;
+  border: 1px solid rgba(233, 225, 209, .25); background: transparent; color: inherit;
+}
+.viewer details.info form.albumf button { cursor: pointer; }
+.viewer details.info form.albumf [hidden] { display: none; }

@@ -915,6 +915,28 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-017
+    type: requirement
+    title: Each person keeps their own albums
+    status: implemented
+    release: v0.7.0
+    description: >
+      A person makes named albums (from the Albums page, or a new one named
+      while adding), puts pictures in from a timeline selection or a
+      photo's details, takes them out, renames and deletes albums; deleting
+      an album leaves its pictures. Only items the viewer may see go in,
+      only by a same-site request. Albums are per person: anyone else,
+      even someone who sees the same library, finds no such album and
+      cannot change it. An album page shows its pictures the viewer may
+      see, newest first, without the hidden ones, with a slideshow of the
+      album alone.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-DUP-001
     type: requirement
     title: The same picture is shown once, as its best copy

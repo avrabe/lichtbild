@@ -1333,3 +1333,158 @@ async fn favourites_are_kept_per_person() {
     assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "2"));
     assert!(e.idx.favs("p1").unwrap().is_empty());
 }
+
+// Albums are each person's own: p1 makes them, fills them only with
+// items they may see, renames, empties and deletes them; p2, who sees
+// p1's library, can neither see nor change them.
+// rivet: verifies REQ-WEB-017
+#[tokio::test]
+async fn albums_are_each_persons_own() {
+    let e = env("https://photos.example").await;
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let all = e.idx.all().unwrap();
+    let mine: Vec<u64> = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let other = all.iter().find(|(_, r)| r.label == "p2").unwrap().0;
+    let post = |uri: String,
+                cookie: String,
+                body: String,
+                headers: &'static [(&'static str, &'static str)]| {
+        let app = e.app.clone();
+        async move { req_with_body(&app, "POST", &uri, Some(&cookie), &body, headers).await }
+    };
+    const FORM: &[(&str, &str)] = &[
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    const CROSS: &[(&str, &str)] = &[
+        ("sec-fetch-site", "cross-site"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+
+    // Made from the albums page, then filled from a selection.
+    let r = post("/albums".into(), c1.clone(), "name=Sommer".into(), FORM).await;
+    assert!(location(&r).ends_with("/album/1"), "{}", location(&r));
+    let r = post("/albums".into(), c1.clone(), "name=+++".into(), FORM).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let body = format!("album=1&ids={}%2C{}%2C{other}%2Cnope", mine[0], mine[1]);
+    let r = post("/album-add".into(), c1.clone(), body.clone(), FORM).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let held = e.idx.album_items(1).unwrap();
+    assert_eq!(held.len(), 2);
+    assert!(mine.iter().all(|id| held.contains(id)));
+    let r = post("/album-add".into(), c1.clone(), body, CROSS).await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    // A new one named in place, from the viewer's form.
+    let body = format!(
+        "album=new&name=++Neues+++Album+&ids={}&back=v%2Fp1%2F{}",
+        mine[0], mine[0]
+    );
+    let r = post("/album-add".into(), c1.clone(), body, FORM).await;
+    assert!(r.status.is_redirection());
+    assert_eq!(e.idx.album(2).unwrap().unwrap().name, "Neues Album");
+    assert_eq!(e.idx.album_items(2).unwrap().len(), 1);
+
+    // The pages.
+    let page = req_with(&e.app, "GET", "/albums", Some(&c1), false, &[]).await;
+    assert!(page.body.contains("<b>Sommer</b><i>2</i>"), "{}", page.body);
+    assert!(
+        page.body.contains("<b>Neues Album</b><i>1</i>"),
+        "{}",
+        page.body
+    );
+    let page = req_with(&e.app, "GET", "/album/1", Some(&c1), false, &[]).await;
+    for id in &mine {
+        assert!(
+            page.body.contains(&format!("id=\"i{id}\"")),
+            "{}",
+            page.body
+        );
+    }
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c1), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        2,
+        "{}",
+        show.body
+    );
+    assert!(show.body.contains("class=\"close\" href=\"album/1\""));
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", mine[0]),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        v.body.contains("<option value=\"1\">Sommer</option>"),
+        "{}",
+        v.body
+    );
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c1), false, &[]).await;
+    assert!(tl.body.contains("<template id=\"albumopts\"><option value=\"2\">Neues Album</option><option value=\"1\">Sommer</option></template>"), "{}", tl.body);
+
+    // p2 sees p1's photos, not p1's albums.
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let page = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(!page.body.contains("Sommer"), "{}", page.body);
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c2), false, &[]).await;
+    assert_eq!(show.body.matches("<li data-src=").count(), 0);
+    let ids = format!("ids={}", mine[0]);
+    for (uri, body) in [
+        ("/album-add".to_string(), format!("album=1&{ids}")),
+        ("/album/1/remove".into(), ids.clone()),
+        ("/album/1/rename".into(), "name=Meins".into()),
+        ("/album/1/delete".into(), String::new()),
+    ] {
+        let r = post(uri.clone(), c2.clone(), body, FORM).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(e.idx.album(1).unwrap().unwrap().name, "Sommer");
+    assert_eq!(e.idx.album_items(1).unwrap().len(), 2);
+
+    // p1 takes one out, renames, deletes; the pictures stay.
+    let r = post(
+        "/album/1/remove".into(),
+        c1.clone(),
+        format!("ids={}%2C{other}", mine[1]),
+        FORM,
+    )
+    .await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    let r = post(
+        "/album/1/rename".into(),
+        c1.clone(),
+        "name=Sommer+2021".into(),
+        FORM,
+    )
+    .await;
+    assert!(location(&r).ends_with("/album/1"));
+    assert_eq!(e.idx.album(1).unwrap().unwrap().name, "Sommer 2021");
+    let r = post("/album/1/delete".into(), c1.clone(), String::new(), FORM).await;
+    assert!(location(&r).ends_with("/albums"));
+    assert!(e.idx.album(1).unwrap().is_none());
+    assert!(e.idx.album_items(1).unwrap().is_empty());
+    assert!(e.idx.locate(mine[0]).unwrap().is_some());
+}
