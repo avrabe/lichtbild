@@ -184,8 +184,8 @@ FAULTS = [
      "",
      ["test", "--test", "auth", "next_after_login_stays_in_the_app"]),
     ("F41", "REQ-NAV-001", "src/web.rs",
-     "maxlength=\"200\"></form>{nav}</header>",
-     "maxlength=\"200\"></form></header>",
+     "</div></form>{nav}</header>",
+     "</div></form></header>",
      ["test", "--test", "web", "nav_switcher_is_in_every_page_header"]),
     ("F42", "REQ-AUTH-001", "src/auth.rs",
      "None if audiences > 1 => Err(\"several audiences but no authorized party\".into()),",
@@ -304,8 +304,8 @@ FAULTS = [
      "        let visible: Vec<&Member> = g.groups[gi]\n            .iter()\n            .filter(|_| true)",
      ["test", "--test", "dups", "copies_are_grouped_and_bursts_are_not"]),
     ("F71", "REQ-DUP-001", "src/web.rs",
-     "&& dups.shown(id, &labels, &hidden).shown",
-     "&& true",
+     "kind.is_none_or(|v| rec.video.is_some() == v)\n                    && dups.shown(id, &labels, &hidden).shown",
+     "kind.is_none_or(|v| rec.video.is_some() == v)\n                    && true",
      ["test", "--test", "dups", "the_timeline_search_and_viewer_show_one_copy"]),
     ("F72", "REQ-DUP-001", "src/dups.rs",
      "if var.sqrt() < 6.0 {",
@@ -529,6 +529,14 @@ def cargo(fid):
 def main():
     wanted = set(sys.argv[1:])
     env = dict(os.environ, CARGO_BUILD_JOBS=os.environ.get("CARGO_BUILD_JOBS", "2"))
+    # Every snippet must match exactly once before anything is planted, so a
+    # stale fault fails in seconds rather than after the whole run.
+    stale = [f"{fid} {req}: snippet found {(ROOT / rel).read_text().count(orig)} times in {rel} (stale fault)"
+             for fid, req, rel, orig, _, _ in FAULTS
+             if (not wanted or fid in wanted) and (ROOT / rel).read_text().count(orig) != 1]
+    if stale:
+        print("\n".join(stale), file=sys.stderr)
+        sys.exit(1)
     failures = []
     for fid, req, rel, orig, planted, args in FAULTS:
         if wanted and fid not in wanted:
