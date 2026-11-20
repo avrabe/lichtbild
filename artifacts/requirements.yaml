@@ -927,9 +927,13 @@ artifacts:
       an album leaves its pictures. Only items the viewer may see go in,
       only by a same-site request. Albums are per person: anyone else,
       even someone who sees the same library, finds no such album and
-      cannot change it. An album page shows its pictures the viewer may
-      see, newest first, without the hidden ones, with a slideshow of the
-      album alone.
+      cannot change it. The owner may share an album with the household
+      (off until turned on, and turned off again the same way): then
+      everyone signed in finds it under "Shared with you" with its owner
+      named and opens it, but only the owner adds to, takes from,
+      renames, shares or deletes it. An album page shows its pictures the
+      viewer may see, newest first, without the ones the viewer hid, with
+      a slideshow of the album alone.
     fields:
       priority: should
       category: functional

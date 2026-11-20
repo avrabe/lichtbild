@@ -1511,3 +1511,130 @@ async fn albums_are_each_persons_own() {
     let r = req_with(&e.app, "GET", "/album/2", Some(&c1), false, &[]).await;
     assert_eq!(r.status, StatusCode::NOT_FOUND);
 }
+
+// Sharing an album is the owner's choice, off by default: shared, p2 sees
+// it among "Shared with you" and opens it (only what p2 may see, without
+// what p2 hid), but cannot change it; unshared, it is gone for p2 again.
+// rivet: verifies REQ-WEB-017
+#[tokio::test]
+async fn a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner() {
+    let e = env("https://photos.example").await;
+    const FORM: &[(&str, &str)] = &[
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+    }
+    let Ok((p1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={p1}");
+    let mine: Vec<u64> = e
+        .idx
+        .all()
+        .unwrap()
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none())
+        .map(|(id, _)| *id)
+        .take(2)
+        .collect();
+    let body = format!("album=new&name=Ferien&ids={}%2C{}", mine[0], mine[1]);
+    let r = req_with_body(&e.app, "POST", "/album-add", Some(&c1), &body, FORM).await;
+    assert_eq!((r.status, r.body.as_str()), (StatusCode::OK, "1"));
+    assert!(!e.idx.album(1).unwrap().unwrap().shared);
+
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-2-unmapped-subject".into();
+        m.email = "two@example.test".into();
+    }
+    let (p2, _) = login(&e, "").await.map_err(|r| r.body).unwrap();
+    let c2 = format!("lichtbild_session={p2}");
+    // Not shared: nothing for p2.
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    // p2 cannot share it either.
+    let r = req_with_body(&e.app, "POST", "/album/1/share", Some(&c2), "name=on", FORM).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(!e.idx.album(1).unwrap().unwrap().shared);
+
+    // p1 shares it.
+    let r = req_with_body(&e.app, "POST", "/album/1/share", Some(&c1), "name=on", FORM).await;
+    assert!(location(&r).ends_with("/album/1"), "{}", location(&r));
+    let own = req_with(&e.app, "GET", "/albums", Some(&c1), false, &[]).await;
+    assert!(
+        own.body
+            .contains("<b>Ferien</b><i>2</i><small>shared</small>"),
+        "{}",
+        own.body
+    );
+    assert!(!own.body.contains("Shared with you"));
+    assert_eq!(own.body.matches("<b>Ferien</b>").count(), 1, "{}", own.body);
+    let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(
+        list.body.contains("<h2>Shared with you</h2>"),
+        "{}",
+        list.body
+    );
+    assert!(
+        list.body
+            .contains("<b>Ferien</b><i>2</i><small>from p1</small>"),
+        "{}",
+        list.body
+    );
+    // p2 hides one: the album shows p2 the other only.
+    e.idx.set_hidden("p2", mine[1], true).unwrap();
+    let page = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(
+        page.body.contains(&format!("id=\"i{}\"", mine[0])),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains(&format!("id=\"i{}\"", mine[1])));
+    assert!(page.body.contains("Shared by p1."));
+    assert!(!page.body.contains("album/1/rename"), "no tools for p2");
+    assert!(!page.body.contains("data-album="), "no removing for p2");
+    let show = req_with(&e.app, "GET", "/show/p1?album=1", Some(&c2), false, &[]).await;
+    assert_eq!(
+        show.body.matches("<li data-src=").count(),
+        1,
+        "{}",
+        show.body
+    );
+    // Seen, never changed by p2; and not offered to add to.
+    let tl = req_with(&e.app, "GET", "/t/p1", Some(&c2), false, &[]).await;
+    assert!(!tl.body.contains("Ferien"), "{}", tl.body);
+    let ids = format!("ids={}", mine[0]);
+    for (uri, body) in [
+        ("/album-add".to_string(), format!("album=1&{ids}")),
+        ("/album/1/remove".into(), ids.clone()),
+        ("/album/1/rename".into(), "name=Meins".into()),
+        ("/album/1/share".into(), "name=off".into()),
+        ("/album/1/delete".into(), String::new()),
+    ] {
+        let r = req_with_body(&e.app, "POST", &uri, Some(&c2), &body, FORM).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{uri}");
+    }
+    let a = e.idx.album(1).unwrap().unwrap();
+    assert!(a.shared && a.name == "Ferien");
+    assert_eq!(e.idx.album_items(1).unwrap().len(), 2);
+
+    // p1 stops sharing: gone for p2.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/album/1/share",
+        Some(&c1),
+        "name=off",
+        FORM,
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    let r = req_with(&e.app, "GET", "/album/1", Some(&c2), false, &[]).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let list = req_with(&e.app, "GET", "/albums", Some(&c2), false, &[]).await;
+    assert!(!list.body.contains("Ferien"));
+}

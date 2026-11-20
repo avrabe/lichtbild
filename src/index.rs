@@ -146,6 +146,10 @@ pub struct Album {
     pub owner: String,
     pub name: String,
     pub created: u64,
+    /// Shown to everyone in the household (only what each may see);
+    /// off unless the owner turns it on.
+    #[serde(default)]
+    pub shared: bool,
 }
 
 impl Item {
@@ -716,6 +720,7 @@ impl Index {
                 owner: owner.to_string(),
                 name: name.to_string(),
                 created: now,
+                shared: false,
             };
             t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
         }
@@ -748,9 +753,19 @@ impl Index {
         Ok(out)
     }
 
-    /// Rename an album, read and written in one transaction, so a delete
-    /// in between cannot bring it back.
+    /// Rename an album.
     pub fn rename_album(&self, id: u64, name: &str) -> Result<()> {
+        self.change_album(id, |a| a.name = name.to_string())
+    }
+
+    /// Share an album with the household, or stop sharing it.
+    pub fn share_album(&self, id: u64, shared: bool) -> Result<()> {
+        self.change_album(id, |a| a.shared = shared)
+    }
+
+    /// Change an album, read and written in one transaction, so a delete
+    /// in between cannot bring it back.
+    fn change_album(&self, id: u64, change: impl FnOnce(&mut Album)) -> Result<()> {
         let w = self.db.begin_write()?;
         {
             let mut t = w.open_table(ALBUMS)?;
@@ -759,12 +774,28 @@ impl Index {
                 None => None,
             };
             if let Some(mut a) = a {
-                a.name = name.to_string();
+                change(&mut a);
                 t.insert(id, serde_json::to_vec(&a)?.as_slice())?;
             }
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// Albums others share with the household, newest first.
+    pub fn shared_albums(&self, me: &str) -> Result<Vec<(u64, Album)>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(ALBUMS)?;
+        let mut out = Vec::new();
+        for e in t.iter()?.rev() {
+            let (k, v) = e?;
+            if let Ok(a) = serde_json::from_slice::<Album>(v.value()) {
+                if a.shared && a.owner != me {
+                    out.push((k.value(), a));
+                }
+            }
+        }
+        Ok(out)
     }
 
     /// Remove an album and what it holds; the pictures stay.

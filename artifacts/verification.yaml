@@ -1387,3 +1387,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-017
+
+  - id: VER-099
+    type: verification
+    title: A shared album is seen by the house and changed only by its owner
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_shared_album_is_seen_by_the_house_and_changed_only_by_its_owner"
+    links:
+      - type: verifies
+        target: REQ-WEB-017

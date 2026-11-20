@@ -134,6 +134,7 @@ pub fn router(state: AppState) -> Router {
         .route("/album/{id}/remove", axum::routing::post(album_remove))
         .route("/album/{id}/rename", axum::routing::post(album_rename))
         .route("/album/{id}/delete", axum::routing::post(album_delete))
+        .route("/album/{id}/share", axum::routing::post(album_share))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
         .route("/unplace/{id}", axum::routing::post(unplace))
@@ -1691,7 +1692,7 @@ async fn show(
         let hidden = idx.hidden(&me)?;
         // A chosen set: favourites, or one of this person's albums.
         let favs = match (sq.fav, sq.album) {
-            (_, Some(a)) => match own_album(&idx, a, &me)? {
+            (_, Some(a)) => match seen_album(&idx, a, &me)? {
                 Some(_) => Some(idx.album_items(a)?),
                 None => return Ok(Vec::new()),
             },
@@ -2682,6 +2683,12 @@ fn own_album(idx: &index::Index, id: u64, me: &str) -> anyhow::Result<Option<ind
     Ok(idx.album(id)?.filter(|a| a.owner == me))
 }
 
+/// The album if this person may look at it: their own, or one its owner
+/// shares with the household. Changing it still needs `own_album`.
+fn seen_album(idx: &index::Index, id: u64, me: &str) -> anyhow::Result<Option<index::Album>> {
+    Ok(idx.album(id)?.filter(|a| a.owner == me || a.shared))
+}
+
 /// The timeline to link pictures into: the viewer's one library, or all.
 fn default_who(viewer: &Viewer) -> String {
     if viewer.labels.len() == 1 {
@@ -2728,12 +2735,15 @@ async fn albums_of(st: &AppState, me: String) -> Vec<(u64, index::Album)> {
 async fn albums_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let idx = st.index.clone();
     let me = person(&viewer);
+    let me2 = me.clone();
     let labels = viewer.labels.clone();
     type Row = (u64, index::Album, usize, Option<(u64, String)>);
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Row>> {
         let hidden = idx.hidden(&me)?;
         let mut out = Vec::new();
-        for (id, a) in idx.albums(&me)? {
+        let mut all = idx.albums(&me)?;
+        all.extend(idx.shared_albums(&me)?);
+        for (id, a) in all {
             let mut shown: Vec<(String, u64, String)> = Vec::new();
             for i in idx.album_items(id)? {
                 if hidden.contains(&i) {
@@ -2768,11 +2778,17 @@ async fn albums_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         "<h1>Albums</h1>\
          <form class=\"newalbum\" method=\"post\" action=\"albums\"><input type=\"text\" name=\"name\" maxlength=\"80\" required placeholder=\"New album\" aria-label=\"Name of a new album\"><button type=\"submit\">Make</button></form>",
     );
-    if rows.is_empty() {
+    let (mine, theirs): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| r.1.owner == me2);
+    if mine.is_empty() {
         body += "<p class=\"dim\">No albums yet. Make one here, or choose pictures in a timeline with Select and add them to a new album.</p>";
-    } else {
+    }
+    for (head, rows) in [("", &mine), ("<h2>Shared with you</h2>", &theirs)] {
+        if rows.is_empty() {
+            continue;
+        }
+        body += head;
         body += "<section class=\"thingtiles albums\">";
-        for (id, a, n, cover) in &rows {
+        for (id, a, n, cover) in rows.iter() {
             let img = match cover {
                 Some((i, h)) => format!(
                     "<img src=\"thumb/{i}?h={}\" loading=\"lazy\" alt=\"\">",
@@ -2780,8 +2796,17 @@ async fn albums_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 ),
                 None => "<span class=\"nothumb\">empty</span>".to_string(),
             };
+            let by = if a.owner == me2 {
+                if a.shared {
+                    "<small>shared</small>".to_string()
+                } else {
+                    String::new()
+                }
+            } else {
+                format!("<small>from {}</small>", esc(&a.owner))
+            };
             body += &format!(
-                "<a class=\"thing\" href=\"album/{id}\">{img}<b>{}</b><i>{n}</i></a>",
+                "<a class=\"thing\" href=\"album/{id}\">{img}<b>{}</b><i>{n}</i>{by}</a>",
                 esc(&a.name)
             );
         }
@@ -2956,6 +2981,37 @@ async fn album_rename(
     }
 }
 
+/// POST /album/{id}/share: `name=on` shares the album with the
+/// household, anything else stops sharing it. Only the owner.
+async fn album_share(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(album): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<AlbumForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let on = f.name.as_deref() == Some("on");
+    let idx = st.index.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if own_album(&idx, album, &me)?.is_none() {
+            return Ok(false);
+        }
+        idx.share_album(album, on)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("album/{album}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
 /// POST /album/{id}/delete: the album goes; its pictures stay.
 async fn album_delete(
     State(st): State<AppState>,
@@ -3001,7 +3057,7 @@ async fn album_page(
     let me = person(&viewer);
     let res = tokio::task::spawn_blocking(
         move || -> anyhow::Result<Option<(index::Album, Vec<index::Item>, usize)>> {
-            let Some(a) = own_album(&idx, album, &me)? else {
+            let Some(a) = seen_album(&idx, album, &me)? else {
                 return Ok(None);
             };
             let held = idx.album_items(album)?;
@@ -3031,18 +3087,37 @@ async fn album_page(
     let ones = vec![1; items.len()];
     let w = esc(&who);
     let name = esc(&a.name);
+    let owner = a.owner == person(&viewer);
+    // Sharing is the owner's choice, off until turned on (REQ-WEB-017).
+    let share = if a.shared {
+        format!("<form method=\"post\" action=\"album/{album}/share\"><input type=\"hidden\" name=\"name\" value=\"off\"><button type=\"submit\">Stop sharing</button> <span class=\"dim\">Everyone in the house sees this album, each only the pictures they may see.</span></form>")
+    } else {
+        format!("<form method=\"post\" action=\"album/{album}/share\"><input type=\"hidden\" name=\"name\" value=\"on\"><button type=\"submit\">Share with the house</button> <span class=\"dim\">Only you see it now. Others could look, not change it.</span></form>")
+    };
     let manage = format!(
-        "<details class=\"albumtools\"><summary>Rename or delete</summary>\
-         <form method=\"post\" action=\"album/{album}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Album name\"><button type=\"submit\">Rename</button></form>\
+        "<details class=\"albumtools\"><summary>Share, rename or delete</summary>\
+         {share}<form method=\"post\" action=\"album/{album}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Album name\"><button type=\"submit\">Rename</button></form>\
          <form method=\"post\" action=\"album/{album}/delete\"><button type=\"submit\" class=\"danger\">Delete this album</button> <span class=\"dim\">The pictures stay where they are.</span></form></details>"
     );
+    let mark = if a.shared { " · shared" } else { "" };
+    // Someone else's shared album: to look at, with its owner named; only
+    // the owner shares, renames, deletes or takes pictures out.
+    let (manage, from, data) = if owner {
+        (manage, String::new(), format!(" data-album=\"{album}\""))
+    } else {
+        (
+            String::new(),
+            format!("<p class=\"dim\">Shared by {}.</p>", esc(&a.owner)),
+            String::new(),
+        )
+    };
     let body = if items.is_empty() {
         format!(
-            "<h1>{name}</h1><p class=\"dim\">Empty. Choose pictures in a timeline with Select and add them here, or use “Add to album” in a photo’s details.</p>{manage}"
+            "<h1>{name}</h1>{from}<p class=\"dim\">Empty. Choose pictures in a timeline with Select and add them here, or use “Add to album” in a photo’s details.</p>{manage}"
         )
     } else {
         format!(
-            "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?album={album}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline album\" data-album=\"{album}\">\n{}</div>\n{albums}",
+            "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}{mark}</span><a class=\"tbtn\" href=\"show/{w}?album={album}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{from}{manage}<div class=\"timeline album\"{data}>\n{}</div>\n{albums}",
             render_items(&who, &items, &ones, None, false, ""),
             n = set_count(total),
             albums = album_template(&albums_of(&st, person(&viewer)).await),
