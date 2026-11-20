@@ -3455,32 +3455,104 @@ async fn keep(
 }
 
 /// GET /hidden: what this person hid, to show it again.
-async fn hidden_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct HiddenQuery {
+    /// "new" (default), "old" or "name".
+    sort: Option<String>,
+    /// Keep only items whose file name, folder or date holds this.
+    q: Option<String>,
+}
+
+/// GET /hidden: what this person hid (REQ-WEB-020), newest first, oldest
+/// first or by file name, narrowed by a word in the name, folder or date;
+/// several are chosen and shown again at once.
+async fn hidden_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(hq): Query<HiddenQuery>,
+) -> Response {
     let idx = st.index.clone();
     let me = person(&viewer);
     let labels = viewer.labels.clone();
-    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, index::Record)>> {
+    // File names only from the viewer's own library, as on the duplicates
+    // page; a granted library's items show their date alone.
+    let own = owned(st.auth.is_some(), &viewer);
+    let sort = match hq.sort.as_deref() {
+        Some("old") => "old",
+        Some("name") => "name",
+        _ => "new",
+    };
+    let word = hq.q.as_deref().unwrap_or("").trim().to_lowercase();
+    let word2 = word.clone();
+    type Hidden = (usize, Vec<(u64, index::Record, String)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Hidden> {
         let mut out = Vec::new();
-        let mut ids: Vec<u64> = idx.hidden(&me)?.into_iter().collect();
-        ids.sort_unstable();
-        for id in ids {
-            if let Some(r) = idx.locate(id)?.filter(|r| labels.contains(&r.label)) {
-                out.push((id, r));
+        let mut all = 0;
+        for id in idx.hidden(&me)? {
+            let Some(r) = idx.locate(id)?.filter(|r| labels.contains(&r.label)) else {
+                continue;
+            };
+            all += 1;
+            let path = if own.contains(&r.label) {
+                String::from_utf8_lossy(&r.rel).into_owned()
+            } else {
+                String::new()
+            };
+            if !word2.is_empty()
+                && !path.to_lowercase().contains(&word2)
+                && !r.taken_local.contains(&word2)
+            {
+                continue;
             }
+            out.push((id, r, path));
         }
-        Ok(out)
+        let name = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
+        match sort {
+            "old" => out.sort_by(|a, b| (&a.1.taken_local, a.0).cmp(&(&b.1.taken_local, b.0))),
+            "name" => out.sort_by(|a, b| (name(&a.2), a.0).cmp(&(name(&b.2), b.0))),
+            _ => out.sort_by(|a, b| (&b.1.taken_local, b.0).cmp(&(&a.1.taken_local, a.0))),
+        }
+        Ok((all, out))
     })
     .await;
-    let items = match res {
+    let (all, items) = match res {
         Ok(Ok(i)) => i,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
-    let mut body = format!(
-        "<h1>Hidden</h1><p class=\"dim\">{} hidden by you; only your view changes, nothing in the library.</p><div class=\"grid hiddenlist\">",
-        items.len()
+    let back = format!(
+        "hidden?sort={sort}{}",
+        if word.is_empty() {
+            String::new()
+        } else {
+            format!("&q={}", urlencode(&word))
+        }
     );
-    for (id, r) in &items {
+    let opt = |v: &str, label: &str| {
+        format!(
+            "<option value=\"{v}\"{}>{label}</option>",
+            if v == sort { " selected" } else { "" }
+        )
+    };
+    let shown = if word.is_empty() {
+        String::new()
+    } else {
+        format!(" {} with “{}”.", items.len(), esc(&word))
+    };
+    let mut body = format!(
+        "<h1>Hidden</h1><p class=\"dim\">{all} hidden by you; only your view changes, nothing in the library.{shown}</p>\
+         <form class=\"hidtools\" method=\"get\" action=\"hidden\"><input type=\"search\" name=\"q\" value=\"{q}\" placeholder=\"Word in the file name or date\" aria-label=\"Word in the file name or date\">\
+         <select name=\"sort\" aria-label=\"Order\">{}{}{}</select><button type=\"submit\">Show</button></form>\
+         <form class=\"hidmany\" method=\"post\" action=\"unhide-many\"><input type=\"hidden\" name=\"ids\" value=\"\"><input type=\"hidden\" name=\"back\" value=\"{b}\">\
+         <button type=\"button\" class=\"all\">Choose all</button><button type=\"submit\" class=\"again\" disabled>Show the chosen again</button><span class=\"dim n\"></span></form>\
+         <div class=\"grid hiddenlist\">",
+        opt("new", "Newest first"),
+        opt("old", "Oldest first"),
+        opt("name", "By name"),
+        q = esc(&word),
+        b = esc(&back),
+    );
+    for (id, r, path) in &items {
         let img = if r.thumb == "ok" {
             format!(
                 "<img src=\"thumb/{id}?h={}\" loading=\"lazy\" alt=\"\">",
@@ -3489,10 +3561,17 @@ async fn hidden_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         } else {
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
+        let name = path.rsplit('/').next().unwrap_or(path);
         body += &format!(
             "<div class=\"hid\"><a class=\"item\" href=\"v/{l}/{id}\">{img}</a>\
-             <form method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"hidden\"><button type=\"submit\">Show again</button></form></div>",
-            l = esc(&r.label)
+             <label class=\"pick\"><input type=\"checkbox\" value=\"{id}\"> <span>{when}</span></label>\
+             <small class=\"dim fname\" title=\"{p}\">{n}</small>\
+             <form method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\">Show again</button></form></div>",
+            l = esc(&r.label),
+            when = esc(r.taken_local.get(..10).unwrap_or("")),
+            p = esc(path),
+            n = esc(name),
+            b = esc(&back),
         );
     }
     body += "</div>";

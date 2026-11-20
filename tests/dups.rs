@@ -373,3 +373,79 @@ async fn the_cleanup_list_names_exact_duplicate_files() {
         "{csv}"
     );
 }
+
+// The hidden list is ordered by date or name, narrowed by a word, and
+// several are shown again at once.
+// rivet: verifies REQ-WEB-020
+#[tokio::test]
+async fn the_hidden_list_sorts_narrows_and_shows_several_again() {
+    let e = env();
+    let (idx, d, _) = grouped(&e);
+    let i = ids(&idx);
+    for id in [i.black1, i.black2, i.other, i.burst] {
+        idx.set_hidden("operator", id, true).unwrap();
+    }
+    let mut state = AppState::new(&e.cfg, idx.clone());
+    state.dups = d;
+    let app = web::router(state);
+    let order = |page: &str| -> Vec<u64> {
+        page.match_indices("action=\"unhide/")
+            .map(|(at, m)| {
+                let rest = &page[at + m.len()..];
+                rest[..rest.find('"').unwrap()].parse().unwrap()
+            })
+            .collect()
+    };
+
+    let (s, page) = get(&app, "/hidden?sort=name").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(
+        order(&page),
+        vec![i.black1, i.black2, i.burst, i.other],
+        "{page}"
+    );
+    assert!(page.contains("<option value=\"name\" selected>"), "{page}");
+    assert!(
+        page.contains("title=\"a/other.jpg\">other.jpg</small>"),
+        "{page}"
+    );
+    let new = order(&get(&app, "/hidden").await.1);
+    let mut old = order(&get(&app, "/hidden?sort=old").await.1);
+    assert_eq!(new.len(), 4);
+    old.reverse();
+    assert_eq!(new, old);
+
+    // A word narrows the list, and the way back keeps it.
+    let (_, page) = get(&app, "/hidden?q=Black&sort=name").await;
+    assert_eq!(order(&page), vec![i.black1, i.black2], "{page}");
+    assert!(page.contains("4 hidden by you"), "{page}");
+    assert!(page.contains("2 with “black”"), "{page}");
+    assert!(
+        page.contains("name=\"back\" value=\"hidden?sort=name&amp;q=black\""),
+        "{page}"
+    );
+
+    // Two chosen are shown again at once; the others stay hidden.
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/unhide-many")
+                .header("host", "localhost:8080")
+                .header("sec-fetch-site", "same-origin")
+                .header("content-type", "application/x-www-form-urlencoded")
+                .body(Body::from(format!(
+                    "ids={}%2C{}&back=hidden%3Fsort%3Dname%26q%3Dblack",
+                    i.black1, i.black2
+                )))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(res.status().is_redirection());
+    assert_eq!(res.headers()["location"], "/hidden?sort=name&q=black");
+    let left = idx.hidden("operator").unwrap();
+    assert!(!left.contains(&i.black1) && !left.contains(&i.black2));
+    assert!(left.contains(&i.other) && left.contains(&i.burst));
+}

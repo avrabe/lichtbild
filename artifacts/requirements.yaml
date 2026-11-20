@@ -965,6 +965,26 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-020
+    type: requirement
+    title: The hidden list sorts, narrows and shows several again
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: in the hidden view, select several and sort
+      by name or date or a word. The hidden list orders newest first,
+      oldest first or by file name, keeps only items whose file name or
+      date holds a word, and shows the chosen ones again at once, back to
+      the same order and word. File names come only from the viewer's own
+      library; an item of a granted library shows its date alone, and its
+      name does not find it.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-019
     type: requirement
     title: From a day to the days before and after, or any day

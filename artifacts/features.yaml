@@ -382,6 +382,9 @@ artifacts:
       phase: phase-1
       acceptance-criteria:
         - From a day, the day before and after with pictures are one tap away, and any day is one pick away
+        - Hidden pictures sort by date or name, narrow by a word, and come back several at a time
     links:
       - type: satisfies
         target: REQ-WEB-019
+      - type: satisfies
+        target: REQ-WEB-020

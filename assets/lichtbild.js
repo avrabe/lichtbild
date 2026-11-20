@@ -1075,3 +1075,26 @@
     if (a) { e.preventDefault(); location.href = a.href; }
   });
 })();
+
+// Hidden (REQ-WEB-020): choose several, then show them again at once.
+(function () {
+  const form = document.querySelector('form.hidmany');
+  if (!form) return;
+  const boxes = () => [...document.querySelectorAll('.hiddenlist input[type=checkbox]')];
+  const again = form.querySelector('button.again');
+  const n = form.querySelector('.n');
+  const sync = () => {
+    const on = boxes().filter((b) => b.checked);
+    form.elements.ids.value = on.map((b) => b.value).join(',');
+    again.disabled = on.length === 0;
+    n.textContent = on.length ? on.length + ' chosen' : '';
+  };
+  document.querySelector('.hiddenlist').addEventListener('change', sync);
+  form.querySelector('button.all').addEventListener('click', () => {
+    const all = boxes();
+    const to = !all.every((b) => b.checked);
+    all.forEach((b) => { b.checked = to; });
+    sync();
+  });
+  sync();
+})();

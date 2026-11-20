@@ -966,3 +966,17 @@ ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4p
   font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--ink-faint); background: var(--paper-2); color: var(--ink);
 }
 .daynav form.daypick button { cursor: pointer; }
+
+/* Hidden (REQ-WEB-020): a word, an order, and several shown again at once. */
+.hidtools, .hidmany { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.hidtools input, .hidtools select, .hidtools button, .hidmany button {
+  font: 500 13px/1.2 var(--sans); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper-2); color: var(--ink);
+}
+.hidtools input { min-width: 14em; flex: 1 1 14em; max-width: 26em; }
+.hidtools button, .hidmany button { cursor: pointer; }
+.hidmany button.again:not(:disabled) { background: var(--shu); border-color: var(--shu); color: #fff8ee; }
+.hidmany button:disabled { opacity: .5; cursor: default; }
+.hiddenlist .hid label.pick { display: flex; gap: 6px; align-items: center; font: 500 12px/1.2 var(--sans); cursor: pointer; }
+.hiddenlist .hid label.pick input { width: 18px; height: 18px; accent-color: var(--shu); }
+.hiddenlist .hid .fname { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.hiddenlist .hid:has(input:checked) a.item { outline: 3px solid var(--shu); outline-offset: 2px; }

@@ -167,6 +167,9 @@ at nice 0.
 | F157 | REQ-FIX-001 | the download holds others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
 | F158 | REQ-WEB-019 | the later day is the same day | `days_away_from_home_are_one_trip_named_by_place` |
 | F159 | REQ-WEB-019 | the date picker is ignored | `days_away_from_home_are_one_trip_named_by_place` |
+| F160 | REQ-WEB-020 | the hidden list names files of a granted library | `the_hidden_list_names_only_ones_own_files` |
+| F161 | REQ-WEB-020 | "by name" sorts by date | `the_hidden_list_sorts_narrows_and_shows_several_again` |
+| F162 | REQ-WEB-020 | the word does not narrow the list | `the_hidden_list_sorts_narrows_and_shows_several_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

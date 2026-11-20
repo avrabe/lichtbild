@@ -1562,3 +1562,32 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-019
+
+
+  - id: VER-111
+    type: verification
+    title: The hidden list sorts by date and name, narrows by a word and shows several again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_hidden_list_sorts_narrows_and_shows_several_again"
+      test-location: tests/dups.rs
+      steps:
+        - run: "cargo test --test dups the_hidden_list_sorts_narrows_and_shows_several_again"
+    links:
+      - type: verifies
+        target: REQ-WEB-020
+
+  - id: VER-112
+    type: verification
+    title: The hidden list names files of one's own library only
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_hidden_list_names_only_ones_own_files"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth the_hidden_list_names_only_ones_own_files"
+    links:
+      - type: verifies
+        target: REQ-WEB-020
