@@ -24,6 +24,7 @@ use crate::media::DateSource;
 const HTMX: &str = include_str!("../assets/htmx-2.0.4.min.js");
 const CSS: &str = include_str!("../assets/lichtbild.css");
 const JS: &str = include_str!("../assets/lichtbild.js");
+const THEME_JS: &str = include_str!("../assets/theme.js");
 const PAGE_SIZE: u32 = 240;
 
 pub const CSP: &str = "default-src 'self'; img-src 'self'; media-src 'self'; script-src 'self'; \
@@ -596,6 +597,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
+         <li><button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b><span>Auto follows this device</span></button></li>\
          <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
          {signout}</ul></details>"
     )
@@ -645,6 +647,7 @@ fn page(
 <base href="{base}/">
 <title>{title}</title>
 <meta name="htmx-config" content='{{"includeIndicatorStyles":false}}'>
+<script src="static/theme.js?v={v}"></script>
 {head}<link rel="stylesheet" href="static/lichtbild.css?v={v}">
 <script src="static/htmx-2.0.4.min.js" defer></script>
 <script src="static/lichtbild.js?v={v}" defer></script>
@@ -4828,6 +4831,7 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
         "htmx-2.0.4.min.js" => (HTMX, "text/javascript; charset=utf-8"),
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
         "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
+        "theme.js" => (THEME_JS, "text/javascript; charset=utf-8"),
         other => match crate::map::static_asset(other) {
             Some(x) => x,
             None => return StatusCode::NOT_FOUND.into_response(),
@@ -4845,11 +4849,12 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
 
 /// All embedded assets, for the no-outside-URL test (REQ-WEB-003).
 /// The vendored map libraries are listed in `map::vendored`.
-pub fn embedded_assets() -> [(&'static str, &'static str); 4] {
+pub fn embedded_assets() -> [(&'static str, &'static str); 5] {
     [
         ("htmx-2.0.4.min.js", HTMX),
         ("lichtbild.css", CSS),
         ("lichtbild.js", JS),
+        ("theme.js", THEME_JS),
         ("map.js", crate::map::MAP_JS),
     ]
 }

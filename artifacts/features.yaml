@@ -388,7 +388,10 @@ artifacts:
         - The countries visited are listed with their pictures, and each opens on the map
         - What is said in a video shows over it while it plays
         - Nothing has to cover the photo, and several corrections can be made one after another
+        - Day or night by a switch in the menu
     links:
+      - type: satisfies
+        target: REQ-WEB-024
       - type: satisfies
         target: REQ-WEB-023
       - type: satisfies

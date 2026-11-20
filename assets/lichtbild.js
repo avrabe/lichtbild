@@ -1212,3 +1212,20 @@
     });
   });
 })();
+
+// Day or night (REQ-WEB-024): the menu switch goes auto → day → night.
+(function () {
+  "use strict";
+  var b = document.querySelector(".appmenu button.theme");
+  if (!b) return;
+  var ORDER = ["auto", "day", "night"];
+  var root = document.documentElement;
+  function now() { return root.getAttribute("data-theme") || "auto"; }
+  b.setAttribute("data-now", now());
+  b.addEventListener("click", function () {
+    var next = ORDER[(ORDER.indexOf(now()) + 1) % ORDER.length];
+    if (next === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", next);
+    try { window.localStorage.setItem("lichtbild.theme", next); } catch (e) { /* private mode */ }
+    b.setAttribute("data-now", next);
+  });
+})();

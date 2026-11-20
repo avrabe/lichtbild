@@ -348,6 +348,46 @@ async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
     assert!(page.contains("<dl class=\"meta\">"), "{page}");
 }
 
+// Day or night: every page loads the theme script before its styles (so a
+// choice does not flash), the menu has the switch, and the styles hold a
+// night and a day that override the system's.
+// rivet: verifies REQ-WEB-024
+#[tokio::test]
+async fn day_or_night_is_the_persons_choice() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    for uri in ["/", "/status", &format!("/v/p1/{}", e.video)] {
+        let (_, page) = get(&app, uri, false).await;
+        let theme = page.find("<script src=\"static/theme.js?v=").expect(uri);
+        let css = page
+            .find("<link rel=\"stylesheet\" href=\"static/lichtbild.css")
+            .expect(uri);
+        assert!(theme < css, "{uri}: theme after styles");
+        assert!(
+            !page[theme..theme + 60].contains("defer"),
+            "{uri}: must run before drawing"
+        );
+        assert!(
+            page.contains(
+                "<button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b>"
+            ),
+            "{uri}"
+        );
+    }
+    let (s, js) = get(&app, "/static/theme.js", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(js.contains(r#"if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);"#));
+    let (_, css) = get(&app, "/static/lichtbild.css", false).await;
+    assert!(
+        css.contains(":root:not([data-theme=\"day\"]) {"),
+        "the system's night yields to day"
+    );
+    assert!(
+        css.contains(":root[data-theme=\"night\"] {\n  --paper: #16140f;"),
+        "night by choice"
+    );
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

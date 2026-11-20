@@ -1012,6 +1012,23 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-024
+    type: requirement
+    title: Day or night is the person's choice
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: a day and a night view. The menu switches
+      between auto (the device's setting), day and night; the choice is
+      kept in the browser and applied before the page is drawn, the map
+      follows it, and nothing is sent to the server.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-023
     type: requirement
     title: Every panel over the photo can lie below it, and corrections save in place

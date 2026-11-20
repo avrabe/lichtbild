@@ -17,7 +17,9 @@
   var protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
-  var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  // The person's day or night choice (REQ-WEB-024), else the system's.
+  var chosen = document.documentElement.getAttribute("data-theme");
+  var dark = chosen ? chosen === "night" : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   var flavor = dark ? "dark" : "light";
   var glyphs = attr("data-glyphs");
   var sprite = attr("data-sprite");

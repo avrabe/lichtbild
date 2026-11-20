@@ -1676,3 +1676,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-023
+
+  - id: VER-119
+    type: verification
+    title: Pages load the theme before the styles, the menu switches, and the styles hold day and night by choice
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "day_or_night_is_the_persons_choice"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui day_or_night_is_the_persons_choice"
+    links:
+      - type: verifies
+        target: REQ-WEB-024
