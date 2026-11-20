@@ -1980,13 +1980,14 @@ async fn viewer(
     };
     // Who is in it (REQ-FACE-003).
     let faces = if rec.video.is_none() && !st.people.is_empty() {
-        let (idx5, people, hash, back) = (
+        let (idx5, people, hash, back, v5) = (
             st.index.clone(),
             st.people.clone(),
             rec.hash.clone(),
             format!("v/{who}/{id}{vqs}"),
+            viewer.clone(),
         );
-        tokio::task::spawn_blocking(move || render_faces(&idx5, &people, id, &hash, &back))
+        tokio::task::spawn_blocking(move || render_faces(&idx5, &people, &v5, id, &hash, &back))
             .await
             .unwrap_or_default()
     } else {
@@ -4740,12 +4741,30 @@ async fn person_page(
     page_for(&st, "lichtbild person", &body).into_response()
 }
 
-/// The names already given, for a name field's suggestions.
-fn names_list(idx: &index::Index) -> String {
+/// The people the viewer has a photo of (not hidden): the only names that
+/// exist for them (REQ-FACE-003).
+fn seen_people(
+    idx: &index::Index,
+    people: &crate::people::People,
+    viewer: &Viewer,
+) -> anyhow::Result<std::collections::HashSet<u64>> {
+    let hidden = idx.hidden(&person(viewer))?;
+    Ok(seen_faces(idx, people, &viewer.labels, &hidden)?
+        .into_iter()
+        .filter_map(|f| match f.face.who {
+            crate::people::Who::Person(p) => Some(p),
+            crate::people::Who::Group(_) => None,
+        })
+        .collect())
+}
+
+/// The names the viewer knows, for a name field's suggestions.
+fn names_list(idx: &index::Index, seen: &std::collections::HashSet<u64>) -> String {
     let mut names: Vec<String> = idx
         .people()
         .unwrap_or_default()
         .into_iter()
+        .filter(|(id, _)| seen.contains(id))
         .map(|(_, p)| p.name)
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
@@ -4778,7 +4797,8 @@ async fn group_page(
             return Ok(Some((f.who, Vec::new(), 0, String::new())));
         }
         let (items, total) = photos_of(&idx, &people, &labels, &me, f.who)?;
-        Ok(Some((f.who, items, total, names_list(&idx))))
+        let seen = seen_people(&idx, &people, &v2)?;
+        Ok(Some((f.who, items, total, names_list(&idx, &seen))))
     })
     .await;
     let (g, items, total, names) = match res {
@@ -4816,13 +4836,20 @@ pub struct NameForm {
     back: Option<String>,
 }
 
-/// The person with this name (any case), or a new one.
-fn person_named(idx: &index::Index, name: &str, by: &str) -> anyhow::Result<u64> {
+/// The person with this name (any case) among those the viewer knows, or
+/// a new one: a name only someone else has photos of is not found, so
+/// naming tells nothing about it (REQ-FACE-003).
+fn person_named(
+    idx: &index::Index,
+    name: &str,
+    by: &str,
+    seen: &std::collections::HashSet<u64>,
+) -> anyhow::Result<u64> {
     let low = name.to_lowercase();
     if let Some((id, _)) = idx
         .people()?
         .into_iter()
-        .find(|(_, p)| p.name.to_lowercase() == low)
+        .find(|(id, p)| seen.contains(id) && p.name.to_lowercase() == low)
     {
         return Ok(id);
     }
@@ -4861,7 +4888,8 @@ async fn people_name(
                 .map(|s| s.face.key)
                 .collect()
         };
-        let pid = person_named(&idx, &name, &me)?;
+        let seen = seen_people(&idx, &people, &viewer)?;
+        let pid = person_named(&idx, &name, &me, &seen)?;
         idx.name_faces(&keys, pid)?;
         people.relabel(&idx)?;
         Ok(Some(pid))
@@ -4943,11 +4971,13 @@ async fn person_rename(
         if idx.person(pid)?.is_none() || !sees_person(&idx, &people, &viewer, pid)? {
             return Ok(None);
         }
+        // Only someone the viewer knows is put together with this one.
+        let seen = seen_people(&idx, &people, &viewer)?;
         let low = name.to_lowercase();
         let other = idx
             .people()?
             .into_iter()
-            .find(|(id, p)| *id != pid && p.name.to_lowercase() == low);
+            .find(|(id, p)| *id != pid && seen.contains(id) && p.name.to_lowercase() == low);
         let to = match other {
             Some((into, _)) => {
                 idx.merge_people(pid, into)?;
@@ -5033,6 +5063,7 @@ async fn face_crop(
 fn render_faces(
     idx: &index::Index,
     people: &crate::people::People,
+    viewer: &Viewer,
     id: u64,
     hash: &str,
     back: &str,
@@ -5073,7 +5104,8 @@ fn render_faces(
         };
         o += &format!("<li>{img}<span>{row}</span></li>");
     }
-    o + "</ul>" + &names_list(idx) + "</div></details>"
+    let seen = seen_people(idx, people, viewer).unwrap_or_default();
+    o + "</ul>" + &names_list(idx, &seen) + "</div></details>"
 }
 
 #[cfg(test)]

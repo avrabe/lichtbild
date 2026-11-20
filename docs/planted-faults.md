@@ -154,6 +154,9 @@ at nice 0.
 | F143 | REQ-FACE-001 | a face model with an unknown hash is accepted | `face_models_are_all_there_or_none` |
 | F144 | REQ-WEB-018 | "this day in every year" takes other days | `days_away_from_home_are_one_trip_named_by_place` |
 | F145 | REQ-WEB-018 | a day range takes days outside it | `days_away_from_home_are_one_trip_named_by_place` |
+| F146 | REQ-FACE-003 | a name field offers names the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F147 | REQ-FACE-003 | naming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
+| F148 | REQ-FACE-003 | renaming joins a person the viewer has no photo of | `names_are_shared_but_each_person_sees_only_their_photos_of_them` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

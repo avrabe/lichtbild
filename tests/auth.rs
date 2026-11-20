@@ -1841,4 +1841,55 @@ async fn names_are_shared_but_each_person_sees_only_their_photos_of_them() {
     assert!(!r.body.contains("Oma"), "{}", r.body);
     let r = req_with(&e.app, "GET", &uri, Some(&c2), false, &[]).await;
     assert_eq!(r.status, StatusCode::OK);
+    // The names a name field offers are the viewer's only; a name only
+    // someone else has photos of is not joined by naming, it is a new one.
+    let r = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(r.body.contains("datalist id=\"names\""), "{}", r.body);
+    assert!(
+        !r.body.contains("value=\"Opa\"") && !r.body.contains("value=\"Oma\""),
+        "{}",
+        r.body
+    );
+    let body = format!("item={}&face=0&one=1&name=Opa", x.0);
+    let r = req_with_body(&e.app, "POST", "/people/name", Some(&c1), &body, &form).await;
+    assert!(r.status.is_redirection());
+    assert!(
+        !location(&r).ends_with(&format!("/person/{opa}")),
+        "{}",
+        location(&r)
+    );
+    let named: Vec<u64> = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .filter(|(_, p)| p.name == "Opa")
+        .map(|(id, _)| id)
+        .collect();
+    assert_eq!(named.len(), 2, "p1's Opa is not p2's");
+    let mine = *named.iter().find(|id| **id != opa).unwrap();
+    // Renaming p1's to "Oma", whom p1 no longer sees, does not join them.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{mine}/rename"),
+        Some(&c1),
+        "name=Oma",
+        &form,
+    )
+    .await;
+    assert!(
+        location(&r).ends_with(&format!("/person/{mine}")),
+        "{}",
+        location(&r)
+    );
+    assert!(e.idx.person(oma).unwrap().is_some());
 }

@@ -731,9 +731,13 @@ artifacts:
       on a face takes the name off and keeps it off. A person, their
       page, their photos, their faces, their name in suggestions and the
       search by their name exist for a viewer only through photos the
-      viewer may see and did not hide. Naming, renaming (a name already
-      given puts both together), taking a name off and "not them" need a
-      same-site request on a face or person the viewer may see.
+      viewer may see and did not hide; a name field offers only those
+      names, and a name typed is matched only among them (a name only
+      someone else has photos of becomes a person of its own), so naming
+      tells nothing about anyone else's photos. Naming, renaming (the name
+      of someone the viewer knows puts both together), taking a name off
+      and "not them" need a same-site request on a face or person the
+      viewer may see.
     fields:
       priority: should
       category: functional
