@@ -388,6 +388,45 @@ async fn day_or_night_is_the_persons_choice() {
     );
 }
 
+// Every answer is timed by its route, never its ids: the answer says how
+// long it took (Server-Timing) and the status page shows the last hour's
+// pages and pictures; slow ones are named by route.
+// rivet: verifies REQ-WEB-025
+#[tokio::test]
+async fn answers_are_timed_by_route() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let r = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v/p1/{}", e.video))
+                .header("host", "localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let st = r.headers()["server-timing"].to_str().unwrap().to_string();
+    assert!(st.starts_with("app;dur="), "{st}");
+    get(&app, &format!("/thumb/{}", e.video), false).await;
+    get(&app, "/static/lichtbild.css", false).await;
+    e.state
+        .timings
+        .record("/search", std::time::Duration::from_millis(2400));
+    let (_, list) = get(&app, "/status", true).await;
+    let at = list.find("<dt>Answers</dt><dd>").expect("answers row");
+    let row = &list[at..at + list[at..].find("</dd>").unwrap()];
+    // The viewer and the search; the status page is still being answered.
+    assert!(row.contains("2 pages: half within"), "{row}");
+    assert!(
+        row.contains("slower than a second: <code>/search</code> 2.4 s (1×)"),
+        "{row}"
+    );
+    assert!(row.contains("1 picture: half within"), "{row}");
+    assert!(!row.contains(&e.video.to_string()), "an id in {row}");
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

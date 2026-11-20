@@ -1690,3 +1690,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-024
+
+  - id: VER-120
+    type: verification
+    title: Answers are timed by route, sent as Server-Timing, and summarised on the status page
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "answers_are_timed_by_route"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui answers_are_timed_by_route"
+        - run: "cargo test --lib timing::"
+    links:
+      - type: verifies
+        target: REQ-WEB-025

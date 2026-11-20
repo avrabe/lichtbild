@@ -24,6 +24,7 @@ pub mod search;
 pub mod source;
 pub mod status;
 pub mod stt;
+pub mod timing;
 pub mod trips;
 pub mod video;
 pub mod vision;

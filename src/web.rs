@@ -74,6 +74,10 @@ pub struct AppState {
     /// The face models are in the vision directory: faces are looked for
     /// after the photos (DD-025).
     pub faces_on: bool,
+    /// How quickly the last hour's answers came (REQ-WEB-025).
+    pub timings: Arc<crate::timing::Timings>,
+    /// The status page's counts, per set of libraries, for a minute.
+    pub status_counts: Arc<std::sync::Mutex<HashMap<String, (std::time::Instant, StatusCounts)>>>,
 }
 
 /// A search rebuild in the background that runs again, once, if asked
@@ -135,6 +139,8 @@ impl AppState {
             people: Arc::new(crate::people::People::default()),
             rebuild: Arc::new(Later::default()),
             best: Arc::new(crate::best::Best::default()),
+            timings: Arc::new(crate::timing::Timings::default()),
+            status_counts: Arc::default(),
             faces_on: cfg
                 .vision_dir
                 .as_deref()
@@ -216,7 +222,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
         .route("/auth/logout", axum::routing::post(auth_logout))
-        .route("/healthz", get(|| async { "ok" }));
+        .route("/healthz", get(|| async { "ok" }))
+        .route_layer(middleware::from_fn_with_state(state.clone(), timed));
     // With a base path, "/base", "/base/" and "/base/..." reach the app;
     // nothing else does.
     let app = if base.is_empty() {
@@ -238,6 +245,31 @@ pub fn router(state: AppState) -> Router {
             async move { check_host(&hosts, req, next).await }
         }))
         .layer(middleware::from_fn(security_headers))
+}
+
+/// Time each answer by its route (REQ-WEB-025): the template, never the
+/// ids or the query. The answer carries it as Server-Timing too.
+async fn timed(State(st): State<AppState>, req: Request, next: Next) -> Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let route = route
+        .strip_prefix(st.base_path.as_str())
+        .filter(|r| r.starts_with('/'))
+        .map(str::to_string)
+        .unwrap_or(route);
+    let start = std::time::Instant::now();
+    let mut res = next.run(req).await;
+    let took = start.elapsed();
+    st.timings.record(&route, took);
+    if let Ok(v) =
+        header::HeaderValue::from_str(&format!("app;dur={:.1}", took.as_secs_f64() * 1000.0))
+    {
+        res.headers_mut().insert("server-timing", v);
+    }
+    res
 }
 
 /// The host part of a Host header or authority: "[::1]:8080" -> "::1",
@@ -3932,6 +3964,71 @@ async fn duplicates_csv(
 
 /// GET /status: what the server is doing (REQ-WEB-009): scan,
 /// transcription, duplicates, search, version. Counts and times only.
+/// The status page's counts, which read every item: kept for a minute per
+/// set of libraries, so an open status page (it refreshes every 10 s) does
+/// not keep the index busy (REQ-WEB-025).
+#[derive(Clone)]
+pub struct StatusCounts {
+    transcripts: Option<(u64, u64, u64)>,
+    looks: Option<(u64, u64, u64, u64)>,
+    positions: crate::place::Counts,
+    faced: Option<(u64, u64)>,
+}
+
+/// How long the status counts are kept.
+const STATUS_COUNTS_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn status_counts(st: &AppState, labels: &[String]) -> anyhow::Result<StatusCounts> {
+    let key = labels.join("\u{1f}");
+    if let Some((at, c)) = st
+        .status_counts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+    {
+        if at.elapsed() < STATUS_COUNTS_FOR {
+            return Ok(c.clone());
+        }
+    }
+    let (idx, pc, labels2) = (st.index.clone(), st.positions.clone(), labels.to_vec());
+    let (model, vision, version, faces) = (
+        st.transcribe_model.clone(),
+        st.vision_on,
+        st.vision_version.clone(),
+        st.faces_on,
+    );
+    let c = tokio::task::spawn_blocking(move || -> anyhow::Result<StatusCounts> {
+        let transcripts = match model {
+            Some(m) => Some(idx.transcript_counts(&labels2, &m)?),
+            None => None,
+        };
+        let looks = if vision {
+            Some(idx.look_counts(&labels2, &version)?)
+        } else {
+            None
+        };
+        let pos = pc.get(&idx)?;
+        let positions = crate::place::counts(&idx.all()?, &pos, &labels2);
+        let faced = if faces {
+            Some(idx.faces_counts(&labels2, crate::faces::VERSION)?)
+        } else {
+            None
+        };
+        Ok(StatusCounts {
+            transcripts,
+            looks,
+            positions,
+            faced,
+        })
+    })
+    .await??;
+    st.status_counts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, (std::time::Instant::now(), c.clone()));
+    Ok(c)
+}
+
 async fn status_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -3939,49 +4036,11 @@ async fn status_page(
 ) -> Response {
     use crate::status::{relative, span, Phase};
     let s = st.status.snapshot();
-    let counts = match st.transcribe_model.clone() {
-        Some(m) => {
-            let idx = st.index.clone();
-            let labels = viewer.labels.clone();
-            match tokio::task::spawn_blocking(move || idx.transcript_counts(&labels, &m)).await {
-                Ok(Ok(c)) => Some(c),
-                Ok(Err(e)) => return internal(e),
-                Err(e) => return internal(e),
-            }
-        }
-        None => None,
+    let c = match status_counts(&st, &viewer.labels).await {
+        Ok(c) => c,
+        Err(e) => return internal(e),
     };
-    let read_counts = if st.vision_on {
-        let (idx, labels, version) = (
-            st.index.clone(),
-            viewer.labels.clone(),
-            st.vision_version.clone(),
-        );
-        match tokio::task::spawn_blocking(move || idx.look_counts(&labels, &version)).await {
-            Ok(Ok(c)) => Some(c),
-            Ok(Err(e)) => return internal(e),
-            Err(e) => return internal(e),
-        }
-    } else {
-        None
-    };
-    let positions = {
-        let (pc, idx, labels) = (
-            st.positions.clone(),
-            st.index.clone(),
-            viewer.labels.clone(),
-        );
-        match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let pos = pc.get(&idx)?;
-            Ok(crate::place::counts(&idx.all()?, &pos, &labels))
-        })
-        .await
-        {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => return internal(e),
-            Err(e) => return internal(e),
-        }
-    };
+    let (counts, read_counts, positions, faced) = (c.transcripts, c.looks, c.positions, c.faced);
     let now = std::time::SystemTime::now();
     let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
     let mut rows: Vec<(&str, String)> = Vec::new();
@@ -4164,18 +4223,6 @@ async fn status_page(
             (None, _) => "off: no vision models configured".into(),
         },
     );
-    let faced = if st.faces_on {
-        let (idx, labels) = (st.index.clone(), viewer.labels.clone());
-        match tokio::task::spawn_blocking(move || idx.faces_counts(&labels, crate::faces::VERSION))
-            .await
-        {
-            Ok(Ok(c)) => Some(c),
-            Ok(Err(e)) => return internal(e),
-            Err(e) => return internal(e),
-        }
-    } else {
-        None
-    };
     steps += &step(
         3,
         "Faces",
@@ -4251,6 +4298,45 @@ async fn status_page(
         "Place names",
         if st.places.is_some() { "on" } else { "off" }.into(),
     ));
+    // How quickly the server answered in the last hour (REQ-WEB-025).
+    {
+        use crate::timing::{short, Kind};
+        let at = std::time::Instant::now();
+        let line = |what: &str, s: &crate::timing::Summary| -> String {
+            if s.n == 0 {
+                return format!("no {what} in the last hour");
+            }
+            let mut l = format!(
+                "{} {}: half within {}, 95 % within {}",
+                s.n,
+                if s.n == 1 {
+                    what.trim_end_matches('s')
+                } else {
+                    what
+                },
+                short(s.median),
+                short(s.p95)
+            );
+            if !s.slow.is_empty() {
+                l += "; slower than a second: ";
+                l += &s
+                    .slow
+                    .iter()
+                    .map(|(r, d, n)| format!("<code>{}</code> {} ({n}×)", esc(r), short(*d)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            l
+        };
+        rows.push((
+            "Answers",
+            format!(
+                "{}<br>{}",
+                line("pages", &st.timings.summary(Kind::Page, at)),
+                line("pictures", &st.timings.summary(Kind::Picture, at))
+            ),
+        ));
+    }
     rows.push((
         "Running",
         format!(

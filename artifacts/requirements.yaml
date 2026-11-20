@@ -1012,6 +1012,28 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-025
+    type: requirement
+    title: How quickly the server answers is measured and shown
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner report 2026-11-20: the system sometimes feels unresponsive, and
+      there should be a measure (KPI) of it. Every answer is timed by its
+      route (the template, never ids or the query), kept for the last hour
+      in memory, sent back as Server-Timing, and an answer slower than a
+      second is logged by route. The status page shows, for pages and for
+      pictures, how many answers, the median and the 95th percentile, and
+      the slowest routes over a second. The status page's own counts,
+      which read every item, are kept for a minute so an open status page
+      does not keep the index busy.
+    fields:
+      priority: should
+      category: non-functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-WEB-024
     type: requirement
     title: Day or night is the person's choice
