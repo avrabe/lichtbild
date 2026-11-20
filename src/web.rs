@@ -1485,13 +1485,17 @@ pub fn render_things(
     let mut layer = String::from(
         "<div class=\"boxlayer thinglayer\" data-for=\"things\" hidden aria-hidden=\"true\">",
     );
-    for o in objects {
+    // Every find has its box, by its number in "Something wrong?"; one
+    // left out shows only while its line there is pointed at.
+    for (n, o) in raw.iter().enumerate() {
         let [x0, y0, x1, y1] = o.bbox;
-        let name = o.name();
+        let kept = fixes.verdict(hash, o);
+        let name = crate::fixes::kind_name(kept.unwrap_or(o.kind));
         layer += &format!(
-            "<a href=\"search?q={q}\" data-quad=\"{x0:.4},{y0:.4},{x1:.4},{y0:.4},{x1:.4},{y1:.4},{x0:.4},{y1:.4}\" title=\"{n}\"><span>{n}</span></a>",
+            "<a href=\"search?q={q}\" data-n=\"{n}\"{gone} data-quad=\"{x0:.4},{y0:.4},{x1:.4},{y0:.4},{x1:.4},{y1:.4},{x0:.4},{y1:.4}\" title=\"{name}\"><span>{name}</span></a>",
             q = esc(&urlencode(name)),
-            n = esc(name),
+            gone = if kept.is_none() { " class=\"gone\"" } else { "" },
+            name = esc(name),
         );
     }
     layer += "</div>";
@@ -5228,7 +5232,7 @@ fn render_thing_fixes(
         };
         let (en, _, many) = crate::objects::KINDS[o.kind as usize];
         s += &format!(
-            "<li><b>{name}</b> <span class=\"dim\">{pct:.0} %</span> <i>{state}</i>\
+            "<li data-n=\"{n}\"><b>{name}</b> <span class=\"dim\">{pct:.0} %</span> <i>{state}</i>\
              <form method=\"post\" action=\"fix/thing\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"n\" value=\"{n}\"><input type=\"hidden\" name=\"back\" value=\"{b}\">\
              <button type=\"submit\" name=\"now\" value=\"right\" title=\"It is there\" aria-label=\"It is there\">✓</button>\
              <button type=\"submit\" name=\"now\" value=\"wrong\" title=\"It is not there\" aria-label=\"It is not there\">✕</button>\

@@ -685,6 +685,10 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
   background: rgba(40, 90, 150, .92); color: #fff; font: 600 11px/1.4 var(--sans); white-space: nowrap;
 }
 .viewer .thinglayer a:hover { background: rgba(132, 196, 255, .25); }
+.viewer .thinglayer a.gone { display: none; }
+.viewer .thinglayer a.hot { display: block; z-index: 2; border-color: var(--shu); background: rgba(200, 69, 45, .2); }
+.viewer .thinglayer a.gone.hot { border-style: dashed; }
+.viewer details.things li[data-n]:hover, .viewer details.things li[data-n]:focus-within { color: #fff; }
 section.looks { margin-top: 28px; }
 
 /* Things (REQ-SEE-001): a tile per kind with its surest photo. */
