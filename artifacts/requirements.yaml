@@ -864,6 +864,28 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-STORY-001
+    type: requirement
+    title: A made-up story of some days, from what the pictures show
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: "some kind of funny story mode" from the
+      photos and their text, "with some fantasy" and templates. From a
+      run of days (a day or a trip), lichtbild tells a short fairy-tale
+      story in German (or English), picture by picture: the town, the
+      people named in them, the things seen, a sign's words, words said
+      in a video. It uses only pictures the viewer sees there, names only
+      people who are not hidden, is marked as made up, tells the same
+      story for the same seed and another for another, and stays short
+      (at most 12 pictures, spread over the days).
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MEDIA-004
     type: requirement
     title: Speech in videos is transcribed in the house, with times

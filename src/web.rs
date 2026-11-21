@@ -190,6 +190,7 @@ pub fn router(state: AppState) -> Router {
         .route("/album/{id}/delete", axum::routing::post(album_delete))
         .route("/album/{id}/share", axum::routing::post(album_share))
         .route("/days/{who}", get(days_page))
+        .route("/story/{who}", get(story_page))
         .route("/people", get(people_page))
         .route("/people/{item}/{face}", get(group_page))
         .route("/people/name", axum::routing::post(people_name))
@@ -5147,14 +5148,183 @@ async fn days_page(
         format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
+            // A story needs a run of days, not one day across the years.
+            story = if dq.md.is_none() {
+                format!(
+                    "<a class=\"tbtn\" href=\"story/{w}?{}\" title=\"A made-up story of these days\">📖 Story</a>",
+                    dq.query()
+                )
+            } else {
+                String::new()
+            },
             albums = album_template(&albums_of(&st, person(&viewer)).await),
         )
     };
     page_for(&st, "lichtbild days", &body).into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct StoryQuery {
+    /// Another number, another story from the same pictures.
+    seed: Option<u64>,
+    /// "de" (the default) or "en".
+    lang: Option<String>,
+}
+
+/// At most this many pictures of a run of days are read for a story.
+const STORY_READ_MAX: usize = 1000;
+
+/// GET /story/{who}?from=&to=: a little made-up story of these days
+/// (REQ-STORY-001, DD-028), from what lichtbild knows about the pictures
+/// the viewer sees there: the town, the people, the things, the words.
+async fn story_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(who): UrlPath<String>,
+    Query(mut dq): Query<DaysQuery>,
+    Query(sq): Query<StoryQuery>,
+) -> Response {
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    if let Some(one) = dq.day.take() {
+        dq.from = Some(one.clone());
+        dq.to = Some(one);
+    }
+    if dq.md.is_some() || !dq.valid() || dq.from.is_none() {
+        return (StatusCode::BAD_REQUEST, "which days?").into_response();
+    }
+    let lang = crate::story::Lang::parse(sq.lang.as_deref());
+    let seed = sq.seed.unwrap_or(0);
+    let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
+    let (people, pc, places) = (st.people.clone(), st.positions.clone(), st.places.clone());
+    let dq2 = dq.clone();
+    type Told = (Option<crate::story::Story>, HashMap<u64, String>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Told> {
+        let hidden = idx.hidden(&me)?;
+        let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+        items.truncate(STORY_READ_MAX);
+        let pos = pc.get(&idx)?;
+        let fixes = idx.fixes()?;
+        let names: HashMap<u64, String> = idx
+            .people()?
+            .into_iter()
+            .filter(|(_, p)| !p.hidden && !p.name.is_empty())
+            .map(|(id, p)| (id, p.name))
+            .collect();
+        let mut moments = Vec::new();
+        let mut hashes = HashMap::new();
+        for it in &items {
+            let mut m = crate::story::Moment {
+                id: it.id,
+                taken: it.taken_local.clone(),
+                ..Default::default()
+            };
+            m.place = pos.get(&it.id).and_then(|p| {
+                let n = places.as_deref()?.nearest(p.lat, p.lon)?;
+                n.label.split(", ").next().map(str::to_string)
+            });
+            for f in people.in_photo(&it.hash) {
+                if let crate::people::Who::Person(p) = f.who {
+                    if let Some(n) = names.get(&p) {
+                        if !m.people.contains(n) {
+                            m.people.push(n.clone());
+                        }
+                    }
+                }
+            }
+            let mut objects = fixes.apply(&it.hash, idx.objects(&it.hash)?);
+            objects.sort_by(|a, b| {
+                b.score
+                    .partial_cmp(&a.score)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            for o in objects {
+                // People are told by name, not as things.
+                if o.kind != 0 && !m.things.contains(&o.kind) {
+                    m.things.push(o.kind);
+                }
+            }
+            if let Some(t) = idx.text(&it.hash)? {
+                let t = crate::fixes::apply_text(t, &idx.text_fixes(&it.hash)?);
+                let lines: Vec<(String, f32)> =
+                    t.lines.into_iter().map(|l| (l.text, l.conf)).collect();
+                m.sign = crate::story::sign_line(&lines);
+            }
+            // Only videos have transcripts.
+            if let Some(tr) = idx.transcript(&it.hash)?.filter(|t| t.state == "ok") {
+                let all: Vec<&str> = tr.pieces.iter().map(|p| p.text.as_str()).collect();
+                m.said = crate::story::said_words(&all.join(" "));
+            }
+            hashes.insert(it.id, it.hash.get(..12).unwrap_or("").to_string());
+            moments.push(m);
+        }
+        moments.sort_by(|a, b| a.taken.cmp(&b.taken).then(a.id.cmp(&b.id)));
+        let story = crate::story::tell(&moments, lang, seed);
+        // Each chapter's picture as the viewer shows it; a video by its
+        // still (an <img> cannot play it).
+        let mut srcs = HashMap::new();
+        for (id, _) in story.iter().flat_map(|s| s.chapters.iter()) {
+            if let Some(rec) = idx.locate(*id)? {
+                let h = hashes.get(id).cloned().unwrap_or_default();
+                let src = match (rec.preview, rec.video.is_some()) {
+                    (true, _) => format!("preview/{id}?h={h}"),
+                    (false, true) => format!("thumb/{id}?h={h}"),
+                    (false, false) => photo_src(*id, &rec),
+                };
+                srcs.insert(*id, src);
+            }
+        }
+        Ok((story, srcs))
+    })
+    .await;
+    let (story, srcs) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let w = esc(&who);
+    let q = dq.query();
+    let back = format!("<a href=\"days/{w}?{q}\">← {}</a>", esc(&dq.heading()));
+    let Some(story) = story else {
+        let body =
+            format!("<h1>Story</h1><p class=\"dim\">No pictures from these days.</p><p>{back}</p>");
+        return page_for(&st, "lichtbild story", &body).into_response();
+    };
+    let (other, other_name, note) = match lang {
+        crate::story::Lang::De => (
+            "en",
+            "English",
+            "Ausgedacht aus euren Bildern, nur zum Spaß.",
+        ),
+        crate::story::Lang::En => ("de", "Deutsch", "Made up from your pictures, just for fun."),
+    };
+    let here = if lang == crate::story::Lang::En {
+        "&amp;lang=en"
+    } else {
+        ""
+    };
+    let mut body = format!(
+        "<div class=\"thead\"><h1>{}</h1><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={next}{here}\" title=\"Another story from the same pictures\">🎲 Another</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}&amp;lang={other}\">{other_name}</a></div>\
+         <p class=\"dim\">{note} {back}</p><article class=\"story\"><p class=\"opening\">{}</p>",
+        esc(&story.title),
+        esc(&story.opening),
+        next = seed.wrapping_add(1),
+    );
+    for (id, text) in &story.chapters {
+        let src = srcs.get(id).map(String::as_str).unwrap_or("");
+        body += &format!(
+            "<figure><a href=\"v/{w}/{id}\"><img src=\"{}\" loading=\"lazy\" alt=\"\"></a><figcaption>{}</figcaption></figure>",
+            esc(src),
+            esc(text)
+        );
+    }
+    body += &format!("<p class=\"ending\">{}</p></article>", esc(&story.ending));
+    page_for(&st, "lichtbild story", &body).into_response()
 }
 
 /// Earlier and later day with pictures, and a date picker for any day

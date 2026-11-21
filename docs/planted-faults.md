@@ -190,6 +190,8 @@ at nice 0.
 | F180 | REQ-FACE-004 | relations to people the viewer does not know are shown | `relations_between_people_are_seen_only_between_known_people` |
 | F181 | REQ-FACE-004 | a name taken off keeps its relations | `relations_between_people_are_seen_only_between_known_people` |
 | F184 | REQ-NAV-002 | the apps in the switcher lose their marks | `nav_switcher_is_in_every_page_header` |
+| F185 | REQ-STORY-001 | a sign's words never reach the story | `a_story_of_some_days_tells_what_was_seen_and_who_was_there` |
+| F186 | REQ-STORY-001 | one person acts in the plural, several in the singular | `story::tests` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |

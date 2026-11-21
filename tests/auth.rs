@@ -2622,3 +2622,111 @@ async fn strangers_and_people_can_be_hidden_and_shown_again() {
     assert_eq!(r.status, StatusCode::FORBIDDEN);
     assert!(!e.idx.person(opa).unwrap().unwrap().hidden);
 }
+
+// A story of some days: from the pictures the viewer sees there, with the
+// names, things and words lichtbild knows; the same seed tells the same
+// story, German or English; another library's days stay closed; a hidden
+// person is not named.
+// rivet: verifies REQ-STORY-001
+#[tokio::test]
+async fn a_story_of_some_days_tells_what_was_seen_and_who_was_there() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let (xid, xrec) = all
+        .iter()
+        .find(|(_, r)| r.label == "p1" && r.video.is_none() && !r.missing)
+        .map(|(id, r)| (*id, r.clone()))
+        .unwrap();
+    let day = xrec.taken_local.get(..10).unwrap().to_string();
+    let look = lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: "ok".into(),
+            model: "t".into(),
+            lines: vec![lichtbild::ocr::Line {
+                quad: [0.0; 8],
+                block: 0,
+                text: "Eiscafé Sonne".into(),
+                conf: 0.95,
+            }],
+            docs: vec![0],
+        },
+        objects: vec![lichtbild::objects::Object {
+            kind: 15,
+            score: 0.97,
+            bbox: [0.1, 0.1, 0.5, 0.5],
+        }],
+        vector: vec![],
+    };
+    e.idx.set_look(&xrec.hash, "t", &look).unwrap();
+    e.idx
+        .set_faces(
+            &xrec.hash,
+            lichtbild::faces::VERSION,
+            &one_face(face_vec(0, 1)),
+        )
+        .unwrap();
+    e.people.rebuild(&e.idx).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    e.idx.name_faces(&[(xrec.hash.clone(), 0)], oma).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={s1}");
+    let get = |uri: String| {
+        let (app, c) = (e.app.clone(), c1.clone());
+        async move { req_with(&app, "GET", &uri, Some(&c), false, &[]).await }
+    };
+
+    let days = get(format!("/days/p1?from={day}&to={day}")).await;
+    assert!(
+        days.body
+            .contains(&format!("story/p1?from={day}&amp;to={day}")),
+        "{}",
+        days.body
+    );
+    let uri = format!("/story/p1?from={day}&to={day}");
+    let de = get(uri.clone()).await;
+    assert_eq!(de.status, StatusCode::OK, "{}", de.body);
+    for want in [
+        "Oma",
+        "Eiscafé Sonne",
+        "Katzen",
+        "Ausgedacht",
+        &format!("<img src=\"original/{xid}\""),
+    ] {
+        assert!(de.body.contains(want), "{want}: {}", de.body);
+    }
+    assert_eq!(
+        get(uri.clone()).await.body,
+        de.body,
+        "the same seed, the same story"
+    );
+    let en = get(format!("{uri}&lang=en")).await;
+    assert!(
+        en.body.contains("a cat") && en.body.contains("Made up"),
+        "{}",
+        en.body
+    );
+    // Not someone else's days, not one day across the years, not nothing.
+    assert_eq!(
+        get(format!("/story/p2?from={day}&to={day}")).await.status,
+        StatusCode::NOT_FOUND
+    );
+    for bad in ["/story/p1?md=07-05", "/story/p1"] {
+        assert_eq!(
+            get(bad.to_string()).await.status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    // A hidden person is not named.
+    e.idx.set_person_hidden(oma, true).unwrap();
+    assert!(!get(uri).await.body.contains("Oma"));
+}

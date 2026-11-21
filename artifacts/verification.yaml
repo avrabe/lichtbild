@@ -1777,3 +1777,31 @@ artifacts:
     links:
       - type: verifies
         target: REQ-NAV-002
+
+  - id: VER-126
+    type: verification
+    title: A story names what was seen and who was there, stays in scope, and repeats by seed
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+    links:
+      - type: verifies
+        target: REQ-STORY-001
+
+  - id: VER-127
+    type: verification
+    title: Story templates fill in both languages, by seed, short and spread over the days
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "story::tests"
+      test-location: src/story.rs
+      steps:
+        - run: "cargo test --lib story"
+    links:
+      - type: verifies
+        target: REQ-STORY-001
