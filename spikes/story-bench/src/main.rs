@@ -1,7 +1,7 @@
 //! story-bench: how fast does a small quantized instruction model write a
 //! short German story from picture facts, and what does it invent?
 //!
-//! Usage: story-bench <model-dir> <qwen3|gemma3> [--text] [--max N]
+//! Usage: story-bench <model-dir> <qwen3|gemma3|mistral3> [--text] [--max N]
 //! <model-dir> holds model.gguf and tokenizer.json. Five fixed prompts with
 //! made-up facts (no household data). Prints per prompt: prompt tokens,
 //! prefill time, generated tokens, generation speed and total time; with
@@ -15,6 +15,8 @@ use anyhow::{bail, Context, Result};
 use candle::quantized::gguf_file;
 use candle::{Device, Tensor};
 use candle_transformers::generation::{LogitsProcessor, Sampling};
+
+mod mistral3;
 
 /// (names allowed, facts per picture) for each prompt. All made up.
 const CASES: [(&str, &[&str]); 5] = [
@@ -93,6 +95,7 @@ fn peak_rss_mb() -> f64 {
 enum Model {
     Qwen3(candle_transformers::models::quantized_qwen3::ModelWeights),
     Gemma3(candle_transformers::models::quantized_gemma3::ModelWeights),
+    Mistral3(mistral3::ModelWeights),
 }
 
 impl Model {
@@ -106,7 +109,8 @@ impl Model {
             "gemma3" => Model::Gemma3(
                 candle_transformers::models::quantized_gemma3::ModelWeights::from_gguf(ct, &mut f, dev)?,
             ),
-            _ => bail!("arch: qwen3 or gemma3"),
+            "mistral3" => Model::Mistral3(mistral3::ModelWeights::from_gguf(ct, &mut f, dev)?),
+            _ => bail!("arch: qwen3, gemma3 or mistral3"),
         })
     }
 
@@ -114,6 +118,8 @@ impl Model {
         Ok(match self {
             Model::Qwen3(m) => m.forward(x, pos)?,
             Model::Gemma3(m) => m.forward(x, pos)?,
+            // (batch, vocab) like the others.
+            Model::Mistral3(m) => m.forward(x, pos)?,
         })
     }
 }
@@ -121,7 +127,7 @@ impl Model {
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     if args.len() < 3 {
-        bail!("usage: story-bench <model-dir> <qwen3|gemma3> [--text] [--max N]");
+        bail!("usage: story-bench <model-dir> <qwen3|gemma3|mistral3> [--text] [--max N]");
     }
     let dir = std::path::PathBuf::from(&args[1]);
     let arch = args[2].as_str();
@@ -141,7 +147,9 @@ fn main() -> Result<()> {
         "gemma3" => ("<end_of_turn>", |p| {
             format!("<bos><start_of_turn>user\n{p}<end_of_turn>\n<start_of_turn>model\n")
         }),
-        _ => bail!("arch: qwen3 or gemma3"),
+        // Ministral 3 instruct, without the long default system prompt.
+        "mistral3" => ("</s>", |p| format!("<s>[INST]{p}[/INST]")),
+        _ => bail!("arch: qwen3, gemma3 or mistral3"),
     };
     let stop_id = tok.token_to_id(stop).context("stop token")?;
     println!(
