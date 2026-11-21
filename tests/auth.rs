@@ -2447,6 +2447,7 @@ async fn the_hidden_list_names_only_ones_own_files() {
 // sides, close ones first, seen only between people the viewer knows,
 // dropped with the name.
 // rivet: verifies REQ-FACE-004
+// rivet: verifies REQ-WEB-028
 #[tokio::test]
 async fn relations_between_people_are_seen_only_between_known_people() {
     let e = env("https://photos.example").await;
@@ -2501,6 +2502,38 @@ async fn relations_between_people_are_seen_only_between_known_people() {
         let app = e.app.clone();
         async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
     };
+
+    // p1 knows only Oma: no form that cannot succeed, but what to do
+    // first (REQ-WEB-028). p2 knows both and gets the form.
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        page.body.contains("no one else you know has a name yet")
+            && !page.body.contains("class=\"relf\""),
+        "{}",
+        page.body
+    );
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        page.body.contains("class=\"relf\"") && !page.body.contains("no one else you know"),
+        "{}",
+        page.body
+    );
 
     // p2 knows both: Opa is Oma's partner, and Oma's child too (loose).
     let r = post(

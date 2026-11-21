@@ -339,7 +339,9 @@ async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
         "every panel kind moves below"
     );
     assert!(js.contains(r#"var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };"#));
-    assert!(js.contains("if (mine) row.replaceWith(document.importNode(mine, true));"));
+    assert!(
+        js.contains("var now = document.importNode(mine, true);\n          row.replaceWith(now);")
+    );
     // A refused correction says why, not only a red line (REQ-FIX-003).
     assert!(js.contains("why.className = \"why\";"));
     assert!(js.contains("throw new Error(t || \"\")"));
@@ -347,7 +349,7 @@ async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
     // behind it (owner report on 0.9.0).
     let (_, css) = get(&app, "/static/lichtbild.css", false).await;
     assert!(
-        css.contains(".viewer:has(.vbar details[open] > :is(.tpanel, .xpanel, .kpanel)) .stage {\n    flex: none; height: calc(42dvh - 56px);"),
+        css.contains(".viewer:has(.vbar details[open] > :is(.tpanel, .xpanel, .kpanel, .meta)) .stage {\n    flex: none; height: calc(42dvh - 56px);"),
         "the photo above the sheet"
     );
     let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
@@ -803,4 +805,81 @@ async fn narrowing_never_offers_a_dead_end() {
     let (_, page) = get(&app, "/search?q=geburtstag", false).await;
     assert!(page.contains("results for"), "{page}");
     assert!(!page.contains("<nav class=\"narrow\""), "{page}");
+}
+
+async fn get_navigating(app: &axum::Router, uri: &str) -> (StatusCode, String, String) {
+    let r = Request::builder()
+        .uri(uri)
+        .header("host", "localhost:8080")
+        .header("sec-fetch-mode", "navigate");
+    let res = app
+        .clone()
+        .oneshot(r.body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let s = res.status();
+    let loc = res
+        .headers()
+        .get("location")
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    let b = res.into_body().collect().await.unwrap().to_bytes();
+    (s, String::from_utf8_lossy(&b).into_owned(), loc)
+}
+
+// Review before v0.11.0: a refusal reached by a link is a page with a way
+// back (scripts still get the bare reason), empty answers lead on, and the
+// photo's keys and focus behave.
+// rivet: verifies REQ-WEB-028
+// rivet: verifies REQ-WEB-015
+#[tokio::test]
+async fn refusals_and_empty_answers_say_what_to_do_next() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    // A refusal: a page for a browser that navigated, the bare text for scripts.
+    let (s, page, _) = get_navigating(&app, "/days/p1?from=gestern").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert!(page.contains("<h1>That did not work</h1>"), "{page}");
+    assert!(page.contains("<p>Which days?</p>"), "{page}");
+    assert!(page.contains("class=\"goback\""), "{page}");
+    assert!(page.contains("<header>"), "{page}");
+    let (s, bare) = get(&app, "/days/p1?from=gestern", false).await;
+    assert_eq!((s, bare.as_str()), (StatusCode::BAD_REQUEST, "which days?"));
+    let (s, page, _) = get_navigating(&app, "/t/nobody").await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert!(page.contains("<h1>Not found</h1>"), "{page}");
+    // Days without days: the timeline.
+    let (s, _, loc) = get_navigating(&app, "/days/p1").await;
+    assert!(s.is_redirection(), "{s}");
+    assert_eq!(loc, "/t/p1");
+    // A search without results is not a dead end.
+    let (_, page) = get(&app, "/search?q=xyzzyqq", false).await;
+    assert!(page.contains("0 results for"), "{page}");
+    assert!(
+        page.contains("See what there is: <a href=\"words\">Words</a>"),
+        "{page}"
+    );
+    assert!(!page.contains("try fewer words"), "{page}");
+    let (_, page) = get(&app, "/search?q=xyzzyqq+leuchtturm", false).await;
+    assert!(
+        page.contains("Every word must match; try fewer words."),
+        "{page}"
+    );
+    // Words say "once" and "1 picture or video", not "1 times".
+    let (_, page) = get(&app, "/words", false).await;
+    assert!(
+        page.contains("title=\"in 1 picture or video, 2 times\""),
+        "{page}"
+    );
+    // Keys: Escape closes what is open before leaving the photo; a list box
+    // is not a shortcut; the faces panel comes back; focus stays on a row.
+    let (_, js) = get(&app, "/static/lichtbild.js", false).await;
+    assert!(js.contains("if (document.querySelector(\"dialog[open]\")) return;\n      var open = document.querySelectorAll(\"details[open]\");\n      if (open.length) {\n        open.forEach(function (d) { d.open = false; });"));
+    assert!(js.contains("e.target.closest(\"input, textarea, select, .suggest\")"));
+    assert!(js.contains("var KEY = \"lichtbild.faces\";"));
+    assert!(js.contains("var first = now.querySelector(\"button, input, a[href]\");"));
+    assert!(js.contains("a.goback"));
+    // On a phone the info sheet scrolls.
+    let (_, css) = get(&app, "/static/lichtbild.css", false).await;
+    assert!(css.contains("max-height: 60vh; max-height: calc(58dvh - 20px); overflow-y: auto; overscroll-behavior: contain;"));
 }

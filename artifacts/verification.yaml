@@ -1863,3 +1863,44 @@ artifacts:
       - type: verifies
         target: REQ-FIX-003
 
+  - id: VER-132
+    type: verification
+    title: serve with LICHTBILD_SCAN_AT_START=0 runs no scan; the default still scans; other values are refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "serve_can_skip_the_scan_at_start, scan_at_start_takes_only_0_or_1"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan scan_at_start"
+    links:
+      - type: verifies
+        target: REQ-SCAN-006
+
+  - id: VER-133
+    type: verification
+    title: Refusals become pages for links and forms, empty searches and bare day links lead on, keys and focus behave in the photo
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "refusals_and_empty_answers_say_what_to_do_next"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui refusals_and_empty_answers_say_what_to_do_next"
+    links:
+      - type: verifies
+        target: REQ-WEB-028
+
+  - id: VER-134
+    type: verification
+    title: A person page explains relations when no one else is named, and offers the form once someone is
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "relations_between_people_are_seen_only_between_known_people"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth relations_between_people_are_seen_only_between_known_people"
+    links:
+      - type: verifies
+        target: REQ-WEB-028
