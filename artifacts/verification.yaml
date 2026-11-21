@@ -1805,3 +1805,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-STORY-001
+
+  - id: VER-128
+    type: verification
+    title: Poems rhyme in couplets with the facts, and the haiku counts 5, 7, 5
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "poems_rhyme_in_couplets_and_the_haiku_counts_five_seven_five"
+      test-location: src/story.rs
+      steps:
+        - run: "cargo test --lib story"
+        - run: "cargo test --test auth a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+    links:
+      - type: verifies
+        target: REQ-STORY-002

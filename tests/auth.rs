@@ -2628,6 +2628,7 @@ async fn strangers_and_people_can_be_hidden_and_shown_again() {
 // story, German or English; another library's days stay closed; a hidden
 // person is not named.
 // rivet: verifies REQ-STORY-001
+// rivet: verifies REQ-STORY-002
 #[tokio::test]
 async fn a_story_of_some_days_tells_what_was_seen_and_who_was_there() {
     let e = env("https://photos.example").await;
@@ -2726,6 +2727,18 @@ async fn a_story_of_some_days_tells_what_was_seen_and_who_was_there() {
             "{bad}"
         );
     }
+    // The same days as a poem: a haiku, then rhymed couplets with the facts.
+    let poem = get(format!("{uri}&form=poem")).await;
+    assert_eq!(poem.status, StatusCode::OK);
+    for want in [
+        "<article class=\"story poem\">",
+        "<p class=\"haiku\">",
+        "Eiscafé Sonne",
+        "<br>",
+    ] {
+        assert!(poem.body.contains(want), "{want}: {}", poem.body);
+    }
+    assert!(de.body.contains("📜 Gedicht") && poem.body.contains("📖 Geschichte"));
     // A hidden person is not named.
     e.idx.set_person_hidden(oma, true).unwrap();
     assert!(!get(uri).await.body.contains("Oma"));

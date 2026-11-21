@@ -301,7 +301,7 @@ struct Teller {
 }
 
 impl Teller {
-    fn pick(&mut self, pool: &'static [&'static str]) -> &'static str {
+    fn pick(&mut self, pool: &[&'static str]) -> &'static str {
         let fresh: Vec<&'static str> = pool
             .iter()
             .copied()
@@ -550,6 +550,302 @@ pub fn tell(moments: &[Moment], lang: Lang, seed: u64) -> Option<Story> {
     })
 }
 
+// ---- Poems (REQ-STORY-002): rhymed couplets and a haiku ----
+//
+// Small models cannot rhyme or count syllables, so the rhyme words are
+// fixed in the templates and the photo's facts sit inside the lines; a
+// haiku line takes a fact only when its syllables make the count.
+
+const DE_V_OPEN: &[&str] = &[
+    "Im {month}, als alles schlief, / ein Abenteuer nach uns rief.",
+    "Hört zu, ihr Leute, groß und klein, / so muss es einst gewesen sein.",
+];
+const DE_V_PLACE: &[&str] = &[
+    "In {place}, so wird erzählt, / hat der Zauber nie gefehlt.",
+    "Nach {place} führte uns der Weg, / über Stock und über Steg.",
+];
+const DE_V_THINGS: &[&str] = &[
+    "Seht nur, {Things} hier und dort, / keiner wollte wieder fort.",
+    "{Things} standen still im Licht, / mehr verrät das Foto nicht.",
+    "Wer hat die {Things} mitgebracht? / Gewiss die gute Fee der Nacht.",
+];
+const DE_V_PEOPLE: &[&str] = &[
+    "{People} [lachte|lachten] hell und froh, / und das blieb den ganzen Tag so.",
+    "{People}, gut gelaunt und heiter, / und die Reise ging dann weiter.",
+];
+const DE_V_SIGN: &[&str] = &["Ein Schild, auf dem „{words}“ stand, / war das Rätsel in dem Land."];
+const DE_V_SAID: &[&str] = &["„{words}“, so klang es laut, / und alle haben hingeschaut."];
+const DE_V_PLAIN: &[&str] = &[
+    "Ein Bild, so still wie Schnee, / ein Augenblick, juchhe!",
+    "Hier ist nichts geschehn, / doch schön war's anzusehn.",
+];
+const DE_V_NEXT: &[&str] = &["Ein neuer Tag, ein {weekday} gar, / und alles war so wunderbar."];
+const DE_V_END: &[&str] = &[
+    "Ende gut und alles gut, / und wir ziehn den Zauberhut.",
+    "Und ist die Karte endlich voll, / dann war es einfach toll.",
+];
+
+const EN_V_OPEN: &[&str] = &[
+    "In {month}, when all was still, / adventure called us up the hill.",
+    "Gather round, both great and small, / here's the tale to tell you all.",
+];
+const EN_V_PLACE: &[&str] = &[
+    "In {place}, as legends tell, / magic always worked out well.",
+    "To {place} the road would wind, / leaving all our cares behind.",
+];
+const EN_V_THINGS: &[&str] = &[
+    "Look, {a_thing}, here it stands, / waiting in enchanted lands.",
+    "Who brought {a_thing} today? / Surely fairies, people say.",
+];
+const EN_V_PEOPLE: &[&str] = &[
+    "{People} laughed, so bright and gay, / and stayed that way the livelong day.",
+    "{People}, cheerful as could be, / smiled for all the world to see.",
+];
+const EN_V_SIGN: &[&str] =
+    &["A sign that read “{words}” so bold / became a riddle, so we're told."];
+const EN_V_SAID: &[&str] =
+    &["“{words}”, someone said out loud, / and turned the heads of all the crowd."];
+const EN_V_PLAIN: &[&str] = &[
+    "A picture quiet as the snow, / a moment's glow, and off we go.",
+    "Nothing happened here, it's true, / but what a lovely view.",
+];
+const EN_V_NEXT: &[&str] =
+    &["A brand new day, a {weekday} too, / with skies of gold and skies of blue."];
+const EN_V_END: &[&str] = &[
+    "All's well that ends well, so they say, / we'll find more magic another day.",
+    "And when the memory card is full, / we'll say the trip was wonderful.",
+];
+
+/// Haiku lines: (template, syllables of its fixed words). A line fits when
+/// those and the facts filled in make 5, 7 or 5.
+const DE_HAIKU: [&[(&str, usize)]; 3] = [
+    &[
+        ("{place} im {month}", 1),
+        ("{Things} im Licht", 2),
+        ("Morgen in {place}", 3),
+        ("Ein Tag voller Licht", 5),
+        ("Stille im Bild hier", 5),
+    ],
+    &[
+        ("{People} lachen im Wind", 4),
+        ("und überall {Things}", 4),
+        ("der Wind erzählt uns davon", 7),
+        ("die Zeit bleibt kurz für uns stehn", 7),
+    ],
+    &[
+        ("der {month} vergeht still", 4),
+        ("und dann war es gut", 5),
+        ("ein Bild bleibt für uns", 5),
+    ],
+];
+const EN_HAIKU: [&[(&str, usize)]; 3] = [
+    &[
+        ("{place} in {month}", 1),
+        ("{a_thing} in light", 2),
+        ("morning in {place}", 3),
+        ("a day full of light", 5),
+        ("stillness in the frame", 5),
+    ],
+    &[
+        ("{People} laugh in the wind", 4),
+        ("and everywhere {a_thing}", 4),
+        ("the wind tells us all of it", 7),
+        ("time stands still for us a while", 7),
+    ],
+    &[
+        ("{month} passes by", 3),
+        ("and all was well then", 5),
+        ("a picture remains", 5),
+    ],
+];
+
+/// Syllables of some words, by vowel groups (German diphthongs and long
+/// vowels are one group; an English final silent e is dropped). Good
+/// enough for names, towns and things; the fixed words are counted by hand.
+pub fn syllables(text: &str, lang: Lang) -> usize {
+    text.split(|c: char| !c.is_alphabetic())
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let w = w.to_lowercase();
+            let vowel = |c: char| "aeiouyäöüéèáàíóú".contains(c);
+            let mut n = 0;
+            let mut prev = false;
+            for c in w.chars() {
+                let v = vowel(c);
+                if v && !prev {
+                    n += 1;
+                }
+                prev = v;
+            }
+            // An English final e is silent, except in a consonant + "le"
+            // ending (bi-cy-cle, but while).
+            let cs: Vec<char> = w.chars().collect();
+            let consonant_le =
+                cs.len() >= 3 && cs.ends_with(&['l', 'e']) && !vowel(cs[cs.len() - 3]);
+            if lang == Lang::En && n > 1 && w.ends_with('e') && !consonant_le {
+                n -= 1;
+            }
+            n.max(1)
+        })
+        .sum()
+}
+
+/// A poem: a haiku for the whole, then rhymed couplets picture by picture.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Poem {
+    pub title: String,
+    pub haiku: Vec<String>,
+    pub opening: Vec<String>,
+    pub verses: Vec<(u64, Vec<String>)>,
+    pub ending: Vec<String>,
+}
+
+fn lines(s: String) -> Vec<String> {
+    s.split(" / ").map(str::to_string).collect()
+}
+
+/// The haiku: for each line, a template whose count comes out right,
+/// with a fact if one fits, else a fixed line.
+fn haiku(t: &mut Teller, lang: Lang, f: &Fill) -> Vec<String> {
+    let table = match lang {
+        Lang::De => DE_HAIKU,
+        Lang::En => EN_HAIKU,
+    };
+    let filled_count = |tpl: &str, fixed: usize| -> Option<(String, usize)> {
+        let s = fill(tpl, f);
+        // Any slot left empty (no place, no thing) does not fit.
+        let slots = [
+            ("{place}", f.place.to_string()),
+            ("{Things}", fill("{Things}", f)),
+            ("{a_thing}", fill("{a_thing}", f)),
+            ("{People}", fill("{People}", f)),
+            ("{month}", fill("{month}", f)),
+        ];
+        let mut n = fixed;
+        for (k, v) in &slots {
+            if tpl.contains(k) {
+                if v.trim().is_empty() {
+                    return None;
+                }
+                n += syllables(v, lang);
+            }
+        }
+        Some((s, n))
+    };
+    let mut out = Vec::new();
+    for (row, want) in table.iter().zip([5, 7, 5]) {
+        let fits: Vec<&'static str> = row
+            .iter()
+            .filter(|(tpl, fixed)| filled_count(tpl, *fixed).is_some_and(|(_, n)| n == want))
+            .map(|(tpl, _)| *tpl)
+            .collect();
+        let with_fact: Vec<&'static str> =
+            fits.iter().copied().filter(|x| x.contains('{')).collect();
+        let pool = if with_fact.is_empty() {
+            fits
+        } else {
+            with_fact
+        };
+        if pool.is_empty() {
+            continue;
+        }
+        let tpl = t.pick(&pool);
+        out.push(capital(&fill(tpl, f)));
+    }
+    out
+}
+
+/// The poem of `moments`; the same seed, the same poem.
+pub fn rhyme(moments: &[Moment], lang: Lang, seed: u64) -> Option<Poem> {
+    let story = tell(moments, lang, seed)?;
+    let chosen = choose(moments);
+    let first = chosen.first()?;
+    let p = pools(lang);
+    let (open, place, things, people, sign, said, plain, next, end) = match lang {
+        Lang::De => (
+            DE_V_OPEN,
+            DE_V_PLACE,
+            DE_V_THINGS,
+            DE_V_PEOPLE,
+            DE_V_SIGN,
+            DE_V_SAID,
+            DE_V_PLAIN,
+            DE_V_NEXT,
+            DE_V_END,
+        ),
+        Lang::En => (
+            EN_V_OPEN,
+            EN_V_PLACE,
+            EN_V_THINGS,
+            EN_V_PEOPLE,
+            EN_V_SIGN,
+            EN_V_SAID,
+            EN_V_PLAIN,
+            EN_V_NEXT,
+            EN_V_END,
+        ),
+    };
+    let mut t = Teller {
+        dice: Dice(
+            chosen
+                .iter()
+                .fold(seed ^ 0x5EED, |h, m| h.rotate_left(7) ^ m.id),
+        ),
+        used: Vec::new(),
+    };
+    // The haiku takes the first place, thing and people the poem knows.
+    let mut whole = (*first).clone();
+    whole.place = chosen.iter().find_map(|m| m.place.clone());
+    whole.things = chosen
+        .iter()
+        .find_map(|m| m.things.first().copied())
+        .into_iter()
+        .collect();
+    whole.people = chosen
+        .iter()
+        .find(|m| !m.people.is_empty())
+        .map(|m| m.people.clone())
+        .unwrap_or_default();
+    let haiku = haiku(&mut t, lang, &at(&p, &whole, ""));
+    let opening = lines(fill(t.pick(open), &at(&p, first, "")));
+    let mut verses = Vec::new();
+    let (mut day, mut at_place): (Option<&str>, Option<&str>) = (None, None);
+    for m in &chosen {
+        let f = |w| at(&p, m, w);
+        let mut v = Vec::new();
+        let d = m.taken.get(..10);
+        if day.is_some() && d != day {
+            v.extend(lines(fill(t.pick(next), &f(""))));
+        }
+        day = d;
+        if m.place.is_some() && m.place.as_deref() != at_place {
+            v.extend(lines(fill(t.pick(place), &f(""))));
+            at_place = m.place.as_deref();
+        }
+        let main = if let Some(w) = &m.sign {
+            fill(t.pick(sign), &f(w))
+        } else if let Some(w) = &m.said {
+            fill(t.pick(said), &f(w))
+        } else if !m.things.is_empty() {
+            fill(t.pick(things), &f(""))
+        } else if !m.people.is_empty() {
+            fill(t.pick(people), &f(""))
+        } else {
+            fill(t.pick(plain), &f(""))
+        };
+        v.extend(lines(main));
+        verses.push((m.id, v));
+    }
+    let ending = lines(fill(t.pick(end), &at(&p, first, "")));
+    Some(Poem {
+        title: story.title,
+        haiku,
+        opening,
+        verses,
+        ending,
+    })
+}
+
 /// A sign's text worth quoting: one line of 3 to 32 characters, mostly
 /// letters; the surest such line.
 pub fn sign_line(lines: &[(String, f32)]) -> Option<String> {
@@ -741,6 +1037,61 @@ mod tests {
         let days: std::collections::BTreeSet<&str> =
             c.iter().filter_map(|m| m.taken.get(..10)).collect();
         assert_eq!(days.len(), 6, "every day has its part");
+    }
+
+    #[test]
+    fn poems_rhyme_in_couplets_and_the_haiku_counts_five_seven_five() {
+        for lang in [Lang::De, Lang::En] {
+            let po = rhyme(&sample(), lang, 4).unwrap();
+            assert_eq!(
+                po,
+                rhyme(&sample(), lang, 4).unwrap(),
+                "same seed, same poem"
+            );
+            assert_eq!(po.haiku.len(), 3, "{lang:?} {:?}", po.haiku);
+            if lang == Lang::De {
+                let counts: Vec<usize> = po.haiku.iter().map(|l| syllables(l, lang)).collect();
+                assert_eq!(counts, vec![5, 7, 5], "{:?}", po.haiku);
+            }
+            let table = match lang {
+                Lang::De => DE_HAIKU,
+                Lang::En => EN_HAIKU,
+            };
+            // The hand counts of the fixed lines agree with the counter.
+            for (row, want) in table.iter().zip([5, 7, 5]) {
+                for (tpl, fixed) in row.iter() {
+                    if !tpl.contains('{') {
+                        assert_eq!(*fixed, want, "{tpl}");
+                        assert_eq!(syllables(tpl, lang), want, "{tpl}");
+                    }
+                }
+            }
+            for v in po.opening.iter().chain(po.ending.iter()) {
+                assert!(!v.contains(['{', '}', '[', ']', '|', '/']), "{v}");
+            }
+            assert_eq!(po.opening.len(), 2);
+            assert_eq!(po.verses.len(), 5, "every picture has its verse");
+            for (_, v) in &po.verses {
+                assert!(v.len() % 2 == 0 && !v.is_empty(), "couplets: {v:?}");
+                for l in v {
+                    assert!(!l.contains(['{', '}', '[', ']', '|']), "{l}");
+                }
+            }
+            let all = po
+                .verses
+                .iter()
+                .flat_map(|v| v.1.iter())
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(" ");
+            assert!(all.contains("Eis") && all.contains("Bergdorf"), "{all}");
+        }
+        assert_eq!(syllables("Seestadt", Lang::De), 2);
+        assert_eq!(syllables("Katzen", Lang::De), 2);
+        assert_eq!(syllables("Eichhörnchen", Lang::De), 3);
+        assert_eq!(syllables("bicycle", Lang::En), 3);
+        assert_eq!(syllables("cake", Lang::En), 1);
+        assert_eq!(syllables("while", Lang::En), 1);
     }
 
     #[test]

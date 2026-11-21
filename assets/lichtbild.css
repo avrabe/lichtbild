@@ -1116,3 +1116,7 @@ article.story figure { margin: 28px 0; }
 article.story figure img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: 10px; background: var(--paper-2); }
 article.story figcaption { margin-top: 10px; }
 article.story p.ending { font-style: italic; margin-top: 32px; text-align: center; }
+/* The poem form (REQ-STORY-002): verses centred, the haiku set apart. */
+article.story.poem figcaption, article.story.poem p.opening, article.story.poem p.ending { text-align: center; font-style: italic; }
+article.story.poem p.opening::first-letter { font-size: inherit; float: none; padding: 0; color: inherit; }
+article.story p.haiku { text-align: center; font-size: 20px; letter-spacing: .04em; color: var(--ink-soft); margin: 18px 0 30px; }

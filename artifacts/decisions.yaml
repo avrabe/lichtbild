@@ -902,3 +902,5 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-STORY-001
+      - type: satisfies
+        target: REQ-STORY-002

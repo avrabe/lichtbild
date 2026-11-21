@@ -886,6 +886,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-STORY-002
+    type: requirement
+    title: The same days as a poem, rhymed, with a haiku
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21 ("via haiku as rhyme"): a story can be told
+      as a poem instead, a haiku of 5, 7 and 5 syllables for the whole,
+      then rhymed couplets picture by picture with the same facts as the
+      story (town, people, things, a sign's words, words said). The rhyme
+      words are fixed in the templates, so every couplet rhymes; a haiku
+      line takes a fact only when its syllables make the count.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MEDIA-004
     type: requirement
     title: Speech in videos is transcribed in the house, with times

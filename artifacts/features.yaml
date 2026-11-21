@@ -439,6 +439,8 @@ artifacts:
       - type: satisfies
         target: REQ-STORY-001
       - type: satisfies
+        target: REQ-STORY-002
+      - type: satisfies
         target: REQ-FACE-004
       - type: satisfies
         target: REQ-FACE-005

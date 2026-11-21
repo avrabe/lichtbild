@@ -5173,6 +5173,18 @@ pub struct StoryQuery {
     seed: Option<u64>,
     /// "de" (the default) or "en".
     lang: Option<String>,
+    /// "poem": rhymed couplets and a haiku (REQ-STORY-002).
+    form: Option<String>,
+}
+
+/// A story or a poem, ready to show: title, a haiku (poems only), the
+/// opening, picture by picture its lines, the ending.
+struct Told {
+    title: String,
+    haiku: Vec<String>,
+    opening: Vec<String>,
+    chapters: Vec<(u64, Vec<String>)>,
+    ending: Vec<String>,
 }
 
 /// At most this many pictures of a run of days are read for a story.
@@ -5200,87 +5212,109 @@ async fn story_page(
     }
     let lang = crate::story::Lang::parse(sq.lang.as_deref());
     let seed = sq.seed.unwrap_or(0);
+    let poem = sq.form.as_deref() == Some("poem");
     let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
     let (people, pc, places) = (st.people.clone(), st.positions.clone(), st.places.clone());
     let dq2 = dq.clone();
-    type Told = (Option<crate::story::Story>, HashMap<u64, String>);
-    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Told> {
-        let hidden = idx.hidden(&me)?;
-        let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
-        items.truncate(STORY_READ_MAX);
-        let pos = pc.get(&idx)?;
-        let fixes = idx.fixes()?;
-        let names: HashMap<u64, String> = idx
-            .people()?
-            .into_iter()
-            .filter(|(_, p)| !p.hidden && !p.name.is_empty())
-            .map(|(id, p)| (id, p.name))
-            .collect();
-        let mut moments = Vec::new();
-        let mut hashes = HashMap::new();
-        for it in &items {
-            let mut m = crate::story::Moment {
-                id: it.id,
-                taken: it.taken_local.clone(),
-                ..Default::default()
-            };
-            m.place = pos.get(&it.id).and_then(|p| {
-                let n = places.as_deref()?.nearest(p.lat, p.lon)?;
-                n.label.split(", ").next().map(str::to_string)
-            });
-            for f in people.in_photo(&it.hash) {
-                if let crate::people::Who::Person(p) = f.who {
-                    if let Some(n) = names.get(&p) {
-                        if !m.people.contains(n) {
-                            m.people.push(n.clone());
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Option<Told>, HashMap<u64, String>)> {
+            let hidden = idx.hidden(&me)?;
+            let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+            items.truncate(STORY_READ_MAX);
+            let pos = pc.get(&idx)?;
+            let fixes = idx.fixes()?;
+            let names: HashMap<u64, String> = idx
+                .people()?
+                .into_iter()
+                .filter(|(_, p)| !p.hidden && !p.name.is_empty())
+                .map(|(id, p)| (id, p.name))
+                .collect();
+            let mut moments = Vec::new();
+            let mut hashes = HashMap::new();
+            for it in &items {
+                let mut m = crate::story::Moment {
+                    id: it.id,
+                    taken: it.taken_local.clone(),
+                    ..Default::default()
+                };
+                m.place = pos.get(&it.id).and_then(|p| {
+                    let n = places.as_deref()?.nearest(p.lat, p.lon)?;
+                    n.label.split(", ").next().map(str::to_string)
+                });
+                for f in people.in_photo(&it.hash) {
+                    if let crate::people::Who::Person(p) = f.who {
+                        if let Some(n) = names.get(&p) {
+                            if !m.people.contains(n) {
+                                m.people.push(n.clone());
+                            }
                         }
                     }
                 }
+                let mut objects = fixes.apply(&it.hash, idx.objects(&it.hash)?);
+                objects.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for o in objects {
+                    // People are told by name, not as things.
+                    if o.kind != 0 && !m.things.contains(&o.kind) {
+                        m.things.push(o.kind);
+                    }
+                }
+                if let Some(t) = idx.text(&it.hash)? {
+                    let t = crate::fixes::apply_text(t, &idx.text_fixes(&it.hash)?);
+                    let lines: Vec<(String, f32)> =
+                        t.lines.into_iter().map(|l| (l.text, l.conf)).collect();
+                    m.sign = crate::story::sign_line(&lines);
+                }
+                // Only videos have transcripts.
+                if let Some(tr) = idx.transcript(&it.hash)?.filter(|t| t.state == "ok") {
+                    let all: Vec<&str> = tr.pieces.iter().map(|p| p.text.as_str()).collect();
+                    m.said = crate::story::said_words(&all.join(" "));
+                }
+                hashes.insert(it.id, it.hash.get(..12).unwrap_or("").to_string());
+                moments.push(m);
             }
-            let mut objects = fixes.apply(&it.hash, idx.objects(&it.hash)?);
-            objects.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for o in objects {
-                // People are told by name, not as things.
-                if o.kind != 0 && !m.things.contains(&o.kind) {
-                    m.things.push(o.kind);
+            moments.sort_by(|a, b| a.taken.cmp(&b.taken).then(a.id.cmp(&b.id)));
+            let story = if poem {
+                crate::story::rhyme(&moments, lang, seed).map(|p| Told {
+                    title: p.title,
+                    haiku: p.haiku,
+                    opening: p.opening,
+                    chapters: p.verses,
+                    ending: p.ending,
+                })
+            } else {
+                crate::story::tell(&moments, lang, seed).map(|s| Told {
+                    title: s.title,
+                    haiku: Vec::new(),
+                    opening: vec![s.opening],
+                    chapters: s
+                        .chapters
+                        .into_iter()
+                        .map(|(id, t)| (id, vec![t]))
+                        .collect(),
+                    ending: vec![s.ending],
+                })
+            };
+            // Each chapter's picture as the viewer shows it; a video by its
+            // still (an <img> cannot play it).
+            let mut srcs = HashMap::new();
+            for (id, _) in story.iter().flat_map(|s| s.chapters.iter()) {
+                if let Some(rec) = idx.locate(*id)? {
+                    let h = hashes.get(id).cloned().unwrap_or_default();
+                    let src = match (rec.preview, rec.video.is_some()) {
+                        (true, _) => format!("preview/{id}?h={h}"),
+                        (false, true) => format!("thumb/{id}?h={h}"),
+                        (false, false) => photo_src(*id, &rec),
+                    };
+                    srcs.insert(*id, src);
                 }
             }
-            if let Some(t) = idx.text(&it.hash)? {
-                let t = crate::fixes::apply_text(t, &idx.text_fixes(&it.hash)?);
-                let lines: Vec<(String, f32)> =
-                    t.lines.into_iter().map(|l| (l.text, l.conf)).collect();
-                m.sign = crate::story::sign_line(&lines);
-            }
-            // Only videos have transcripts.
-            if let Some(tr) = idx.transcript(&it.hash)?.filter(|t| t.state == "ok") {
-                let all: Vec<&str> = tr.pieces.iter().map(|p| p.text.as_str()).collect();
-                m.said = crate::story::said_words(&all.join(" "));
-            }
-            hashes.insert(it.id, it.hash.get(..12).unwrap_or("").to_string());
-            moments.push(m);
-        }
-        moments.sort_by(|a, b| a.taken.cmp(&b.taken).then(a.id.cmp(&b.id)));
-        let story = crate::story::tell(&moments, lang, seed);
-        // Each chapter's picture as the viewer shows it; a video by its
-        // still (an <img> cannot play it).
-        let mut srcs = HashMap::new();
-        for (id, _) in story.iter().flat_map(|s| s.chapters.iter()) {
-            if let Some(rec) = idx.locate(*id)? {
-                let h = hashes.get(id).cloned().unwrap_or_default();
-                let src = match (rec.preview, rec.video.is_some()) {
-                    (true, _) => format!("preview/{id}?h={h}"),
-                    (false, true) => format!("thumb/{id}?h={h}"),
-                    (false, false) => photo_src(*id, &rec),
-                };
-                srcs.insert(*id, src);
-            }
-        }
-        Ok((story, srcs))
-    })
+            Ok((story, srcs))
+        },
+    )
     .await;
     let (story, srcs) = match res {
         Ok(Ok(x)) => x,
@@ -5308,22 +5342,35 @@ async fn story_page(
     } else {
         ""
     };
+    let (form_here, switch) = match (poem, lang) {
+        (true, crate::story::Lang::De) => ("&amp;form=poem", ("", "📖 Geschichte")),
+        (true, crate::story::Lang::En) => ("&amp;form=poem", ("", "📖 Story")),
+        (false, crate::story::Lang::De) => ("", ("&amp;form=poem", "📜 Gedicht")),
+        (false, crate::story::Lang::En) => ("", ("&amp;form=poem", "📜 Poem")),
+    };
+    let br = |ls: &[String]| ls.iter().map(|l| esc(l)).collect::<Vec<_>>().join("<br>");
+    let kind = if poem { "story poem" } else { "story" };
     let mut body = format!(
-        "<div class=\"thead\"><h1>{}</h1><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={next}{here}\" title=\"Another story from the same pictures\">🎲 Another</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}&amp;lang={other}\">{other_name}</a></div>\
-         <p class=\"dim\">{note} {back}</p><article class=\"story\"><p class=\"opening\">{}</p>",
+        "<div class=\"thead\"><h1>{}</h1><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={next}{here}{form_here}\" title=\"Another one from the same pictures\">🎲 Another</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}{here}{}\">{}</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}&amp;lang={other}{form_here}\">{other_name}</a></div>\
+         <p class=\"dim\">{note} {back}</p><article class=\"{kind}\">",
         esc(&story.title),
-        esc(&story.opening),
+        switch.0,
+        switch.1,
         next = seed.wrapping_add(1),
     );
+    if !story.haiku.is_empty() {
+        body += &format!("<p class=\"haiku\">{}</p>", br(&story.haiku));
+    }
+    body += &format!("<p class=\"opening\">{}</p>", br(&story.opening));
     for (id, text) in &story.chapters {
         let src = srcs.get(id).map(String::as_str).unwrap_or("");
         body += &format!(
             "<figure><a href=\"v/{w}/{id}\"><img src=\"{}\" loading=\"lazy\" alt=\"\"></a><figcaption>{}</figcaption></figure>",
             esc(src),
-            esc(text)
+            br(text)
         );
     }
-    body += &format!("<p class=\"ending\">{}</p></article>", esc(&story.ending));
+    body += &format!("<p class=\"ending\">{}</p></article>", br(&story.ending));
     page_for(&st, "lichtbild story", &body).into_response()
 }
 
