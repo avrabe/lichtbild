@@ -339,7 +339,9 @@ async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
         "every panel kind moves below"
     );
     assert!(js.contains(r#"var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };"#));
-    assert!(js.contains("var now = document.importNode(mine, true);\n          row.replaceWith(now);"));
+    assert!(
+        js.contains("var now = document.importNode(mine, true);\n          row.replaceWith(now);")
+    );
     // A refused correction says why, not only a red line (REQ-FIX-003).
     assert!(js.contains("why.className = \"why\";"));
     assert!(js.contains("throw new Error(t || \"\")"));
