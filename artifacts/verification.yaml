@@ -1834,3 +1834,32 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-027
+
+  - id: VER-130
+    type: verification
+    title: A find renamed with an own word is shown, searched and offered again; a bad word is refused with its reason
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_thing_can_be_named_with_the_houses_own_word"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_thing_can_be_named_with_the_houses_own_word"
+    links:
+      - type: verifies
+        target: REQ-FIX-003
+
+  - id: VER-131
+    type: verification
+    title: The viewer says why a correction was refused, and on a phone the photo sits above an open sheet
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_viewer_script_moves_every_panel_below_and_saves_in_place"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_viewer_script_moves_every_panel_below_and_saves_in_place"
+    links:
+      - type: verifies
+        target: REQ-FIX-003
+

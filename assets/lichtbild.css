@@ -758,7 +758,12 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 }
 @media (max-width: 600px) {
   .viewer .vbar .tpanel, .viewer .vbar .xpanel, .viewer .vbar .kpanel {
-    position: fixed; left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; max-height: 60vh; max-height: 60dvh;
+    position: fixed; left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; max-height: 60vh; max-height: calc(58dvh - 20px);
+  }
+  /* While a sheet is open, the photo moves into the space above it instead
+     of staying centred behind it (the boxes follow the photo). */
+  .viewer:has(.vbar details[open] > :is(.tpanel, .xpanel, .kpanel)) .stage {
+    flex: none; height: calc(42dvh - 56px); padding-bottom: 8px;
   }
 }
 section.looks { margin-top: 28px; }
@@ -1092,6 +1097,7 @@ ol.steps li span { overflow-wrap: anywhere; }
 }
 .viewer .fixlist li.saving { opacity: .55; }
 .viewer .fixlist li.failed { outline: 1px solid var(--shu); }
+.viewer .fixlist li .why { display: block; width: 100%; margin-top: 4px; color: var(--shu); font: 500 13px/1.4 var(--sans); }
 
 /* Below the photo (REQ-WEB-023): every panel lies in the page, not over it. */
 .viewer .ublock .kpanel, .viewer .ublock dl.meta { position: static; width: auto; max-height: none; box-shadow: none; border: 0; backdrop-filter: none; }

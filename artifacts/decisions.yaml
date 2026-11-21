@@ -820,6 +820,10 @@ artifacts:
         the surest of them, at most 0.95, never above the least sure find
         marked right. Search is rebuilt in the background after a
         correction, at most one rebuild running and one more queued.
+        A word the detector has no kind for (REQ-FIX-003) becomes the
+        house's own kind in a fourth table, kind 128 to 255 -> word, so
+        a correction still names a kind by number and every reader asks
+        the corrections for a kind's name instead of the detector's list.
       rationale: >
         Kept apart, a correction survives a new model version and can be
         taken back; matched by box, it still finds its find when the next
@@ -837,6 +841,8 @@ artifacts:
         target: REQ-FIX-001
       - type: satisfies
         target: REQ-FIX-002
+      - type: satisfies
+        target: REQ-FIX-003
 
   - id: DD-027
     type: design-decision
