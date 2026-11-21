@@ -2251,7 +2251,7 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
             .unwrap();
     }
     e.search.rebuild(&e.idx, None).unwrap();
-    let (c1, _) = two_sessions(&e).await;
+    let (c1, c2) = two_sessions(&e).await;
     let form = [
         ("sec-fetch-site", "same-origin"),
         ("content-type", "application/x-www-form-urlencoded"),
@@ -2269,17 +2269,21 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
     let r = post(fix(y.0, 1, "now=kind&kind=capybara")).await;
     assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
     let fixes = e.idx.fixes().unwrap();
-    assert_eq!(fixes.own(), vec![(lichtbild::fixes::OWN_FIRST, "Capybara")]);
+    assert_eq!(
+        fixes.own(|l| l == "p1"),
+        vec![(lichtbild::fixes::OWN_FIRST, "Capybara")]
+    );
+    assert!(fixes.own(|l| l == "p2").is_empty(), "used in p1 only");
     assert_eq!(fixes.kind_of("CAPYBARA"), Some(lichtbild::fixes::OWN_FIRST));
     assert_eq!(
-        e.idx.own_kind(" CAPYBARA ").unwrap(),
+        e.idx.own_kind(" CAPYBARA ", "p1").unwrap(),
         Some(lichtbild::fixes::OWN_FIRST),
         "the index too knows the word in other letters"
     );
     // A known kind stays the detector's, not an own word.
     let r = post(fix(y.0, 0, "now=kind&kind=Hund")).await;
     assert!(r.status.is_redirection());
-    assert_eq!(e.idx.fixes().unwrap().own().len(), 1);
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 1);
 
     let v = req_with(
         &e.app,
@@ -2317,7 +2321,74 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
         assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}");
         assert!(r.body.contains("at most 40 characters"), "{}", r.body);
     }
-    assert_eq!(e.idx.fixes().unwrap().own().len(), 1);
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 1);
+
+    // A word typed on a photo of a library one may not see is not offered:
+    // p2 names a find in p2, which p1 may not see.
+    let z = all
+        .iter()
+        .find(|(_, r)| r.label == "p2" && r.video.is_none() && !r.missing)
+        .map(|(id, r)| (*id, r.hash.clone()))
+        .unwrap();
+    e.idx
+        .set_look(&z.1, "test", &look(vec![bear([0.1, 0.1, 0.5, 0.5])]))
+        .unwrap();
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c2),
+        &format!(
+            "item={}&n=0&back=v%2Fp2%2F{}&now=kind&kind=Wombat",
+            z.0, z.0
+        ),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let mine = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(!mine.body.contains("Wombat"), "{}", mine.body);
+    let theirs = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p2/{}", z.0),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        theirs.body.contains("<option value=\"Wombat\">")
+            && theirs.body.contains("<option value=\"Capybara\">"),
+        "p2 sees both libraries"
+    );
+
+    // When every own kind is taken, one no correction uses is given to a
+    // new word; one in use keeps its word.
+    let mut n = 0;
+    while e.idx.own_kind(&format!("Wort{n}"), "p1").unwrap().is_some()
+        && e.idx.fixes().unwrap().own(|_| true).len() < 128
+    {
+        n += 1;
+    }
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 128);
+    let k = e
+        .idx
+        .own_kind("Neu", "p1")
+        .unwrap()
+        .expect("a free kind again");
+    let fixes = e.idx.fixes().unwrap();
+    assert_eq!(fixes.name(k), "Neu");
+    assert_eq!(fixes.name(lichtbild::fixes::OWN_FIRST), "Capybara");
+    assert!(fixes.own(|_| true).iter().any(|(_, w)| *w == "Wombat"));
 }
 
 // The hidden list names files of one's own library only: p2, who sees p1's

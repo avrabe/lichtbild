@@ -1525,6 +1525,8 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>, fixes: &str) -> (St
 /// like it (REQ-SEE-002): a panel with a chip per kind (a tap searches for
 /// it) and a strip of look-alikes, and a layer of boxes over the picture
 /// while the panel is open.
+// The viewer decides which of the house's own words are offered.
+#[allow(clippy::too_many_arguments)]
 pub fn render_things(
     who: &str,
     id: u64,
@@ -1533,6 +1535,7 @@ pub fn render_things(
     raw: &[crate::objects::Object],
     fixes: &crate::fixes::Fixes,
     similar: &[(u64, index::Record)],
+    viewer: &Viewer,
 ) -> (String, String) {
     if raw.is_empty() && similar.is_empty() {
         return (String::new(), String::new());
@@ -1577,7 +1580,7 @@ pub fn render_things(
         }
         panel += "</div>";
     }
-    panel += &render_thing_fixes(id, back, hash, raw, fixes);
+    panel += &render_thing_fixes(id, back, hash, raw, fixes, viewer);
     panel += "</div></details>";
     let mut layer = String::from(
         "<div class=\"boxlayer thinglayer\" data-for=\"things\" hidden aria-hidden=\"true\">",
@@ -2232,7 +2235,7 @@ async fn viewer(
         })
         .await;
         match res {
-            Ok(Ok((o, f, h, s))) => render_things(&who, id, &back, &h, &o, &f, &s),
+            Ok(Ok((o, f, h, s))) => render_things(&who, id, &back, &h, &o, &f, &s, &viewer),
             _ => Default::default(),
         }
     } else {
@@ -6399,9 +6402,10 @@ fn render_faces(
 
 /// The kinds of thing to pick from, German and English, and the
 /// house's own words (REQ-FIX-003). Any other word may be typed too.
-fn kinds_datalist(fixes: &crate::fixes::Fixes) -> String {
+/// Only own words used in a library the viewer sees are offered.
+fn kinds_datalist(fixes: &crate::fixes::Fixes, viewer: Option<&Viewer>) -> String {
     let mut s = String::from("<datalist id=\"kinds\">");
-    for (_, w) in fixes.own() {
+    for (_, w) in fixes.own(|l| viewer.is_some_and(|v| v.may_see(l))) {
         s += &format!("<option value=\"{}\">", esc(w));
     }
     for (en, de, _) in crate::objects::KINDS {
@@ -6423,6 +6427,7 @@ fn render_thing_fixes(
     hash: &str,
     raw: &[crate::objects::Object],
     fixes: &crate::fixes::Fixes,
+    viewer: &Viewer,
 ) -> String {
     if raw.is_empty() {
         return String::new();
@@ -6474,7 +6479,7 @@ fn render_thing_fixes(
         );
     }
     s += "</ul>";
-    s += &kinds_datalist(fixes);
+    s += &kinds_datalist(fixes, Some(viewer));
     s += "</details>";
     s
 }
@@ -6582,9 +6587,9 @@ async fn fix_thing(
             // (REQ-FIX-003).
             "kind" => {
                 let word = f.kind.as_deref().unwrap_or("");
-                match idx.fixes()?.kind_of(word) {
+                match crate::fixes::detector_kind(word) {
                     Some(k) => Some(k),
-                    None => match idx.own_kind(word)? {
+                    None => match idx.own_kind(word, &rec.label)? {
                         Some(k) => Some(k),
                         None => return Ok(StatusCode::BAD_REQUEST),
                     },
@@ -6790,7 +6795,8 @@ async fn corrections_page(
             body += "</ul>";
         }
         body += "<form method=\"post\" action=\"fix/off\" class=\"fixadd\"><input type=\"hidden\" name=\"off\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"corrections\"><input name=\"kind\" list=\"kinds\" placeholder=\"A kind of thing\" aria-label=\"A kind of thing never in our house\" required><button type=\"submit\">Never in our house</button></form>";
-        body += &kinds_datalist(&fixes);
+        // "Never in our house" is for the detector's kinds only.
+        body += &kinds_datalist(&fixes, None);
         // Bars learned.
         let mut bars: Vec<(u8, f32)> = (0..crate::objects::KINDS.len() as u8)
             .map(|k| (k, fixes.bar(k)))

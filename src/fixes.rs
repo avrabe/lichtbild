@@ -107,6 +107,13 @@ pub fn detector_kind(name: &str) -> Option<u8> {
         .map(|k| k as u8)
 }
 
+/// One of the house's own words, and the libraries it was used in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnWord {
+    pub word: String,
+    pub labels: Vec<String>,
+}
+
 /// Every correction of things, read once and applied to many photos.
 #[derive(Debug, Clone, Default)]
 pub struct Fixes {
@@ -114,7 +121,7 @@ pub struct Fixes {
     pub off: HashMap<u8, Mark>,
     bar: HashMap<u8, f32>,
     /// The house's own kinds: kind -> word.
-    own: HashMap<u8, String>,
+    own: HashMap<u8, OwnWord>,
 }
 
 impl Fixes {
@@ -129,7 +136,7 @@ impl Fixes {
     }
 
     /// With the house's own kinds.
-    pub fn with_own(mut self, own: HashMap<u8, String>) -> Fixes {
+    pub fn with_own(mut self, own: HashMap<u8, OwnWord>) -> Fixes {
         self.own = own;
         self
     }
@@ -142,7 +149,7 @@ impl Fixes {
         }
         self.own
             .get(&k)
-            .map(|w| (w.as_str(), w.as_str(), w.as_str()))
+            .map(|o| (o.word.as_str(), o.word.as_str(), o.word.as_str()))
     }
 
     /// A kind's name in the house's language, singular.
@@ -150,9 +157,15 @@ impl Fixes {
         self.names(k).map_or("?", |n| n.1)
     }
 
-    /// The house's own kinds, by word.
-    pub fn own(&self) -> Vec<(u8, &str)> {
-        let mut v: Vec<(u8, &str)> = self.own.iter().map(|(k, w)| (*k, w.as_str())).collect();
+    /// The house's own kinds used in a library `may_see` lets through,
+    /// by word: a word typed on a photo one may not see is not offered.
+    pub fn own(&self, may_see: impl Fn(&str) -> bool) -> Vec<(u8, &str)> {
+        let mut v: Vec<(u8, &str)> = self
+            .own
+            .iter()
+            .filter(|(_, o)| o.labels.iter().any(|l| may_see(l)))
+            .map(|(k, o)| (*k, o.word.as_str()))
+            .collect();
         v.sort_by_key(|(_, w)| crate::search::fold(w));
         v
     }
@@ -165,7 +178,7 @@ impl Fixes {
             let n = crate::search::fold(name.trim());
             self.own
                 .iter()
-                .find(|(_, w)| crate::search::fold(w) == n)
+                .find(|(_, o)| crate::search::fold(&o.word) == n)
                 .map(|(k, _)| *k)
         })
     }

@@ -1463,7 +1463,10 @@ artifacts:
       the house's own kind (up to 128), the same word in other letters
       being the same kind. Own words are shown on the find, its box, the
       counts and the Things page, are searched and suggested, and are
-      offered in "It is a..." again. A word refused is refused with the
+      offered in "It is a..." again, only to viewers who see a library
+      the word was used in. When all own kinds are taken, one no
+      correction uses any more is given to the new word. A word refused
+      is refused with the
       reason, shown in the row. Own words cannot be marked "never in our
       house" (that mark is for the detector's kinds) and are not used in
       stories yet.
