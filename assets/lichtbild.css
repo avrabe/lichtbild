@@ -808,6 +808,11 @@ html.showing, html.showing body { overflow: hidden; }
   transform: translateY(-50%); margin: 0;
 }
 .show .send a { color: #fff; }
+.show .stvhint {
+  position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); width: min(420px, calc(100% - 32px));
+  margin: 0; padding: 14px 16px; border-radius: 14px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 15px; line-height: 1.5;
+}
+.show .stvhint button { margin-left: 8px; min-height: 32px; padding: 0 12px; border-radius: 16px; border: 0; font: inherit; cursor: pointer; }
 .viewer .vbar a.slideshow { text-decoration: none; margin-left: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .show img.slide, .show .sbar { transition: none; }

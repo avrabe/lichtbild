@@ -1879,7 +1879,7 @@ pub fn photo_html(id: u64, rec: &index::Record) -> String {
             String::new()
         };
         return format!(
-            "<video class=\"photo\" controls playsinline preload=\"metadata\"{poster} src=\"original/{id}\"></video>"
+            "<video class=\"photo\" controls playsinline x-webkit-airplay=\"allow\" preload=\"metadata\"{poster} src=\"original/{id}\"></video>"
         );
     }
     let rel = String::from_utf8_lossy(&rec.rel).to_ascii_lowercase();
@@ -2078,8 +2078,10 @@ async fn show(
          <button type=\"button\" class=\"play\" aria-label=\"Pause\">❚❚</button>\
          <button type=\"button\" class=\"snext\" aria-label=\"Next\">›</button>\
          <button type=\"button\" class=\"sfs\" hidden aria-label=\"Full screen\">⛶</button>\
+         <button type=\"button\" class=\"stv\" hidden aria-label=\"On the TV\" title=\"On the TV (AirPlay)\">📺</button>\
          <a class=\"close\" href=\"{back}\" aria-label=\"Close\">✕</a></span></div>\
          <p class=\"send\" hidden>The end. <a href=\"{back}\">Back</a></p>\
+         <p class=\"stvhint\" hidden>On the TV: open Control Centre, tap Screen Mirroring and choose the Apple TV. The slideshow then fills the TV. <button type=\"button\" class=\"stvok\">OK</button></p>\
          <ol class=\"slides\" hidden>{list}</ol></div>{empty}",
         empty = if slides.is_empty() {
             "<p>No photos to show.</p>"

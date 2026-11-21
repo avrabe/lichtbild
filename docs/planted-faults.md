@@ -193,6 +193,7 @@ at nice 0.
 | F185 | REQ-STORY-001 | a sign's words never reach the story | `a_story_of_some_days_tells_what_was_seen_and_who_was_there` |
 | F186 | REQ-STORY-001 | one person acts in the plural, several in the singular | `story::tests` |
 | F187 | REQ-STORY-002 | haiku lines are taken whatever their syllables | `story::tests` |
+| F188 | REQ-WEB-027 | a video no longer offers AirPlay | `a_slideshow_of_the_chosen_pictures` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |

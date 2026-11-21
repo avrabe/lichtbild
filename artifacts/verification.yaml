@@ -1820,3 +1820,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-STORY-002
+
+  - id: VER-129
+    type: verification
+    title: The slideshow explains mirroring to the TV; a video offers AirPlay
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_of_the_chosen_pictures"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_slideshow_of_the_chosen_pictures"
+    links:
+      - type: verifies
+        target: REQ-WEB-027

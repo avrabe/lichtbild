@@ -905,6 +905,25 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-027
+    type: requirement
+    title: Slideshows and videos on the TV through AirPlay
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner decision 2026-11-20: the TV is reached by AirPlay only (no
+      Google Cast; the page stays same-origin). A web page cannot send
+      pictures to AirPlay, so on Apple devices the slideshow has a TV
+      button that says how to mirror the screen (Control Centre, Screen
+      Mirroring, the Apple TV) and makes the slideshow fill it; a video in
+      the viewer offers AirPlay itself (x-webkit-airplay).
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MEDIA-004
     type: requirement
     title: Speech in videos is transcribed in the house, with times

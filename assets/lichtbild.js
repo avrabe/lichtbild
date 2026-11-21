@@ -756,6 +756,23 @@
       }
     });
   }
+  // On the TV (owner's choice: AirPlay): a web page cannot send pictures
+  // to AirPlay itself, so on Apple devices the button says how to mirror
+  // the screen and makes the slideshow fill it.
+  var tv = show.querySelector(".stv"), hint = show.querySelector(".stvhint");
+  var apple = /iPad|iPhone|Macintosh/.test(navigator.userAgent);
+  if (tv && hint && apple) {
+    tv.hidden = false;
+    tv.addEventListener("click", function (e) {
+      e.stopPropagation();
+      hint.hidden = false;
+      if (full && !(document.fullscreenElement || document.webkitFullscreenElement)) full.call(show);
+    });
+    show.querySelector(".stvok").addEventListener("click", function (e) {
+      e.stopPropagation();
+      hint.hidden = true;
+    });
+  }
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible" && playing) { lock = null; wake(true); }
   });
