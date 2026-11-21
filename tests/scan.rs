@@ -461,3 +461,94 @@ fn a_busy_index_names_its_path() {
         "the error names the index path: {err}"
     );
 }
+
+/// Starts `serve` on the fixture and returns its log lines up to the first
+/// line containing `until`, plus whatever follows within `then`.
+fn serve_log(fx: &Fixture, scan_at_start: &str, until: &str, then: std::time::Duration) -> String {
+    use std::io::BufRead;
+    use std::process::{Command, Stdio};
+    let data = fx
+        .data
+        .with_file_name(format!("data-serve-{scan_at_start}"));
+    std::fs::create_dir_all(&data).unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_lichtbild"))
+        .arg("serve")
+        .env_clear()
+        .env(
+            "LICHTBILD_ROOTS",
+            format!("p1={};p2={}", fx.root1.display(), fx.root2.display()),
+        )
+        .env("LICHTBILD_DATA_DIR", &data)
+        .env("LICHTBILD_LISTEN", "127.0.0.1:0")
+        .env("LICHTBILD_SCAN_INTERVAL_HOURS", "0")
+        .env("LICHTBILD_SCAN_AT_START", scan_at_start)
+        .env("RUST_LOG", "lichtbild=info")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let err = child.stderr.take().unwrap();
+    std::thread::spawn(move || {
+        for l in std::io::BufReader::new(err).lines().map_while(Result::ok) {
+            if tx.send(l).is_err() {
+                break;
+            }
+        }
+    });
+    let mut log = String::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let mut found: Option<std::time::Instant> = None;
+    loop {
+        let now = std::time::Instant::now();
+        let end = found.map_or(deadline, |t| t + then);
+        if now >= end {
+            break;
+        }
+        match rx.recv_timeout(end - now) {
+            Ok(l) => {
+                if found.is_none() && l.contains(until) {
+                    found = Some(std::time::Instant::now());
+                }
+                log += &l;
+                log.push('\n');
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(_) => break,
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(found.is_some(), "no {until:?} in the log:\n{log}");
+    log
+}
+
+// rivet: verifies REQ-SCAN-006
+#[test]
+fn serve_can_skip_the_scan_at_start() {
+    let fx = fixture();
+    let quiet = serve_log(
+        &fx,
+        "0",
+        "scan at start skipped",
+        std::time::Duration::from_secs(3),
+    );
+    assert!(!quiet.contains("scan finished"), "{quiet}");
+    assert!(!quiet.contains("scan NOT reconciled"), "{quiet}");
+    // The default still scans at start.
+    let busy = serve_log(&fx, "1", "scan finished", std::time::Duration::ZERO);
+    assert!(!busy.contains("scan at start skipped"), "{busy}");
+}
+
+#[test]
+fn scan_at_start_takes_only_0_or_1() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_lichtbild"))
+        .arg("serve")
+        .env_clear()
+        .env("LICHTBILD_SCAN_AT_START", "no")
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("LICHTBILD_SCAN_AT_START: 0 or 1"), "{err}");
+}

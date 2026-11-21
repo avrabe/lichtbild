@@ -48,6 +48,9 @@ pub struct Config {
     pub workers: usize,
     /// Hours between scans inside `serve`; 0 scans only at start.
     pub scan_interval_hours: u64,
+    /// false: `serve` skips the scan at start and the passes after it,
+    /// e.g. to rehearse on a copy of an index (LICHTBILD_SCAN_AT_START=0).
+    pub scan_at_start: bool,
     pub limits: Limits,
     /// Opt-in to listen on a non-loopback address before login exists
     /// (REQ-AUTH-001).
@@ -179,6 +182,7 @@ pub struct Settings {
     pub listen: Option<String>,
     pub workers: Option<usize>,
     pub scan_interval_hours: Option<u64>,
+    pub scan_at_start: Option<bool>,
     pub limits: Limits,
     pub allow_remote_without_login: bool,
     pub allowed_hosts: Vec<String>,
@@ -305,6 +309,13 @@ impl Settings {
         }
         if let Some(v) = get("LICHTBILD_ALLOW_REMOTE_WITHOUT_LOGIN") {
             s.allow_remote_without_login = v == "1";
+        }
+        if let Some(v) = get("LICHTBILD_SCAN_AT_START") {
+            s.scan_at_start = Some(match v.as_str() {
+                "1" => true,
+                "0" => false,
+                _ => bail!("LICHTBILD_SCAN_AT_START: 0 or 1, not {v:?}"),
+            });
         }
         Ok(s)
     }
@@ -455,6 +466,7 @@ impl Settings {
             listen,
             workers,
             scan_interval_hours: self.scan_interval_hours.unwrap_or(24),
+            scan_at_start: self.scan_at_start.unwrap_or(true),
             limits: self.limits,
             allow_remote_without_login: self.allow_remote_without_login,
             // Same normalisation as the request side: no port, no trailing dot.

@@ -201,6 +201,8 @@ at nice 0.
 | F193 | REQ-FIX-003 | own words typed in a library the viewer may not see are offered | `a_thing_can_be_named_with_the_houses_own_word` |
 | F194 | REQ-FIX-003 | own kinds no correction uses are never given out again | `a_thing_can_be_named_with_the_houses_own_word` |
 | F195 | REQ-FIX-003 | a correction to an own word is not saved with its kind | `a_thing_can_be_named_with_the_houses_own_word` |
+| F196 | REQ-SCAN-006 | serve scans at start although LICHTBILD_SCAN_AT_START=0 | `serve_can_skip_the_scan_at_start` |
+| F197 | REQ-SCAN-006 | any value of LICHTBILD_SCAN_AT_START is taken as 1 | `scan_at_start_takes_only_0_or_1` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |

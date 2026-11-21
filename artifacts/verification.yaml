@@ -1863,3 +1863,16 @@ artifacts:
       - type: verifies
         target: REQ-FIX-003
 
+  - id: VER-132
+    type: verification
+    title: serve with LICHTBILD_SCAN_AT_START=0 runs no scan; the default still scans; other values are refused
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "serve_can_skip_the_scan_at_start, scan_at_start_takes_only_0_or_1"
+      test-location: tests/scan.rs
+      steps:
+        - run: "cargo test --test scan scan_at_start"
+    links:
+      - type: verifies
+        target: REQ-SCAN-006

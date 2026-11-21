@@ -193,6 +193,24 @@ artifacts:
       - type: satisfies
         target: SSC-004
 
+  - id: REQ-SCAN-006
+    type: requirement
+    title: The server can start without scanning
+    status: implemented
+    release: v0.11.0
+    description: >
+      With LICHTBILD_SCAN_AT_START=0, serve answers from what the index
+      already holds and runs no scan, transcript, look or faces pass until
+      the next interval (none with interval 0). Any value other than 0 or 1
+      is refused at start. Default 1: scan at start as before. Lets an
+      operator rehearse a new release on a copy of the index.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: constraint-satisfies
+        target: SC-005
+
   # --- Index and metadata ---
   - id: REQ-IDX-001
     type: requirement

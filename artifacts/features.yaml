@@ -33,6 +33,8 @@ artifacts:
       - type: satisfies
         target: REQ-SCAN-005
       - type: satisfies
+        target: REQ-SCAN-006
+      - type: satisfies
         target: REQ-META-001
       - type: satisfies
         target: REQ-THUMB-001

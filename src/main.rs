@@ -24,6 +24,7 @@ Configuration (environment, overriding the file named by LICHTBILD_CONFIG):
   LICHTBILD_ALLOWED_HOSTS  photos.example        host names besides localhost (comma-separated)
   LICHTBILD_WORKERS    2
   LICHTBILD_SCAN_INTERVAL_HOURS  24              0 = scan only at start
+  LICHTBILD_SCAN_AT_START  1                     0 = serve what the index holds, no scan or passes until the interval
   LICHTBILD_MAX_PIXELS / _MAX_FILE_MIB / _THUMB_CACHE_MIB / _THUMB_SIZE   limits
   LICHTBILD_PUBLIC_URL https://host/prefix       external URL; needed with login
   LICHTBILD_OIDC_ISSUER / _CLIENT_ID / _CLIENT_SECRET_FILE / _CA_FILE   login (OIDC)
@@ -253,6 +254,18 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
             Err(e) => tracing::error!("faces {when} failed: {e:#}"),
         };
         regroup_faces("at start");
+        if !cfg.scan_at_start {
+            tracing::info!("scan at start skipped (LICHTBILD_SCAN_AT_START=0)");
+            if cfg.scan_interval_hours == 0 {
+                status.set_phase(Phase::Idle { next: None });
+                return;
+            }
+            let wait = std::time::Duration::from_secs(cfg.scan_interval_hours * 3600);
+            status.set_phase(Phase::Idle {
+                next: Some(SystemTime::now() + wait),
+            });
+            std::thread::sleep(wait);
+        }
         loop {
             let since = SystemTime::now();
             status.set_phase(Phase::Scanning { since });
