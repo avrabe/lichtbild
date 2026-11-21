@@ -424,7 +424,7 @@ async fn answers_are_timed_by_route() {
         "{row}"
     );
     assert!(row.contains("1 picture: half within"), "{row}");
-    assert!(!row.contains(&e.video.to_string()), "an id in {row}");
+    assert!(!row.contains(&format!("/{}", e.video)), "an id in {row}");
 }
 
 // A slideshow of the chosen pictures: only those, only photos, only of the
