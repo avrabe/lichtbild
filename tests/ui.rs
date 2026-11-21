@@ -430,6 +430,7 @@ async fn answers_are_timed_by_route() {
 // A slideshow of the chosen pictures: only those, only photos, only of the
 // timeline's libraries; the selection bar offers it.
 // rivet: verifies REQ-WEB-026
+// rivet: verifies REQ-WEB-027
 #[tokio::test]
 async fn a_slideshow_of_the_chosen_pictures() {
     let e = env();
@@ -468,6 +469,16 @@ async fn a_slideshow_of_the_chosen_pictures() {
     assert!(js.contains(
         r#"window.location.href = "show/" + who + "?ids=" + encodeURIComponent(list.join(","));"#
     ));
+    // On the TV (AirPlay, the owner's choice): the slideshow says how to
+    // mirror the screen on Apple devices; a video offers AirPlay itself.
+    let (_, page) = get(&app, &format!("/show/p1?ids={p1}"), false).await;
+    assert!(
+        page.contains(r#"class="stv" hidden"#) && page.contains("Screen Mirroring"),
+        "{page}"
+    );
+    assert!(js.contains("var apple = /iPad|iPhone|Macintosh/.test(navigator.userAgent);"));
+    let (_, page) = get(&app, &format!("/v/all/{}", e.video), false).await;
+    assert!(page.contains(r#"x-webkit-airplay="allow""#), "{page}");
 }
 
 // The words cloud: frequent words of the viewer's videos, without common

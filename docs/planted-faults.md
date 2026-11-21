@@ -186,6 +186,16 @@ at nice 0.
 | F176 | REQ-WEB-025 | slow answers are not named | `answers_are_timed_by_route` |
 | F177 | REQ-WEB-025 | answers are not recorded | `answers_are_timed_by_route` |
 | F178 | REQ-WEB-026 | the chosen pictures are ignored | `a_slideshow_of_the_chosen_pictures` |
+| F179 | REQ-MAP-003 | the map shades the wrong countries | `the_countries_page_and_the_map_of_one_country` |
+| F180 | REQ-FACE-004 | relations to people the viewer does not know are shown | `relations_between_people_are_seen_only_between_known_people` |
+| F181 | REQ-FACE-004 | a name taken off keeps its relations | `relations_between_people_are_seen_only_between_known_people` |
+| F184 | REQ-NAV-002 | the apps in the switcher lose their marks | `nav_switcher_is_in_every_page_header` |
+| F185 | REQ-STORY-001 | a sign's words never reach the story | `a_story_of_some_days_tells_what_was_seen_and_who_was_there` |
+| F186 | REQ-STORY-001 | one person acts in the plural, several in the singular | `story::tests` |
+| F187 | REQ-STORY-002 | haiku lines are taken whatever their syllables | `story::tests` |
+| F188 | REQ-WEB-027 | a video no longer offers AirPlay | `a_slideshow_of_the_chosen_pictures` |
+| F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
+| F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

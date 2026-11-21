@@ -602,6 +602,27 @@ artifacts:
       priority: should
       category: interface
 
+  - id: REQ-NAV-002
+    type: requirement
+    title: The house's apps open from one menu at the top right
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: instead of a row of links, the nav v1 apps
+      open from one button at the top right (four dots) as a panel like
+      lichtbild's own menu: home first, then every app with a mark, its
+      name and its description, this app marked as current. The nav file
+      and its contract are unchanged (the same 1 + apps links); a tap
+      outside or Escape closes the panel, and it scrolls when taller than
+      the screen, as the app menu does. The owner made this the nav
+      contract's rendering for every house app (2026-11-21, through warte,
+      the contract's owner), and nav v2 adds an optional mark per app (1 to
+      8 code points; the first letter of the name otherwise). lichtbild
+      accepts version 1 and 2; a mark in a version 1 file is refused.
+    fields:
+      priority: should
+      category: interface
+
   - id: REQ-MAP-003
     type: requirement
     title: The countries one's pictures were taken in
@@ -616,8 +637,9 @@ artifacts:
       timeline shows them (one copy each, nothing hidden, only the
       viewer's libraries). A country opens the map on its pictures alone;
       a malformed country code is refused. Without place names the page
-      says so. Shading the countries on the map itself needs country
-      outlines, which the house does not have yet.
+      says so. The map shades the countries of what the viewer sees, from
+      Natural Earth's public-domain outlines (owner's approval 2026-11-21),
+      pinned by sha256 and served by lichtbild.
     fields:
       priority: should
       category: functional
@@ -788,6 +810,115 @@ artifacts:
       viewer may see.
     fields:
       priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FACE-004
+    type: requirement
+    title: Named people have relations, and the close ones come first
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: a person page says how this person stands
+      to another named person (partner, parent or child, sibling,
+      grandparent or grandchild, aunt or uncle and niece or nephew, cousin,
+      in-law, godparent or godchild, family, friend, former partner,
+      schoolmate, teacher or student, colleague, teammate, neighbour,
+      acquaintance) and how much it matters
+      (close, normal, loose; by default from the kind). Relations read
+      from both sides (parent of / child of), are listed close ones
+      first, link to the photos of both together, and order the People
+      page (closest first, then by photos). Like names they are the
+      household's, seen and changed only between people the viewer
+      knows (as with names), with a same-site request; a relation never
+      creates a name, refuses oneself, and goes with a name taken off or
+      merged into another.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FACE-005
+    type: requirement
+    title: Strangers' faces and people can be hidden, and shown again
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: faces of no one the house knows (people in
+      a museum) are hidden from "Who is this?" or from a photo's faces in
+      one step; they become one nameless hidden person, so the same face
+      in other photos is put away too. A named person can be hidden as
+      well. A hidden person is not on the People page (only in its
+      "Hidden" list, from which they are shown again), not in a photo's
+      faces, name suggestions, search by name or relations; the photos
+      stay. Hiding is for everyone in the house, needs a same-site
+      request, and only someone who sees the person may hide them.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-STORY-001
+    type: requirement
+    title: A made-up story of some days, from what the pictures show
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: "some kind of funny story mode" from the
+      photos and their text, "with some fantasy" and templates. From a
+      run of days (a day or a trip), lichtbild tells a short fairy-tale
+      story in German (or English), picture by picture: the town, the
+      people named in them, the things seen, a sign's words, words said
+      in a video. It uses only pictures the viewer sees there, names only
+      people who are not hidden, is marked as made up, tells the same
+      story for the same seed and another for another, and stays short
+      (at most 12 pictures, spread over the days).
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-STORY-002
+    type: requirement
+    title: The same days as a poem, rhymed, with a haiku
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21 ("via haiku as rhyme"): a story can be told
+      as a poem instead, a haiku of 5, 7 and 5 syllables for the whole,
+      then rhymed couplets picture by picture with the same facts as the
+      story (town, people, things, a sign's words, words said). The rhyme
+      words are fixed in the templates, so every couplet rhymes; a haiku
+      line takes a fact only when its syllables make the count.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-027
+    type: requirement
+    title: Slideshows and videos on the TV through AirPlay
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner decision 2026-11-20: the TV is reached by AirPlay only (no
+      Google Cast; the page stays same-origin). A web page cannot send
+      pictures to AirPlay, so on Apple devices the slideshow has a TV
+      button that says how to mirror the screen (Control Centre, Screen
+      Mirroring, the Apple TV) and makes the slideshow fill it; a video in
+      the viewer offers AirPlay itself (x-webkit-airplay).
+    fields:
+      priority: could
       category: functional
     links:
       - type: satisfies

@@ -2258,3 +2258,488 @@ async fn the_hidden_list_names_only_ones_own_files() {
         page.body
     );
 }
+
+// Relations between named people: set from a person page, read from both
+// sides, close ones first, seen only between people the viewer knows,
+// dropped with the name.
+// rivet: verifies REQ-FACE-004
+#[tokio::test]
+async fn relations_between_people_are_seen_only_between_known_people() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    let (x, z) = (&p1[0], &p2[0]);
+    e.idx
+        .set_faces(&x.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 1)))
+        .unwrap();
+    e.idx
+        .set_faces(&z.1, lichtbild::faces::VERSION, &one_face(face_vec(5, 6)))
+        .unwrap();
+    e.people.rebuild(&e.idx).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    let opa = e.idx.create_person("Opa", "t", 0).unwrap();
+    e.idx.name_faces(&[(x.1.clone(), 0)], oma).unwrap();
+    e.idx.name_faces(&[(z.1.clone(), 0)], opa).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+    let post = |uri: String, body: &str, c: String| {
+        let body = body.to_string();
+        let app = e.app.clone();
+        async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
+    };
+
+    // p2 knows both: Opa is Oma's partner, and Oma's child too (loose).
+    let r = post(
+        format!("/person/{oma}/relate"),
+        "kind=partner&name=opa",
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let r = post(
+        format!("/person/{opa}/relate"),
+        "kind=child&name=Oma&weight=1",
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let mut rels = e.idx.relations().unwrap();
+    rels.sort();
+    let mut want = vec![((oma, opa, 1), 1), ((oma.min(opa), oma.max(opa), 0), 3)];
+    want.sort();
+    assert_eq!(rels, want);
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    let (partner, parent) = (
+        page.body.find("partner of</span>").expect("partner shown"),
+        page.body
+            .find("parent of</span>")
+            .expect("parent shown from Oma's side"),
+    );
+    assert!(partner < parent, "the close relation comes first");
+    assert!(page.body.contains(&format!("person/{oma}?with={opa}")));
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{opa}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(page.body.contains("child of</span>"), "{}", page.body);
+    // Together: no photo has both.
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}?with={opa}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        page.body.contains("Together with <b>Opa</b>"),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains(&format!("thumb/{}?", x.0)));
+    // Oneself, an unknown name or an unknown kind is refused.
+    for body in [
+        "kind=friend&name=Oma",
+        "kind=friend&name=Zorro",
+        "kind=boss&name=Opa",
+    ] {
+        let r = post(format!("/person/{oma}/relate"), body, c2.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    // p1 knows only Oma: no relation to Opa shows, none can be made or dropped.
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(!page.body.contains("Opa") && !page.body.contains("partner of</span>"));
+    let r = post(
+        format!("/person/{oma}/relate"),
+        "kind=friend&name=Opa",
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = post(
+        format!("/person/{opa}/relate"),
+        "kind=friend&name=Oma",
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let body = format!("a={}&b={}&kind=0", oma.min(opa), oma.max(opa));
+    let r = post(format!("/person/{oma}/unrelate"), &body, c1.clone()).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(e.idx.relations().unwrap().len(), 2);
+    // A cross-site request changes nothing.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{oma}/relate"),
+        Some(&c2),
+        "kind=friend&name=Opa",
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+
+    // p2 drops the partner relation, then the name Opa: nothing is left.
+    let r = post(format!("/person/{oma}/unrelate"), &body, c2.clone()).await;
+    assert!(r.status.is_redirection());
+    assert_eq!(e.idx.relations().unwrap(), vec![((oma, opa, 1), 1)]);
+    let r = post(format!("/person/{opa}/delete"), "", c2.clone()).await;
+    assert!(r.status.is_redirection());
+    assert!(e.idx.relations().unwrap().is_empty());
+}
+
+// Hiding: strangers' faces become one nameless hidden person and leave
+// "Who is this?" and the photo's faces; a named person can be hidden and
+// shown again; hidden people are out of suggestions and relations; only
+// someone who sees the person may hide them.
+// rivet: verifies REQ-FACE-005
+#[tokio::test]
+async fn strangers_and_people_can_be_hidden_and_shown_again() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    // X and Y (p1): the same stranger; Z (p2): Opa.
+    let (x, y, z, w) = (&p1[0], &p1[1], &p2[0], &p1[2]);
+    for (h, v) in [
+        (&x.1, face_vec(0, 1)),
+        (&y.1, face_vec(0, 2)),
+        (&z.1, face_vec(5, 6)),
+        (&w.1, face_vec(9, 10)),
+    ] {
+        e.idx
+            .set_faces(h, lichtbild::faces::VERSION, &one_face(v))
+            .unwrap();
+    }
+    let data = e._fx.data.clone();
+    for h in [&x.1, &y.1, &z.1, &w.1] {
+        let p = lichtbild::faces::crop_path(&data, h, 0);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, common::jpeg(16, 16, 3)).unwrap();
+    }
+    e.people.rebuild(&e.idx).unwrap();
+    let opa = e.idx.create_person("Opa", "t", 0).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    e.idx.name_faces(&[(z.1.clone(), 0)], opa).unwrap();
+    e.idx.name_faces(&[(w.1.clone(), 0)], oma).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+    let get = |uri: String, c: String| {
+        let app = e.app.clone();
+        async move { req_with(&app, "GET", &uri, Some(&c), false, &[]).await }
+    };
+    let post = |uri: &str, body: String, c: String| {
+        let (app, uri) = (e.app.clone(), uri.to_string());
+        async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
+    };
+
+    // The stranger is offered for a name, with a way to hide them.
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(page.body.contains("Who is this?"), "{}", page.body);
+    let group = get(format!("/people/{}/0", x.0), c2.clone()).await;
+    assert!(
+        group.body.contains("Hide: no one we know"),
+        "{}",
+        group.body
+    );
+    let viewer = get(format!("/v/p1/{}", x.0), c2.clone()).await;
+    assert!(viewer.body.contains(&format!("face/{}/0", x.0)));
+
+    // Hidden: both faces go to one nameless hidden person.
+    let r = post("/people/hide", format!("item={}&face=0", x.0), c2.clone()).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let gone = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .find(|(_, p)| p.hidden)
+        .expect("a hidden person");
+    assert!(gone.1.name.is_empty());
+    let named = e.idx.named_faces().unwrap();
+    assert_eq!(named.iter().filter(|(_, p)| *p == gone.0).count(), 2);
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(!page.body.contains("Who is this?"), "{}", page.body);
+    assert!(page.body.contains("Hidden (1)") && page.body.contains("Strangers"));
+    let viewer = get(format!("/v/p1/{}", x.0), c2.clone()).await;
+    assert!(
+        !viewer.body.contains(&format!("face/{}/0", x.0)),
+        "a hidden face is not listed with the photo"
+    );
+    assert_eq!(viewer.status, StatusCode::OK, "the photo stays");
+
+    // A named person: hidden, out of suggestions and relations, then back.
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=1".into(),
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    assert!(e.idx.person(opa).unwrap().unwrap().hidden);
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c2), true, &[]).await;
+    assert!(!r.body.contains("Opa"), "{}", r.body);
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(page.body.contains("Hidden (2)"), "{}", page.body);
+    let page = get(format!("/person/{opa}"), c2.clone()).await;
+    assert!(page.body.contains("Show again"), "{}", page.body);
+    let r = post(
+        &format!("/person/{oma}/relate"),
+        "kind=friend&name=Opa".into(),
+        c2.clone(),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "no relation to a hidden person"
+    );
+    assert!(e.idx.relations().unwrap().is_empty());
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=0".into(),
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c2), true, &[]).await;
+    assert!(r.body.contains("Opa"), "{}", r.body);
+
+    // p1 does not see Opa: cannot hide them; a bad value or a cross-site
+    // request changes nothing.
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=1".into(),
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=yes".into(),
+        c2.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{opa}/hide"),
+        Some(&c2),
+        "hidden=1",
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert!(!e.idx.person(opa).unwrap().unwrap().hidden);
+}
+
+// A story of some days: from the pictures the viewer sees there, with the
+// names, things and words lichtbild knows; the same seed tells the same
+// story, German or English; another library's days stay closed; a hidden
+// person is not named.
+// rivet: verifies REQ-STORY-001
+// rivet: verifies REQ-STORY-002
+#[tokio::test]
+async fn a_story_of_some_days_tells_what_was_seen_and_who_was_there() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let (xid, xrec) = all
+        .iter()
+        .find(|(_, r)| r.label == "p1" && r.video.is_none() && !r.missing)
+        .map(|(id, r)| (*id, r.clone()))
+        .unwrap();
+    let day = xrec.taken_local.get(..10).unwrap().to_string();
+    let look = lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: "ok".into(),
+            model: "t".into(),
+            lines: vec![lichtbild::ocr::Line {
+                quad: [0.0; 8],
+                block: 0,
+                text: "Eiscafé Sonne".into(),
+                conf: 0.95,
+            }],
+            docs: vec![0],
+        },
+        objects: vec![lichtbild::objects::Object {
+            kind: 15,
+            score: 0.97,
+            bbox: [0.1, 0.1, 0.5, 0.5],
+        }],
+        vector: vec![],
+    };
+    e.idx.set_look(&xrec.hash, "t", &look).unwrap();
+    e.idx
+        .set_faces(
+            &xrec.hash,
+            lichtbild::faces::VERSION,
+            &one_face(face_vec(0, 1)),
+        )
+        .unwrap();
+    e.people.rebuild(&e.idx).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    e.idx.name_faces(&[(xrec.hash.clone(), 0)], oma).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let c1 = format!("lichtbild_session={s1}");
+    let get = |uri: String| {
+        let (app, c) = (e.app.clone(), c1.clone());
+        async move { req_with(&app, "GET", &uri, Some(&c), false, &[]).await }
+    };
+
+    let days = get(format!("/days/p1?from={day}&to={day}")).await;
+    assert!(
+        days.body
+            .contains(&format!("story/p1?from={day}&amp;to={day}")),
+        "{}",
+        days.body
+    );
+    let uri = format!("/story/p1?from={day}&to={day}");
+    let de = get(uri.clone()).await;
+    assert_eq!(de.status, StatusCode::OK, "{}", de.body);
+    for want in [
+        "Oma",
+        "Eiscafé Sonne",
+        "Katzen",
+        "Ausgedacht",
+        &format!("<img src=\"original/{xid}\""),
+    ] {
+        assert!(de.body.contains(want), "{want}: {}", de.body);
+    }
+    assert_eq!(
+        get(uri.clone()).await.body,
+        de.body,
+        "the same seed, the same story"
+    );
+    let en = get(format!("{uri}&lang=en")).await;
+    assert!(
+        en.body.contains("a cat") && en.body.contains("Made up"),
+        "{}",
+        en.body
+    );
+    // Not someone else's days, not one day across the years, not nothing.
+    assert_eq!(
+        get(format!("/story/p2?from={day}&to={day}")).await.status,
+        StatusCode::NOT_FOUND
+    );
+    for bad in ["/story/p1?md=07-05", "/story/p1"] {
+        assert_eq!(
+            get(bad.to_string()).await.status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    // The same days as a poem: a haiku, then rhymed couplets with the facts.
+    let poem = get(format!("{uri}&form=poem")).await;
+    assert_eq!(poem.status, StatusCode::OK);
+    for want in [
+        "<article class=\"story poem\">",
+        "<p class=\"haiku\">",
+        "Eiscafé Sonne",
+        "<br>",
+    ] {
+        assert!(poem.body.contains(want), "{want}: {}", poem.body);
+    }
+    assert!(de.body.contains("📜 Gedicht") && poem.body.contains("📖 Geschichte"));
+    // A hidden person is not named.
+    e.idx.set_person_hidden(oma, true).unwrap();
+    assert!(!get(uri).await.body.contains("Oma"));
+}

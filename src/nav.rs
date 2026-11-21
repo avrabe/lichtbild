@@ -23,6 +23,9 @@ pub struct App {
     pub url: String,
     #[serde(default)]
     pub desc: Option<String>,
+    /// nav v2 only: the app's mark in the switcher (REQ-NAV-002).
+    #[serde(default)]
+    pub mark: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -70,16 +73,17 @@ fn check_types(v: &serde_json::Value) -> Result<(), String> {
         for k in keys {
             match o.get(*k) {
                 None | Some(Value::String(_)) => {}
-                Some(Value::Null) if *k == "desc" => {}
+                Some(Value::Null) if *k == "desc" || *k == "mark" => {}
                 Some(other) => return Err(format!("{at}{k}: must be a string, got {other}")),
             }
         }
         Ok(())
     }
     let top = object("nav file", v)?;
+    let version = top.get("version").and_then(|v| v.as_u64());
     if let Some(ver) = top.get("version") {
-        if ver.as_u64() != Some(1) {
-            return Err(format!("version: must be the integer 1, got {ver}"));
+        if !matches!(ver.as_u64(), Some(1 | 2)) {
+            return Err(format!("version: must be the integer 1 or 2, got {ver}"));
         }
     }
     if let Some(home) = top.get("home") {
@@ -91,17 +95,18 @@ fn check_types(v: &serde_json::Value) -> Result<(), String> {
             .ok_or_else(|| format!("apps: must be a JSON array, got {apps}"))?;
         for (i, a) in list.iter().enumerate() {
             let at = format!("apps[{i}]");
-            strings(
-                object(&at, a)?,
-                &format!("{at}."),
-                &["id", "name", "url", "desc"],
-            )?;
+            let o = object(&at, a)?;
+            // A mark exists only in version 2; in version 1 it is unknown.
+            if o.contains_key("mark") && version != Some(2) {
+                return Err(format!("{at}.mark: unknown field in a version 1 file"));
+            }
+            strings(o, &format!("{at}."), &["id", "name", "url", "desc", "mark"])?;
         }
     }
     Ok(())
 }
 
-/// Parse and check a nav v1 file; `me` is this app's own id. Every error
+/// Parse and check a nav v1 or v2 file; `me` is this app's own id. Every error
 /// names the field.
 pub fn parse(json: &str, me: &str) -> Result<Nav, String> {
     // Types first (serde_json::Value keeps the last of duplicate keys, so the
@@ -139,6 +144,21 @@ pub fn parse(json: &str, me: &str) -> Result<Nav, String> {
                 return Err(format!("{}: at most 120 characters, got {n}", f("desc")));
             }
         }
+        if let Some(m) = &a.mark {
+            // Code points, not graphemes: every app counts the same way.
+            let n = m.chars().count();
+            let clean = !m.chars().any(|c| {
+                c.is_whitespace()
+                    || c.is_control()
+                    || matches!(c, '"' | '\'' | '<' | '>' | '&' | '\\')
+            });
+            if !(1..=8).contains(&n) || !clean {
+                return Err(format!(
+                    "{} must be 1 to 8 characters without whitespace, control characters, quotes, <, >, & or \\, got {m:?}",
+                    f("mark")
+                ));
+            }
+        }
     }
     if !nav.apps.iter().any(|a| a.id == me) {
         return Err(format!("self: {me:?} is not one of the app ids"));
@@ -173,6 +193,143 @@ pub fn render(nav: &Nav, me: &str, esc: impl Fn(&str) -> String) -> String {
         );
     }
     s + "</nav>"
+}
+
+/// An app's mark in the switcher: the first letter of its name, upper
+/// case (nav v1 carries no mark of its own).
+pub fn mark(name: &str) -> String {
+    name.trim()
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default()
+}
+
+/// The switcher as a menu (REQ-NAV-002): one button at the top right
+/// (four dots, for the house's apps) opening a panel like lichtbild's own
+/// menu: home first, then every app with its mark, name and description,
+/// this app marked aria-current="page". The same 1 + apps links as
+/// `render`, so the file's contract is unchanged; everything is escaped.
+pub fn render_menu(nav: &Nav, me: &str, esc: impl Fn(&str) -> String) -> String {
+    let mut s = format!(
+        "<details class=\"appswitch\"><summary aria-label=\"House apps\" title=\"House apps\"><span class=\"dots\" aria-hidden=\"true\"><i></i><i></i><i></i><i></i></span></summary>\
+         <nav class=\"apps\" aria-label=\"House apps\"><a class=\"home\" href=\"{}\"><span class=\"mark\" aria-hidden=\"true\">←</span><b>{}</b><span>Home</span></a>",
+        esc(&nav.home.url),
+        esc(&nav.home.name)
+    );
+    for a in &nav.apps {
+        let current = if a.id == me {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
+        let desc = a
+            .desc
+            .as_deref()
+            .map(|d| format!("<span>{}</span>", esc(d)))
+            .unwrap_or_default();
+        s += &format!(
+            "<a href=\"{}\"{current}><span class=\"mark\" aria-hidden=\"true\">{}</span><b>{}</b>{desc}</a>",
+            esc(&a.url),
+            esc(&a.mark.clone().unwrap_or_else(|| mark(&a.name))),
+            esc(&a.name)
+        );
+    }
+    s + "</nav></details>"
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    }
+
+    #[test]
+    fn the_menu_has_home_then_every_app_marked_and_escaped() {
+        let nav = Nav {
+            version: 1,
+            home: Link {
+                name: "home".into(),
+                url: "/".into(),
+            },
+            apps: vec![
+                App {
+                    id: "photos".into(),
+                    name: "photos".into(),
+                    url: "/photos/".into(),
+                    desc: Some("pictures <all>".into()),
+                    mark: None,
+                },
+                App {
+                    id: "watch".into(),
+                    name: "watch".into(),
+                    url: "https://watch.example.test/".into(),
+                    desc: None,
+                    mark: Some("見".into()),
+                },
+            ],
+        };
+        let h = render_menu(&nav, "photos", esc);
+        assert!(h.starts_with("<details class=\"appswitch\">"));
+        assert!(h.contains("<a class=\"home\" href=\"/\">"));
+        assert!(h.contains(
+            "<a href=\"/photos/\" aria-current=\"page\"><span class=\"mark\" aria-hidden=\"true\">P</span><b>photos</b><span>pictures &lt;all></span></a>"
+        ));
+        assert!(h.contains("<a href=\"https://watch.example.test/\"><span class=\"mark\" aria-hidden=\"true\">見</span><b>watch</b></a>"));
+        assert_eq!(h.matches("<a ").count(), 3, "1 + apps links");
+        assert_eq!(mark("  äpfel"), "Ä");
+        assert_eq!(mark(""), "");
+    }
+
+    // nav v2 (warte's contract, 2026-11-21): an optional mark per app, 1 to
+    // 8 code points without whitespace, control characters or " ' < > & \;
+    // a mark in a version 1 file is unknown.
+    // rivet: verifies REQ-NAV-002
+    #[test]
+    fn version_2_carries_marks_and_version_1_refuses_them() {
+        let file = |version: u8, mark: &str| {
+            format!(
+                r#"{{"version": {version}, "home": {{"name": "h", "url": "/"}},
+                "apps": [{{"id": "haus", "name": "haus", "url": "/haus/", "mark": {mark}}},
+                         {{"id": "photos", "name": "photos", "url": "/photos/"}}]}}"#
+            )
+        };
+        let nav = parse(&file(2, r#""家""#), "photos").unwrap();
+        assert_eq!(nav.apps[0].mark.as_deref(), Some("家"));
+        assert_eq!(nav.apps[1].mark, None);
+        assert_eq!(
+            parse(&file(2, "null"), "photos").unwrap().apps[0].mark,
+            None
+        );
+        let zwj = "\"\u{1F469}\u{200D}\u{1F4BB}\"";
+        assert!(parse(&file(2, zwj), "photos").is_ok());
+        let e = parse(&file(1, r#""家""#), "photos").unwrap_err();
+        assert!(e.starts_with("apps[0].mark"), "{e}");
+        for bad in [
+            r#""""#,
+            r#""123456789""#,
+            r#""a b""#,
+            r#""<b>""#,
+            r#""&""#,
+            r#""\\""#,
+            r#""'""#,
+            "1",
+        ] {
+            let e = parse(&file(2, bad), "photos").unwrap_err();
+            assert!(e.starts_with("apps[0].mark"), "{bad}: {e}");
+        }
+        let h = render_menu(
+            &parse(&file(2, r#""家""#), "photos").unwrap(),
+            "photos",
+            |s| s.to_string(),
+        );
+        assert!(h.contains(">家</span><b>haus</b>"), "{h}");
+        assert!(h.contains(">P</span><b>photos</b>"), "{h}");
+    }
 }
 
 #[cfg(test)]
@@ -221,7 +378,7 @@ mod tests {
     #[test]
     fn a_bad_file_is_refused_naming_the_field() {
         let bad = |from: &str, to: &str| parse(&OK.replace(from, to), "haus").unwrap_err();
-        assert!(bad(r#""version": 1"#, r#""version": 2"#).starts_with("version"));
+        assert!(bad(r#""version": 1"#, r#""version": 3"#).starts_with("version"));
         assert!(bad(r#""desc": "CI""#, r#""desc": "CI", "icon": "x""#).contains("unknown field"));
         assert!(bad(r#""url": "/warte/""#, r#""url": "//evil/""#).starts_with("apps[0].url"));
         assert!(
@@ -274,8 +431,8 @@ mod tests {
             .collect();
         let cases: Vec<(&str, Edit, &str)> = vec![
             (
-                "version 2",
-                Box::new(|v| v["version"] = 2.into()),
+                "version 3",
+                Box::new(|v| v["version"] = 3.into()),
                 "version",
             ),
             (

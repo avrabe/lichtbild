@@ -756,6 +756,23 @@
       }
     });
   }
+  // On the TV (owner's choice: AirPlay): a web page cannot send pictures
+  // to AirPlay itself, so on Apple devices the button says how to mirror
+  // the screen and makes the slideshow fill it.
+  var tv = show.querySelector(".stv"), hint = show.querySelector(".stvhint");
+  var apple = /iPad|iPhone|Macintosh/.test(navigator.userAgent);
+  if (tv && hint && apple) {
+    tv.hidden = false;
+    tv.addEventListener("click", function (e) {
+      e.stopPropagation();
+      hint.hidden = false;
+      if (full && !(document.fullscreenElement || document.webkitFullscreenElement)) full.call(show);
+    });
+    show.querySelector(".stvok").addEventListener("click", function (e) {
+      e.stopPropagation();
+      hint.hidden = true;
+    });
+  }
   document.addEventListener("visibilitychange", function () {
     if (document.visibilityState === "visible" && playing) { lock = null; wake(true); }
   });
@@ -1236,5 +1253,24 @@
     if (next === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", next);
     try { window.localStorage.setItem("lichtbild.theme", next); } catch (e) { /* private mode */ }
     b.setAttribute("data-now", next);
+  });
+})();
+
+// The menu and the house's app switcher (REQ-NAV-002): a tap outside or
+// Escape closes them; opening one closes the other.
+(function () {
+  const panels = () => document.querySelectorAll("details.appmenu, details.appswitch");
+  document.addEventListener("click", function (e) {
+    panels().forEach(function (d) {
+      if (d.open && !d.contains(e.target)) d.open = false;
+    });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") panels().forEach(function (d) { d.open = false; });
+  });
+  panels().forEach(function (d) {
+    d.addEventListener("toggle", function () {
+      if (d.open) panels().forEach(function (o) { if (o !== d) o.open = false; });
+    });
   });
 })();

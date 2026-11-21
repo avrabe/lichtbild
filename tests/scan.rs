@@ -446,3 +446,18 @@ fn undecodable_heic_is_counted_by_format_and_listed() {
     let json = std::fs::read_to_string(fx.data.join("scan-report.json")).unwrap();
     assert!(!json.contains("IMG_20190705"), "report names a file");
 }
+
+#[test]
+fn a_busy_index_names_its_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let _first = lichtbild::index::Index::open(dir.path()).unwrap();
+    let err = match lichtbild::index::Index::open(dir.path()) {
+        Ok(_) => panic!("a second open of the same index must fail"),
+        Err(e) => format!("{e:#}"),
+    };
+    assert!(err.contains("in use by another lichtbild process"), "{err}");
+    assert!(
+        err.contains(&dir.path().display().to_string()),
+        "the error names the index path: {err}"
+    );
+}

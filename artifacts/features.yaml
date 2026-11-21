@@ -117,6 +117,8 @@ artifacts:
         target: REQ-AUTH-002
       - type: satisfies
         target: REQ-NAV-001
+      - type: satisfies
+        target: REQ-NAV-002
 
   - id: FEAT-006
     type: feature
@@ -343,6 +345,10 @@ artifacts:
         target: REQ-FACE-002
       - type: satisfies
         target: REQ-FACE-003
+      - type: satisfies
+        target: REQ-FACE-004
+      - type: satisfies
+        target: REQ-FACE-005
 
 
   - id: FEAT-016
@@ -412,3 +418,33 @@ artifacts:
         target: REQ-WEB-019
       - type: satisfies
         target: REQ-WEB-020
+
+  - id: FEAT-018
+    type: feature
+    title: People, stories and the house's apps
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner requests 2026-11-21 morning: relations between people and
+      which matter, hiding strangers and people, a made-up story of some
+      days, the house's apps from one menu, and the country shading.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - A person page says who they are to others, close ones first
+        - Strangers in a photo are hidden in one tap, and come back from the Hidden list
+        - A day or a trip has a funny made-up story with its pictures
+        - The house's apps open from one menu at the top right
+    links:
+      - type: satisfies
+        target: REQ-STORY-001
+      - type: satisfies
+        target: REQ-STORY-002
+      - type: satisfies
+        target: REQ-WEB-027
+      - type: satisfies
+        target: REQ-FACE-004
+      - type: satisfies
+        target: REQ-FACE-005
+      - type: satisfies
+        target: REQ-NAV-002

@@ -33,7 +33,17 @@ pub struct Places {
     countries: HashMap<String, String>,
     /// Lines of the cities file that could not be read.
     pub skipped_lines: usize,
+    /// Answers already worked out, by exact position: photos keep their
+    /// positions, so the map, Countries and Trips pages ask the same
+    /// questions on every request (a dense cell holds hundreds of towns).
+    memo: std::sync::Mutex<HashMap<(u64, u64), Found>>,
 }
+
+/// A search's answer: the town's index and its distance in km.
+type Found = Option<(u32, f64)>;
+
+/// At most this many positions are remembered; then the memo starts over.
+const MEMO_MAX: usize = 500_000;
 
 /// A lookup result: the place, how far away it is, and a display label.
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +168,25 @@ impl Places {
     }
 
     fn nearest_index(&self, lat: f64, lon: f64) -> Option<(u32, f64)> {
+        let key = (lat.to_bits(), lon.to_bits());
+        if let Some(hit) = self
+            .memo
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&key)
+        {
+            return *hit;
+        }
+        let found = self.search(lat, lon);
+        let mut m = self.memo.lock().unwrap_or_else(|e| e.into_inner());
+        if m.len() >= MEMO_MAX {
+            m.clear();
+        }
+        m.insert(key, found);
+        found
+    }
+
+    fn search(&self, lat: f64, lon: f64) -> Option<(u32, f64)> {
         let (cy, cx) = cell(lat, lon);
         let mut best: Option<(u32, f64)> = None;
         // Ring 1 (3x3 cells) holds the answer unless the area is empty;
@@ -220,6 +249,25 @@ broken line\n";
             None,
         );
         assert_eq!(p.nearest(10.999, 20.0).unwrap().label, "Near, ZZ");
+    }
+
+    #[test]
+    fn a_remembered_answer_is_the_same_answer() {
+        let p = Places::parse(CITIES, Some(ADMIN1), Some(COUNTRIES));
+        for _ in 0..2 {
+            assert_eq!(p.country(10.5, 20.25), Some("ZZ"));
+            assert_eq!(p.country(-33.85, 151.21), Some("YY"));
+            assert_eq!(p.country(60.0, -30.0), None);
+        }
+        assert_eq!(
+            p.memo.lock().unwrap().len(),
+            3,
+            "each position searched once"
+        );
+        assert_eq!(
+            p.nearest(10.5, 20.25).unwrap().label,
+            "Ostdorf, Nordprovinz, Testland"
+        );
     }
 
     // GeoNames ships countryInfo.txt with CRLF line endings (smithy,

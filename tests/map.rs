@@ -948,6 +948,14 @@ async fn the_countries_page_and_the_map_of_one_country() {
             "{bad}"
         );
     }
+    // The map shades the countries of what the viewer sees.
+    let page = get(&app, "/map", None).await.text();
+    assert!(
+        page.contains("data-visited=\"YY,ZZ\" data-outlines=\"static/countries.geojson\""),
+        "{page}"
+    );
+    let page = get(&app, "/map?who=p2", None).await.text();
+    assert!(page.contains("data-visited=\"ZZ\""), "{page}");
     let page = get(&app, "/map?country=YY", None).await.text();
     assert!(
         page.contains("1 photo or video of these has a position."),
@@ -961,4 +969,32 @@ async fn the_countries_page_and_the_map_of_one_country() {
     pv.places = None;
     let r = get(&web::router(pv), "/countries", None).await;
     assert!(r.text().contains("none are configured"), "{}", r.text());
+}
+
+// The country outlines are the reduced Natural Earth file pinned in
+// assets/VENDORED.md, served by lichtbild as GeoJSON with an ISO code each.
+// rivet: verifies REQ-MAP-003
+#[tokio::test]
+async fn country_outlines_match_their_pinned_sha256() {
+    let got = format!("{:x}", Sha256::digest(web::COUNTRIES.as_bytes()));
+    assert_eq!(
+        got,
+        "8fe86adced05cac8c7475e9cc9463345701eff093f6f405f27b270a0b11c2588"
+    );
+    let (_fx, cfg, idx) = scanned();
+    let app = web::router(AppState::new(&cfg, idx));
+    let r = get(&app, "/static/countries.geojson", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(
+        r.header("content-type").as_deref(),
+        Some("application/geo+json")
+    );
+    let geo: serde_json::Value = serde_json::from_slice(&r.body).unwrap();
+    let feats = geo["features"].as_array().unwrap();
+    assert_eq!(feats.len(), 175);
+    assert!(feats.iter().any(|f| f["properties"]["iso"] == "DE"));
+    assert!(
+        feats.iter().any(|f| f["properties"]["iso"] == "FR"),
+        "France has ISO_A2 -99 in the source"
+    );
 }

@@ -501,7 +501,7 @@ pub fn nav_html(file: Option<&Path>, me: Option<&str>) -> Result<String> {
                 .with_context(|| format!("LICHTBILD_NAV {}", f.display()))?;
             let nav =
                 crate::nav::parse(&json, me).map_err(|e| anyhow::anyhow!("LICHTBILD_NAV: {e}"))?;
-            Ok(crate::nav::render(&nav, me, crate::web::esc))
+            Ok(crate::nav::render_menu(&nav, me, crate::web::esc))
         }
     }
 }

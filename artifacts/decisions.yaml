@@ -791,6 +791,10 @@ artifacts:
         target: REQ-FACE-002
       - type: satisfies
         target: REQ-FACE-003
+      - type: satisfies
+        target: REQ-FACE-004
+      - type: satisfies
+        target: REQ-FACE-005
 
 
   - id: DD-026
@@ -865,3 +869,38 @@ artifacts:
     links:
       - type: satisfies
         target: REQ-WEB-021
+
+  - id: DD-028
+    type: design-decision
+    title: Stories from templates first, a small language model only after a Pi spike
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21 for a story mode; asked to choose between a
+      small local language model and templates, the owner chose templates
+      "for sure", with some fantasy.
+    fields:
+      decision: >
+        src/story.rs tells a story from template pools (title, opening,
+        place, things, people, sign, words said, a plain moment, next day,
+        ending) in German and English, filled with what the index holds
+        for each picture (nearest town, named people not hidden, corrected
+        things, the surest short sign line, the first words of a
+        transcript). Templates are picked by a seeded splitmix64 without
+        repeats, so a seed always tells the same story. German things are
+        named in the plural (no article to get wrong); [one|many] picks
+        the verb form by how many people act.
+      rationale: >
+        Instant, nothing to download, no memory on the Pi (which sits at
+        its memory cap while faces are found), and nothing invented beyond
+        the joke: every fact in a story is one lichtbild already shows.
+      alternatives: >
+        A 0.5 to 1.5 B instruction model through candle (about 30 to 60 s
+        and 1 GB a story on a Pi 5 by estimate, and it invents people and
+        relations); kept as a later spike with the kill criteria more than
+        90 s a story or any name or relation not in the pictures.
+    links:
+      - type: satisfies
+        target: REQ-STORY-001
+      - type: satisfies
+        target: REQ-STORY-002

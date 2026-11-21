@@ -544,11 +544,25 @@ pub async fn page(
         } else {
             all
         };
-        let (trips, _) = crate::web::trips_of(&idx, &dups, &labels2, &me, &pc, places.as_deref())?;
-        anyhow::Ok((summary, months, trips))
+        let (trips, items) =
+            crate::web::trips_of(&idx, &dups, &labels2, &me, &pc, places.as_deref())?;
+        // The countries of the pictures this person sees, as on the
+        // Countries page, to shade on the map (REQ-MAP-003).
+        let mut visited: Vec<String> = Vec::new();
+        if let Some(pl) = places.as_deref() {
+            let pos = pc.get(&idx)?;
+            let mut set = std::collections::BTreeSet::new();
+            for (id, _) in &items {
+                if let Some(c) = pos.get(id).and_then(|p| pl.country(p.lat, p.lon)) {
+                    set.insert(c.to_string());
+                }
+            }
+            visited = set.into_iter().collect();
+        }
+        anyhow::Ok((summary, months, trips, visited))
     })
     .await;
-    let (summary, months, trips) = match res {
+    let (summary, months, trips, visited) = match res {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => return crate::web::internal(e),
         Err(e) => return crate::web::internal(e),
@@ -662,6 +676,12 @@ pub async fn page(
     }
     if let Some(c) = &country {
         attrs += &format!(" data-country=\"{}\"", esc(c));
+    }
+    if !visited.is_empty() {
+        attrs += &format!(
+            " data-visited=\"{}\" data-outlines=\"static/countries.geojson\"",
+            esc(&visited.join(","))
+        );
     }
     let (kind, _) = crate::web::kind_filter(q.kind.as_deref());
     match kind {

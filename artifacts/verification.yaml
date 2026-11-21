@@ -1719,3 +1719,118 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-026
+
+  - id: VER-122
+    type: verification
+    title: The country outlines are the pinned Natural Earth reduction, served as GeoJSON
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "country_outlines_match_their_pinned_sha256"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map country_outlines_match_their_pinned_sha256"
+    links:
+      - type: verifies
+        target: REQ-MAP-003
+
+  - id: VER-123
+    type: verification
+    title: Relations read from both sides, close first, only between known people, gone with the name
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "relations_between_people_are_seen_only_between_known_people"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth relations_between_people_are_seen_only_between_known_people"
+        - run: "cargo test --lib relations"
+    links:
+      - type: verifies
+        target: REQ-FACE-004
+
+  - id: VER-124
+    type: verification
+    title: Strangers and people are hidden from lists, faces, suggestions and relations, and shown again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "strangers_and_people_can_be_hidden_and_shown_again"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth strangers_and_people_can_be_hidden_and_shown_again"
+    links:
+      - type: verifies
+        target: REQ-FACE-005
+
+  - id: VER-125
+    type: verification
+    title: The app switcher is a menu with home, marks, names and descriptions
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "nav_switcher_is_in_every_page_header"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web nav_switcher_is_in_every_page_header"
+        - run: "cargo test --lib menu_tests"
+    links:
+      - type: verifies
+        target: REQ-NAV-002
+
+  - id: VER-126
+    type: verification
+    title: A story names what was seen and who was there, stays in scope, and repeats by seed
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+    links:
+      - type: verifies
+        target: REQ-STORY-001
+
+  - id: VER-127
+    type: verification
+    title: Story templates fill in both languages, by seed, short and spread over the days
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "story::tests"
+      test-location: src/story.rs
+      steps:
+        - run: "cargo test --lib story"
+    links:
+      - type: verifies
+        target: REQ-STORY-001
+
+  - id: VER-128
+    type: verification
+    title: Poems rhyme in couplets with the facts, and the haiku counts 5, 7, 5
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "poems_rhyme_in_couplets_and_the_haiku_counts_five_seven_five"
+      test-location: src/story.rs
+      steps:
+        - run: "cargo test --lib story"
+        - run: "cargo test --test auth a_story_of_some_days_tells_what_was_seen_and_who_was_there"
+    links:
+      - type: verifies
+        target: REQ-STORY-002
+
+  - id: VER-129
+    type: verification
+    title: The slideshow explains mirroring to the TV; a video offers AirPlay
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_of_the_chosen_pictures"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_slideshow_of_the_chosen_pictures"
+    links:
+      - type: verifies
+        target: REQ-WEB-027

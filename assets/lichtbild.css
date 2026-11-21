@@ -91,10 +91,38 @@ header .brand::before {
 }
 
 /* nav v1: home link and app switcher (LICHTBILD_NAV), as in haus. */
-nav.apps { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; font: 13px/1.4 var(--sans); letter-spacing: .06em; }
-nav.apps a { color: var(--ink-soft); text-decoration: none; }
-nav.apps a:hover { color: var(--shu); }
-nav.apps a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+/* The house's app switcher (REQ-NAV-002): four dots, one per corner of
+   the house, the first in vermilion; a panel like the app menu. */
+details.appswitch { position: relative; margin-left: auto; }
+details.appswitch > summary {
+  list-style: none; cursor: pointer; width: 40px; height: 40px; border-radius: 10px;
+  display: grid; place-items: center; border: 1px solid transparent;
+}
+details.appswitch > summary::-webkit-details-marker { display: none; }
+details.appswitch > summary:hover, details.appswitch[open] > summary { border-color: var(--line); background: var(--paper-2); }
+details.appswitch .dots { display: grid; grid-template-columns: 7px 7px; gap: 4px; }
+details.appswitch .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-soft); }
+details.appswitch .dots i:first-child { background: var(--shu); }
+details.appswitch[open] .dots i { background: var(--shu); }
+details.appswitch > nav.apps {
+  position: absolute; right: 0; top: 48px; z-index: 30; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px; width: min(300px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow);
+  max-height: calc(100vh - 120px); max-height: calc(100dvh - 120px); overflow-y: auto; overscroll-behavior: contain;
+}
+details.appswitch nav.apps a {
+  display: grid; grid-template-columns: 34px 1fr; column-gap: 12px; align-items: center;
+  padding: 8px 10px; border-radius: 10px; color: var(--ink); text-decoration: none;
+}
+details.appswitch nav.apps a:hover { background: var(--paper-2); }
+details.appswitch nav.apps a[class="home"] { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; margin-bottom: 4px; }
+details.appswitch .mark {
+  grid-row: span 2; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  font: 500 17px/1 var(--serif); background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
+}
+details.appswitch a[aria-current="page"] .mark { background: var(--shu); color: var(--paper); border-color: var(--shu); }
+details.appswitch nav.apps b { font: 500 16px/1.2 var(--serif); letter-spacing: .06em; }
+details.appswitch nav.apps a > span:not(.mark) { font-size: 12px; color: var(--ink-faint); }
 
 main { max-width: 1400px; margin: 0 auto; padding: 8px 28px 96px; }
 h1 {
@@ -514,6 +542,9 @@ details.appmenu > ul {
   position: absolute; left: 0; top: 48px; z-index: 30; margin: 0; padding: 8px; list-style: none;
   width: min(300px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line);
   border-radius: 14px; box-shadow: var(--shadow);
+  /* Taller than the screen (an iPad held sideways): the panel scrolls, not the page. */
+  max-height: calc(100vh - 120px); max-height: calc(100dvh - 120px);
+  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
 }
 details.appmenu li.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 details.appmenu li a, details.appmenu li button {
@@ -777,6 +808,11 @@ html.showing, html.showing body { overflow: hidden; }
   transform: translateY(-50%); margin: 0;
 }
 .show .send a { color: #fff; }
+.show .stvhint {
+  position: absolute; left: 50%; bottom: 84px; transform: translateX(-50%); width: min(420px, calc(100% - 32px));
+  margin: 0; padding: 14px 16px; border-radius: 14px; background: rgba(0, 0, 0, .78); color: #fff; font-size: 15px; line-height: 1.5;
+}
+.show .stvhint button { margin-left: 8px; min-height: 32px; padding: 0 12px; border-radius: 16px; border: 0; font: inherit; cursor: pointer; }
 .viewer .vbar a.slideshow { text-decoration: none; margin-left: 8px; }
 @media (prefers-reduced-motion: reduce) {
   .show img.slide, .show .sbar { transition: none; }
@@ -901,6 +937,19 @@ details.albumtools { margin: 0 0 18px; }
 details.albumtools summary { cursor: pointer; color: var(--ink-faint); font-size: 13px; }
 details.albumtools form { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; max-width: 32em; }
 details.albumtools button.danger { background: var(--shu); color: #fff; }
+/* Relations on a person page (REQ-FACE-004). */
+section.relations { margin: 0 0 18px; }
+section.relations h2 { font-size: 15px; margin: 0 0 6px; }
+section.relations ul { list-style: none; margin: 0 0 8px; padding: 0; }
+section.relations li { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+section.relations li[data-weight="3"] a:first-of-type { font-weight: 600; }
+section.relations .rel { color: var(--ink-faint); font-size: 13px; }
+section.relations form.inline { display: inline; margin: 0; }
+form.relf { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: 40em; }
+form.relf input, form.relf select { font: inherit; min-height: 36px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--ink-faint); background: var(--paper); color: var(--ink); }
+form.relf input { flex: 1 1 10em; }
+form.relf button { font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 0; background: var(--ink); color: var(--paper); cursor: pointer; }
+p.together { margin: 0 0 12px; }
 .viewer dl.meta form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .viewer dl.meta form.albumf select, .viewer dl.meta form.albumf input,
 .viewer dl.meta form.albumf button {
@@ -1059,3 +1108,20 @@ ol.steps li span { overflow-wrap: anywhere; }
 
 /* The day/night switch in the menu (REQ-WEB-024). */
 .appmenu button.theme b::after { content: " · " attr(data-now); font-weight: 400; color: var(--ink-faint); }
+/* Hidden strangers and people (REQ-FACE-005). */
+form.hidef, form.hiddennote { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 14px; }
+form.hidef button, form.hiddennote button { font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--ink-faint); background: transparent; color: var(--ink); cursor: pointer; }
+details.hiddenpeople { margin: 18px 0; }
+details.hiddenpeople summary { cursor: pointer; color: var(--ink-faint); }
+details.hiddenpeople .thing { opacity: .7; }
+/* A made-up story of some days (REQ-STORY-001). */
+article.story { max-width: 44em; margin: 8px auto 40px; font: 18px/1.65 var(--serif); }
+article.story p.opening::first-letter { font-size: 2.6em; float: left; line-height: .9; padding: 4px 8px 0 0; color: var(--shu); }
+article.story figure { margin: 28px 0; }
+article.story figure img { display: block; width: 100%; max-height: 70vh; object-fit: contain; border-radius: 10px; background: var(--paper-2); }
+article.story figcaption { margin-top: 10px; }
+article.story p.ending { font-style: italic; margin-top: 32px; text-align: center; }
+/* The poem form (REQ-STORY-002): verses centred, the haiku set apart. */
+article.story.poem figcaption, article.story.poem p.opening, article.story.poem p.ending { text-align: center; font-style: italic; }
+article.story.poem p.opening::first-letter { font-size: inherit; float: none; padding: 0; color: inherit; }
+article.story p.haiku { text-align: center; font-size: 20px; letter-spacing: .04em; color: var(--ink-soft); margin: 18px 0 30px; }

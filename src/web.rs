@@ -25,6 +25,8 @@ const HTMX: &str = include_str!("../assets/htmx-2.0.4.min.js");
 const CSS: &str = include_str!("../assets/lichtbild.css");
 const JS: &str = include_str!("../assets/lichtbild.js");
 const THEME_JS: &str = include_str!("../assets/theme.js");
+/// Country outlines for the map (REQ-MAP-003, assets/VENDORED.md).
+pub const COUNTRIES: &str = include_str!("../assets/countries.geojson");
 const PAGE_SIZE: u32 = 240;
 
 pub const CSP: &str = "default-src 'self'; img-src 'self'; media-src 'self'; script-src 'self'; \
@@ -188,6 +190,7 @@ pub fn router(state: AppState) -> Router {
         .route("/album/{id}/delete", axum::routing::post(album_delete))
         .route("/album/{id}/share", axum::routing::post(album_share))
         .route("/days/{who}", get(days_page))
+        .route("/story/{who}", get(story_page))
         .route("/people", get(people_page))
         .route("/people/{item}/{face}", get(group_page))
         .route("/people/name", axum::routing::post(people_name))
@@ -195,6 +198,13 @@ pub fn router(state: AppState) -> Router {
         .route("/person/{id}", get(person_page))
         .route("/person/{id}/rename", axum::routing::post(person_rename))
         .route("/person/{id}/delete", axum::routing::post(person_delete))
+        .route("/person/{id}/relate", axum::routing::post(person_relate))
+        .route("/person/{id}/hide", axum::routing::post(person_hide))
+        .route("/people/hide", axum::routing::post(people_hide))
+        .route(
+            "/person/{id}/unrelate",
+            axum::routing::post(person_unrelate),
+        )
         .route("/face/{item}/{face}", get(face_crop))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
@@ -1869,7 +1879,7 @@ pub fn photo_html(id: u64, rec: &index::Record) -> String {
             String::new()
         };
         return format!(
-            "<video class=\"photo\" controls playsinline preload=\"metadata\"{poster} src=\"original/{id}\"></video>"
+            "<video class=\"photo\" controls playsinline x-webkit-airplay=\"allow\" preload=\"metadata\"{poster} src=\"original/{id}\"></video>"
         );
     }
     let rel = String::from_utf8_lossy(&rec.rel).to_ascii_lowercase();
@@ -2068,8 +2078,10 @@ async fn show(
          <button type=\"button\" class=\"play\" aria-label=\"Pause\">❚❚</button>\
          <button type=\"button\" class=\"snext\" aria-label=\"Next\">›</button>\
          <button type=\"button\" class=\"sfs\" hidden aria-label=\"Full screen\">⛶</button>\
+         <button type=\"button\" class=\"stv\" hidden aria-label=\"On the TV\" title=\"On the TV (AirPlay)\">📺</button>\
          <a class=\"close\" href=\"{back}\" aria-label=\"Close\">✕</a></span></div>\
          <p class=\"send\" hidden>The end. <a href=\"{back}\">Back</a></p>\
+         <p class=\"stvhint\" hidden>On the TV: open Control Centre, tap Screen Mirroring and choose the Apple TV. The slideshow then fills the TV. <button type=\"button\" class=\"stvok\">OK</button></p>\
          <ol class=\"slides\" hidden>{list}</ol></div>{empty}",
         empty = if slides.is_empty() {
             "<p>No photos to show.</p>"
@@ -2404,10 +2416,11 @@ async fn suggest(
             let hidden = idx.hidden(&me)?;
             let seen = seen_faces(&idx, &people, &labels, &hidden)?;
             for (id, p) in idx.people()? {
-                if !p
-                    .name
-                    .split_whitespace()
-                    .any(|w| w.to_lowercase().starts_with(&typed))
+                if p.hidden
+                    || !p
+                        .name
+                        .split_whitespace()
+                        .any(|w| w.to_lowercase().starts_with(&typed))
                 {
                     continue;
                 }
@@ -2547,9 +2560,11 @@ async fn search(
             let names: Vec<(u64, String)> = idx
                 .people()?
                 .into_iter()
-                .filter(|(id, _)| {
-                    seen.iter()
-                        .any(|f| f.face.who == crate::people::Who::Person(*id))
+                .filter(|(id, p)| {
+                    !p.hidden
+                        && seen
+                            .iter()
+                            .any(|f| f.face.who == crate::people::Who::Person(*id))
                 })
                 .map(|(id, p)| (id, p.name))
                 .collect();
@@ -4928,6 +4943,7 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
         "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
         "theme.js" => (THEME_JS, "text/javascript; charset=utf-8"),
+        "countries.geojson" => (COUNTRIES, "application/geo+json"),
         other => match crate::map::static_asset(other) {
             Some(x) => x,
             None => return StatusCode::NOT_FOUND.into_response(),
@@ -5134,14 +5150,230 @@ async fn days_page(
         format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
+            // A story needs a run of days, not one day across the years.
+            story = if dq.md.is_none() {
+                format!(
+                    "<a class=\"tbtn\" href=\"story/{w}?{}\" title=\"A made-up story of these days\">📖 Story</a>",
+                    dq.query()
+                )
+            } else {
+                String::new()
+            },
             albums = album_template(&albums_of(&st, person(&viewer)).await),
         )
     };
     page_for(&st, "lichtbild days", &body).into_response()
+}
+
+#[derive(Deserialize, Default)]
+pub struct StoryQuery {
+    /// Another number, another story from the same pictures.
+    seed: Option<u64>,
+    /// "de" (the default) or "en".
+    lang: Option<String>,
+    /// "poem": rhymed couplets and a haiku (REQ-STORY-002).
+    form: Option<String>,
+}
+
+/// A story or a poem, ready to show: title, a haiku (poems only), the
+/// opening, picture by picture its lines, the ending.
+struct Told {
+    title: String,
+    haiku: Vec<String>,
+    opening: Vec<String>,
+    chapters: Vec<(u64, Vec<String>)>,
+    ending: Vec<String>,
+}
+
+/// At most this many pictures of a run of days are read for a story.
+const STORY_READ_MAX: usize = 1000;
+
+/// GET /story/{who}?from=&to=: a little made-up story of these days
+/// (REQ-STORY-001, DD-028), from what lichtbild knows about the pictures
+/// the viewer sees there: the town, the people, the things, the words.
+async fn story_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(who): UrlPath<String>,
+    Query(mut dq): Query<DaysQuery>,
+    Query(sq): Query<StoryQuery>,
+) -> Response {
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    if let Some(one) = dq.day.take() {
+        dq.from = Some(one.clone());
+        dq.to = Some(one);
+    }
+    if dq.md.is_some() || !dq.valid() || dq.from.is_none() {
+        return (StatusCode::BAD_REQUEST, "which days?").into_response();
+    }
+    let lang = crate::story::Lang::parse(sq.lang.as_deref());
+    let seed = sq.seed.unwrap_or(0);
+    let poem = sq.form.as_deref() == Some("poem");
+    let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
+    let (people, pc, places) = (st.people.clone(), st.positions.clone(), st.places.clone());
+    let dq2 = dq.clone();
+    let res = tokio::task::spawn_blocking(
+        move || -> anyhow::Result<(Option<Told>, HashMap<u64, String>)> {
+            let hidden = idx.hidden(&me)?;
+            let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+            items.truncate(STORY_READ_MAX);
+            let pos = pc.get(&idx)?;
+            let fixes = idx.fixes()?;
+            let names: HashMap<u64, String> = idx
+                .people()?
+                .into_iter()
+                .filter(|(_, p)| !p.hidden && !p.name.is_empty())
+                .map(|(id, p)| (id, p.name))
+                .collect();
+            let mut moments = Vec::new();
+            let mut hashes = HashMap::new();
+            for it in &items {
+                let mut m = crate::story::Moment {
+                    id: it.id,
+                    taken: it.taken_local.clone(),
+                    ..Default::default()
+                };
+                m.place = pos.get(&it.id).and_then(|p| {
+                    let n = places.as_deref()?.nearest(p.lat, p.lon)?;
+                    n.label.split(", ").next().map(str::to_string)
+                });
+                for f in people.in_photo(&it.hash) {
+                    if let crate::people::Who::Person(p) = f.who {
+                        if let Some(n) = names.get(&p) {
+                            if !m.people.contains(n) {
+                                m.people.push(n.clone());
+                            }
+                        }
+                    }
+                }
+                let mut objects = fixes.apply(&it.hash, idx.objects(&it.hash)?);
+                objects.sort_by(|a, b| {
+                    b.score
+                        .partial_cmp(&a.score)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                });
+                for o in objects {
+                    // People are told by name, not as things.
+                    if o.kind != 0 && !m.things.contains(&o.kind) {
+                        m.things.push(o.kind);
+                    }
+                }
+                if let Some(t) = idx.text(&it.hash)? {
+                    let t = crate::fixes::apply_text(t, &idx.text_fixes(&it.hash)?);
+                    let lines: Vec<(String, f32)> =
+                        t.lines.into_iter().map(|l| (l.text, l.conf)).collect();
+                    m.sign = crate::story::sign_line(&lines);
+                }
+                // Only videos have transcripts.
+                if let Some(tr) = idx.transcript(&it.hash)?.filter(|t| t.state == "ok") {
+                    let all: Vec<&str> = tr.pieces.iter().map(|p| p.text.as_str()).collect();
+                    m.said = crate::story::said_words(&all.join(" "));
+                }
+                hashes.insert(it.id, it.hash.get(..12).unwrap_or("").to_string());
+                moments.push(m);
+            }
+            moments.sort_by(|a, b| a.taken.cmp(&b.taken).then(a.id.cmp(&b.id)));
+            let story = if poem {
+                crate::story::rhyme(&moments, lang, seed).map(|p| Told {
+                    title: p.title,
+                    haiku: p.haiku,
+                    opening: p.opening,
+                    chapters: p.verses,
+                    ending: p.ending,
+                })
+            } else {
+                crate::story::tell(&moments, lang, seed).map(|s| Told {
+                    title: s.title,
+                    haiku: Vec::new(),
+                    opening: vec![s.opening],
+                    chapters: s
+                        .chapters
+                        .into_iter()
+                        .map(|(id, t)| (id, vec![t]))
+                        .collect(),
+                    ending: vec![s.ending],
+                })
+            };
+            // Each chapter's picture as the viewer shows it; a video by its
+            // still (an <img> cannot play it).
+            let mut srcs = HashMap::new();
+            for (id, _) in story.iter().flat_map(|s| s.chapters.iter()) {
+                if let Some(rec) = idx.locate(*id)? {
+                    let h = hashes.get(id).cloned().unwrap_or_default();
+                    let src = match (rec.preview, rec.video.is_some()) {
+                        (true, _) => format!("preview/{id}?h={h}"),
+                        (false, true) => format!("thumb/{id}?h={h}"),
+                        (false, false) => photo_src(*id, &rec),
+                    };
+                    srcs.insert(*id, src);
+                }
+            }
+            Ok((story, srcs))
+        },
+    )
+    .await;
+    let (story, srcs) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let w = esc(&who);
+    let q = dq.query();
+    let back = format!("<a href=\"days/{w}?{q}\">← {}</a>", esc(&dq.heading()));
+    let Some(story) = story else {
+        let body =
+            format!("<h1>Story</h1><p class=\"dim\">No pictures from these days.</p><p>{back}</p>");
+        return page_for(&st, "lichtbild story", &body).into_response();
+    };
+    let (other, other_name, note) = match lang {
+        crate::story::Lang::De => (
+            "en",
+            "English",
+            "Ausgedacht aus euren Bildern, nur zum Spaß.",
+        ),
+        crate::story::Lang::En => ("de", "Deutsch", "Made up from your pictures, just for fun."),
+    };
+    let here = if lang == crate::story::Lang::En {
+        "&amp;lang=en"
+    } else {
+        ""
+    };
+    let (form_here, switch) = match (poem, lang) {
+        (true, crate::story::Lang::De) => ("&amp;form=poem", ("", "📖 Geschichte")),
+        (true, crate::story::Lang::En) => ("&amp;form=poem", ("", "📖 Story")),
+        (false, crate::story::Lang::De) => ("", ("&amp;form=poem", "📜 Gedicht")),
+        (false, crate::story::Lang::En) => ("", ("&amp;form=poem", "📜 Poem")),
+    };
+    let br = |ls: &[String]| ls.iter().map(|l| esc(l)).collect::<Vec<_>>().join("<br>");
+    let kind = if poem { "story poem" } else { "story" };
+    let mut body = format!(
+        "<div class=\"thead\"><h1>{}</h1><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={next}{here}{form_here}\" title=\"Another one from the same pictures\">🎲 Another</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}{here}{}\">{}</a><a class=\"tbtn\" href=\"story/{w}?{q}&amp;seed={seed}&amp;lang={other}{form_here}\">{other_name}</a></div>\
+         <p class=\"dim\">{note} {back}</p><article class=\"{kind}\">",
+        esc(&story.title),
+        switch.0,
+        switch.1,
+        next = seed.wrapping_add(1),
+    );
+    if !story.haiku.is_empty() {
+        body += &format!("<p class=\"haiku\">{}</p>", br(&story.haiku));
+    }
+    body += &format!("<p class=\"opening\">{}</p>", br(&story.opening));
+    for (id, text) in &story.chapters {
+        let src = srcs.get(id).map(String::as_str).unwrap_or("");
+        body += &format!(
+            "<figure><a href=\"v/{w}/{id}\"><img src=\"{}\" loading=\"lazy\" alt=\"\"></a><figcaption>{}</figcaption></figure>",
+            esc(src),
+            br(text)
+        );
+    }
+    body += &format!("<p class=\"ending\">{}</p></article>", br(&story.ending));
+    page_for(&st, "lichtbild story", &body).into_response()
 }
 
 /// Earlier and later day with pictures, and a date picker for any day
@@ -5274,56 +5506,80 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     let me = person(&viewer);
     let labels = viewer.labels.clone();
     type Tile = (String, String, usize, Option<(u64, u32)>);
-    let res =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Tile>, Vec<Tile>, usize)> {
-            let hidden = idx.hidden(&me)?;
-            let seen = seen_faces(&idx, &people, &labels, &hidden)?;
-            let names: HashMap<u64, String> = idx
-                .people()?
-                .into_iter()
-                .map(|(id, p)| (id, p.name))
-                .collect();
-            let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
-            for f in &seen {
-                by.entry(f.face.who).or_default().push(f);
-            }
-            let photos = |v: &[&SeenFace]| {
-                v.iter()
-                    .map(|f| f.face.key.0.as_str())
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
-            };
-            let (mut named, mut groups, mut singles) = (Vec::new(), Vec::new(), 0);
-            for (who, v) in &by {
-                match who {
-                    crate::people::Who::Person(p) => {
-                        let Some(name) = names.get(p) else { continue };
-                        named.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+    // Named, groups to name, faces seen once, hidden.
+    type PeopleTiles = (Vec<Tile>, Vec<Tile>, usize, Vec<Tile>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<PeopleTiles> {
+        let hidden = idx.hidden(&me)?;
+        let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
+            .collect();
+        let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
+        let known: std::collections::HashSet<u64> = seen
+            .iter()
+            .filter_map(|f| match f.face.who {
+                crate::people::Who::Person(p) if !off.contains(&p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let mut put_away: Vec<Tile> = Vec::new();
+        let close = crate::relations::closeness(&idx.relations()?, |p| known.contains(&p));
+        let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
+        for f in &seen {
+            by.entry(f.face.who).or_default().push(f);
+        }
+        let photos = |v: &[&SeenFace]| {
+            v.iter()
+                .map(|f| f.face.key.0.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        let (mut named, mut groups, mut singles) = (Vec::new(), Vec::new(), 0);
+        for (who, v) in &by {
+            match who {
+                crate::people::Who::Person(p) => {
+                    let Some(name) = names.get(p) else { continue };
+                    if off.contains(p) {
+                        put_away.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                        continue;
                     }
-                    crate::people::Who::Group(_) => {
-                        let n = photos(v);
-                        if n < GROUP_MIN {
-                            singles += 1;
-                            continue;
-                        }
-                        let c = cover(v);
-                        let href = c
-                            .map(|(i, k)| format!("people/{i}/{k}"))
-                            .unwrap_or_default();
-                        groups.push((href, String::new(), n, c));
+                    let c = close.get(p).copied().unwrap_or(0);
+                    named.push((
+                        c,
+                        (format!("person/{p}"), name.clone(), photos(v), cover(v)),
+                    ));
+                }
+                crate::people::Who::Group(_) => {
+                    let n = photos(v);
+                    if n < GROUP_MIN {
+                        singles += 1;
+                        continue;
                     }
+                    let c = cover(v);
+                    let href = c
+                        .map(|(i, k)| format!("people/{i}/{k}"))
+                        .unwrap_or_default();
+                    groups.push((href, String::new(), n, c));
                 }
             }
-            named.sort_by(|a, b| {
-                b.2.cmp(&a.2)
-                    .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-            });
-            groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
-            groups.truncate(GROUPS_MAX);
-            Ok((named, groups, singles))
-        })
-        .await;
-    let (named, groups, singles) = match res {
+        }
+        // The people who matter most first (REQ-FACE-004), then by photos.
+        named.sort_by(|(ca, a), (cb, b)| {
+            cb.cmp(ca)
+                .then(b.2.cmp(&a.2))
+                .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+        });
+        let named: Vec<Tile> = named.into_iter().map(|(_, t)| t).collect();
+        put_away.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+        groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+        groups.truncate(GROUPS_MAX);
+        Ok((named, groups, singles, put_away))
+    })
+    .await;
+    let (named, groups, singles, put_away) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -5364,6 +5620,13 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     if singles > 0 {
         body += &format!("<p class=\"dim\">{singles} more faces were seen in one photo each.</p>");
     }
+    if !put_away.is_empty() {
+        body += &format!(
+            "<details class=\"hiddenpeople\"><summary>Hidden ({})</summary><p class=\"dim\">Strangers and people put away. Open one to show them again.</p>{}</details>",
+            put_away.len(),
+            tiles(&put_away, "Strangers")
+        );
+    }
     page_for(&st, "lichtbild people", &body).into_response()
 }
 
@@ -5392,32 +5655,89 @@ fn photos_of(
     Ok((items, total))
 }
 
-/// GET /person/{id}: the photos of a named person the viewer may see.
+#[derive(Deserialize, Default)]
+pub struct PersonQuery {
+    /// Only the photos this other person is in too.
+    with: Option<u64>,
+}
+
+/// A person page's relations: (other id, other name, label, weight, stored key).
+type RelRow = (u64, String, &'static str, u8, (u64, u64, u8));
+
+/// GET /person/{id}: the photos of a named person the viewer may see, and
+/// how they stand to the others the viewer knows (REQ-FACE-004).
 async fn person_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath(pid): UrlPath<u64>,
+    Query(q): Query<PersonQuery>,
 ) -> Response {
     let who = default_who(&viewer);
     let labels = viewer.labels.clone();
     let (idx, people) = (st.index.clone(), st.people.clone());
     let me = person(&viewer);
-    let res = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<Option<(index::Person, Vec<index::Item>, usize)>> {
-            let Some(p) = idx.person(pid)? else {
-                return Ok(None);
+    let v2 = viewer.clone();
+    type Page = (
+        index::Person,
+        Vec<index::Item>,
+        usize,
+        Vec<RelRow>,
+        String,
+        Option<String>,
+    );
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Page>> {
+        let Some(p) = idx.person(pid)? else {
+            return Ok(None);
+        };
+        let (mut items, mut total) =
+            photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(pid))?;
+        // A name with no photo the viewer may see does not exist for them.
+        if items.is_empty() {
+            return Ok(None);
+        }
+        let seen = seen_people(&idx, &people, &v2)?;
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
+            .collect();
+        let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
+        let mut with_name = None;
+        if let Some(o) = q.with.filter(|o| *o != pid && seen.contains(o)) {
+            let (theirs, _) =
+                photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(o))?;
+            let both: std::collections::HashSet<u64> = theirs.iter().map(|it| it.id).collect();
+            items.retain(|it| both.contains(&it.id));
+            total = items.len();
+            with_name = names.get(&o).cloned();
+        }
+        let rels = crate::relations::of(&idx.relations()?, pid, |o| {
+            seen.contains(&o) && !off.contains(&o)
+        })
+        .into_iter()
+        .filter_map(|r| {
+            let name = names.get(&r.other)?.clone();
+            let (a, b) = if r.first {
+                (pid, r.other)
+            } else {
+                (r.other, pid)
             };
-            let (items, total) =
-                photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(pid))?;
-            // A name with no photo the viewer may see does not exist for them.
-            if items.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some((p, items, total)))
-        },
-    )
+            let key = crate::relations::key(a, b, r.kind as u8)?;
+            Some((r.other, name, r.label, r.weight, key))
+        })
+        .collect();
+        Ok(Some((
+            p,
+            items,
+            total,
+            rels,
+            names_list(&idx, &seen),
+            with_name,
+        )))
+    })
     .await;
-    let (p, items, total) = match res {
+    let (p, items, total, rels, names, with_name) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -5425,14 +5745,42 @@ async fn person_page(
     };
     let ones = vec![1; items.len()];
     let name = esc(&p.name);
+    let title = if p.name.is_empty() {
+        "Strangers".to_string()
+    } else {
+        name.clone()
+    };
     let w = esc(&who);
+    // Hidden (REQ-FACE-005): a note and the way back instead of relations.
+    let relations = if p.hidden {
+        format!(
+            "<form class=\"hiddennote\" method=\"post\" action=\"person/{pid}/hide\"><input type=\"hidden\" name=\"hidden\" value=\"0\"><span class=\"dim\">Hidden: not on the People page, in a photo's faces, in names or search. The photos stay.</span> <button type=\"submit\">Show again</button></form>"
+        )
+    } else {
+        relations_block(pid, &rels, &names)
+    };
+    let hide = if p.hidden {
+        String::new()
+    } else {
+        format!(
+            "<form method=\"post\" action=\"person/{pid}/hide\"><input type=\"hidden\" name=\"hidden\" value=\"1\"><button type=\"submit\">Hide this person</button> <span class=\"dim\">For everyone in the house; the photos stay.</span></form>"
+        )
+    };
+    let together = with_name
+        .map(|o| {
+            format!(
+                "<p class=\"together\">Together with <b>{}</b> · <a href=\"person/{pid}\">all photos</a></p>",
+                esc(&o)
+            )
+        })
+        .unwrap_or_default();
     let manage = format!(
-        "<details class=\"albumtools\"><summary>Rename or take the name off</summary>\
+        "<details class=\"albumtools\"><summary>Rename, hide or take the name off</summary>{hide}\
          <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -5463,7 +5811,7 @@ fn names_list(idx: &index::Index, seen: &std::collections::HashSet<u64>) -> Stri
         .people()
         .unwrap_or_default()
         .into_iter()
-        .filter(|(id, _)| seen.contains(id))
+        .filter(|(id, p)| seen.contains(id) && !p.hidden && !p.name.is_empty())
         .map(|(_, p)| p.name)
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
@@ -5515,6 +5863,7 @@ async fn group_page(
          <form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\">\
          <input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Name\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button>{names}</form>\
          <p class=\"dim\">The name goes to every photo here, and to this person in other photos as lichtbild finds them. Everyone in the house sees the name.</p>\
+         <form class=\"hidef\" method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><button type=\"submit\">Hide: no one we know</button> <span class=\"dim\">Strangers, such as people in a museum. The photos stay; the faces leave this list.</span></form>\
          <div class=\"timeline group\">\n{}</div>",
         render_items(&who, &items, &ones, None, false, ""),
         img = face_img(item, k),
@@ -5600,6 +5949,93 @@ async fn people_name(
             back_to(&st, Some(&back))
         }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /people/hide: hide a group of faces (or one, with `one`) that is
+/// no one the house knows, such as strangers in a museum (REQ-FACE-005).
+/// They become one nameless hidden person, so lichtbild puts the same
+/// face in other photos away too.
+async fn people_hide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<NameForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    let one = f.one.is_some();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some((_, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(false);
+        };
+        if let (crate::people::Who::Person(p), false) = (face.who, one) {
+            return idx.set_person_hidden(p, true);
+        }
+        let keys: Vec<crate::people::Key> = if one {
+            vec![face.key.clone()]
+        } else {
+            let hidden = idx.hidden(&me)?;
+            seen_faces(&idx, &people, &labels, &hidden)?
+                .into_iter()
+                .filter(|s| s.face.who == face.who)
+                .map(|s| s.face.key)
+                .collect()
+        };
+        let pid = idx.create_person("", &me, now_secs())?;
+        idx.set_person_hidden(pid, true)?;
+        idx.name_faces(&keys, pid)?;
+        people.relabel(&idx)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(f.back.as_deref().unwrap_or("people"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct HideForm {
+    hidden: String,
+}
+
+/// POST /person/{id}/hide: hide a person (hidden=1) or show them again
+/// (hidden=0), for everyone in the house (REQ-FACE-005).
+async fn person_hide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<HideForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let hide = match f.hidden.as_str() {
+        "1" => true,
+        "0" => false,
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if idx.person(pid)?.is_none() || !sees_person(&idx, &people, &viewer, pid)? {
+            return Ok(false);
+        }
+        idx.set_person_hidden(pid, hide)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => internal(e),
         Err(e) => internal(e),
     }
@@ -5699,6 +6135,151 @@ async fn person_rename(
     }
 }
 
+/// How much a relation matters, as shown and as chosen.
+const WEIGHTS: [(u8, &str); 3] = [(3, "close"), (2, "normal"), (1, "loose")];
+
+/// The relations list and the form to add one, on a person page.
+fn relations_block(pid: u64, rels: &[RelRow], names: &str) -> String {
+    let mut o = String::from("<section class=\"relations\"><h2>Relations</h2>");
+    if rels.is_empty() {
+        o += "<p class=\"dim\">None yet. Say how this person stands to someone else you know: partner, parent, schoolmate.</p>";
+    } else {
+        o += "<ul>";
+        for (other, oname, label, weight, (a, b, k)) in rels {
+            let wl = WEIGHTS
+                .iter()
+                .find(|(v, _)| v == weight)
+                .map_or("", |(_, l)| l);
+            o += &format!(
+                "<li data-weight=\"{weight}\"><span class=\"rel\">{label}</span> <a href=\"person/{other}\">{}</a> <span class=\"dim weight\">{wl}</span> \
+                 <a class=\"tbtn\" href=\"person/{pid}?with={other}\">Together</a>\
+                 <form method=\"post\" action=\"person/{pid}/unrelate\" class=\"inline\"><input type=\"hidden\" name=\"a\" value=\"{a}\"><input type=\"hidden\" name=\"b\" value=\"{b}\"><input type=\"hidden\" name=\"kind\" value=\"{k}\"><button type=\"submit\" class=\"tbtn\" title=\"Remove this relation\">✕</button></form></li>",
+                esc(oname)
+            );
+        }
+        o += "</ul>";
+    }
+    let kinds: String = crate::relations::choices()
+        .iter()
+        .map(|(v, l)| format!("<option value=\"{v}\">{l}</option>"))
+        .collect();
+    let weights: String = std::iter::once("<option value=\"\">as usual</option>".to_string())
+        .chain(
+            WEIGHTS
+                .iter()
+                .map(|(v, l)| format!("<option value=\"{v}\">{l}</option>")),
+        )
+        .collect();
+    o += &format!(
+        "<form class=\"relf\" method=\"post\" action=\"person/{pid}/relate\"><select name=\"kind\" aria-label=\"Relation\">{kinds}</select>\
+         <input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Name\" aria-label=\"Other person\">\
+         <select name=\"weight\" aria-label=\"How much it matters\">{weights}</select><button type=\"submit\">Add</button>{names}</form>\
+         <p class=\"dim\">Close relations come first here and on the People page. Everyone in the house sees them, between the people they know.</p></section>"
+    );
+    o
+}
+
+#[derive(Deserialize)]
+pub struct RelateForm {
+    kind: String,
+    name: String,
+    weight: Option<String>,
+}
+
+/// POST /person/{id}/relate: "this person is <kind> of <name>"; setting
+/// one again changes how much it matters.
+async fn person_relate(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<RelateForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some((kind, swap)) = crate::relations::parse(&f.kind) else {
+        return (StatusCode::BAD_REQUEST, "no such relation").into_response();
+    };
+    let weight = match f.weight.as_deref().filter(|w| !w.is_empty()) {
+        None => kind.weight(),
+        Some(w) => match w.parse::<u8>() {
+            Ok(v @ 1..=3) => v,
+            _ => return (StatusCode::BAD_REQUEST, "weight is 1 to 3").into_response(),
+        },
+    };
+    let name = f.name.trim().to_lowercase();
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(), StatusCode>> {
+        let seen = seen_people(&idx, &people, &viewer)?;
+        if !seen.contains(&pid) {
+            return Ok(Err(StatusCode::NOT_FOUND));
+        }
+        // Only someone the viewer knows; a relation never makes a name.
+        let Some((other, _)) = idx
+            .people()?
+            .into_iter()
+            .find(|(id, p)| seen.contains(id) && !p.hidden && p.name.to_lowercase() == name)
+        else {
+            return Ok(Err(StatusCode::BAD_REQUEST));
+        };
+        let (a, b) = if swap { (other, pid) } else { (pid, other) };
+        Ok(if idx.set_relation(a, b, kind as u8, weight)? {
+            Ok(())
+        } else {
+            Err(StatusCode::BAD_REQUEST)
+        })
+    })
+    .await;
+    match res {
+        Ok(Ok(Ok(()))) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(Err(StatusCode::BAD_REQUEST))) => (
+            StatusCode::BAD_REQUEST,
+            "the other person must be someone you know by name, and not the same person",
+        )
+            .into_response(),
+        Ok(Ok(Err(c))) => c.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UnrelateForm {
+    a: u64,
+    b: u64,
+    kind: u8,
+}
+
+/// POST /person/{id}/unrelate: drop one relation of this person.
+async fn person_unrelate(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<UnrelateForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let seen = seen_people(&idx, &people, &viewer)?;
+        if (f.a != pid && f.b != pid) || !seen.contains(&f.a) || !seen.contains(&f.b) {
+            return Ok(false);
+        }
+        idx.remove_relation(f.a, f.b, f.kind)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
 /// POST /person/{id}/delete: take the name off; the faces are unnamed again.
 async fn person_delete(
     State(st): State<AppState>,
@@ -5767,16 +6348,22 @@ fn render_faces(
     hash: &str,
     back: &str,
 ) -> String {
-    let faces = people.in_photo(hash);
+    let all = idx.people().unwrap_or_default();
+    // Hidden people's faces are not listed (REQ-FACE-005).
+    let off: std::collections::HashSet<u64> = all
+        .iter()
+        .filter(|(_, p)| p.hidden)
+        .map(|(i, _)| *i)
+        .collect();
+    let faces: Vec<_> = people
+        .in_photo(hash)
+        .into_iter()
+        .filter(|f| !matches!(f.who, crate::people::Who::Person(p) if off.contains(&p)))
+        .collect();
     if faces.is_empty() {
         return String::new();
     }
-    let names: HashMap<u64, String> = idx
-        .people()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(i, p)| (i, p.name))
-        .collect();
+    let names: HashMap<u64, String> = all.into_iter().map(|(i, p)| (i, p.name)).collect();
     let b = esc(back);
     let mut o = format!(
         "<details class=\"faces\"><summary title=\"People in the picture\" aria-label=\"People in the picture\">☺ {}</summary><div class=\"kpanel\"><ul class=\"facelist\">",
@@ -5798,7 +6385,8 @@ fn render_faces(
                 )
             }
             _ => format!(
-                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>"
+                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>\
+                 <form method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" class=\"not\" title=\"A stranger: hide this face\">Hide</button></form>"
             ),
         };
         o += &format!("<li>{img}<span>{row}</span></li>");

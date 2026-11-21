@@ -197,6 +197,7 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
         state.space.clone(),
         state.people.clone(),
     );
+    let positions = state.positions.clone();
     use lichtbild::status::{Phase, ScanDone};
     use std::time::SystemTime;
     std::thread::spawn(move || {
@@ -231,6 +232,19 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
         };
         regroup("at start");
         rebuild("at start");
+        // The nearest town of every position, once, so the map, Countries
+        // and Trips pages answer from memory (REQ-WEB-025).
+        if let (Some(pl), Ok(pos)) = (places.as_deref(), positions.get(&idx)) {
+            let t = std::time::Instant::now();
+            for p in pos.values() {
+                let _ = pl.country(p.lat, p.lon);
+            }
+            tracing::info!(
+                "place names warm: {} positions in {} ms",
+                pos.len(),
+                t.elapsed().as_millis()
+            );
+        }
         if let Err(e) = space.rebuild(&idx) {
             tracing::error!("picture vectors failed: {e:#}");
         }
