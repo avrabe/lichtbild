@@ -215,12 +215,14 @@ fn decode(b: &[u8]) -> Result<Record> {
 impl Index {
     /// Open or create the index and check its schema version.
     pub fn open(data_dir: &Path) -> Result<Index> {
-        let db = match Database::create(db_path(data_dir)) {
+        let path = db_path(data_dir);
+        let db = match Database::create(&path) {
             Ok(db) => db,
             Err(redb::DatabaseError::DatabaseAlreadyOpen) => bail!(
-                "the index is in use by another lichtbild process (a running `lichtbild serve` scans by itself)"
+                "the index {} is in use by another lichtbild process (a running `lichtbild serve` scans by itself)",
+                path.display()
             ),
-            Err(e) => return Err(e).context("cannot open the index"),
+            Err(e) => return Err(e).context(format!("cannot open the index {}", path.display())),
         };
         let w = db.begin_write()?;
         {
