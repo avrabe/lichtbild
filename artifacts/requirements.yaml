@@ -1449,3 +1449,27 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-FIX-003
+    type: requirement
+    title: A thing the detector does not know gets the house's own word
+    status: implemented
+    release: v0.11.0
+    description: >
+      Owner report 2026-11-21 on 0.9.0: a capybara found as a bear could
+      not be changed to "Capybara", and the row only turned red. "It is
+      a..." takes any word with a letter and at most 40 characters: a
+      kind the detector knows stays that kind; any other word becomes
+      the house's own kind (up to 128), the same word in other letters
+      being the same kind. Own words are shown on the find, its box, the
+      counts and the Things page, are searched and suggested, and are
+      offered in "It is a..." again. A word refused is refused with the
+      reason, shown in the row. Own words cannot be marked "never in our
+      house" (that mark is for the detector's kinds) and are not used in
+      stories yet.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

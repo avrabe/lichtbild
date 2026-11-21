@@ -516,7 +516,9 @@ impl Search {
                 kinds.sort_unstable();
                 kinds.dedup();
                 for k in kinds {
-                    if let Some((en, de, pl)) = crate::objects::KINDS.get(k as usize) {
+                    if let Some((en, de, pl)) = fixes.names(k) {
+                        // An own word has no translation to hint at.
+                        let (en, pl) = if en == de { ("", "") } else { (en, pl) };
                         vocab.add(Kind::Thing, de, en, pl, label);
                     }
                 }
@@ -527,7 +529,7 @@ impl Search {
                 f.t => -1.0f64,
                 f.text => item_words(&rec, at, places)
                     + " "
-                    + &crate::objects::words(&objects),
+                    + &crate::objects::words(&objects, &fixes),
             ))?;
             docs += 1;
             // Words said or written, once per item.

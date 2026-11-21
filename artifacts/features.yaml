@@ -373,6 +373,8 @@ artifacts:
         target: REQ-FIX-001
       - type: satisfies
         target: REQ-FIX-002
+      - type: satisfies
+        target: REQ-FIX-003
 
   - id: FEAT-017
     type: feature

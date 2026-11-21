@@ -82,6 +82,9 @@ const FACE_NOT: TableDefinition<(&str, u32, u64), ()> = TableDefinition::new("fa
 const THING_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("thing_fixes");
 /// Kinds never in the house (REQ-FIX-001): kind -> JSON `fixes::Mark`.
 const KIND_OFF: TableDefinition<u8, &[u8]> = TableDefinition::new("kind_off");
+/// The house's own words for things (REQ-FIX-003): kind (from
+/// `fixes::OWN_FIRST`) -> word.
+const OWN_KINDS: TableDefinition<u8, &str> = TableDefinition::new("own_kinds");
 /// Corrections of text read (REQ-FIX-002): content hash -> JSON
 /// `[fixes::TextFix]`.
 const TEXT_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("text_fixes");
@@ -272,6 +275,7 @@ impl Index {
             w.open_table(FACE_NOT)?;
             w.open_table(THING_FIXES)?;
             w.open_table(KIND_OFF)?;
+            w.open_table(OWN_KINDS)?;
             w.open_table(TEXT_FIXES)?;
             w.open_table(RELATIONS)?;
         }
@@ -1455,7 +1459,51 @@ impl Index {
                 off.insert(k.value(), m);
             }
         }
-        Ok(crate::fixes::Fixes::new(things, off))
+        let t = r.open_table(OWN_KINDS)?;
+        let mut own = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            own.insert(k.value(), v.value().to_string());
+        }
+        Ok(crate::fixes::Fixes::new(things, off).with_own(own))
+    }
+
+    /// The kind of the house's own word `word` (REQ-FIX-003): the one it
+    /// already has under that word (case and accents aside), else a new
+    /// one. None when the word is not one (`fixes::own_word`) or all own
+    /// kinds are taken.
+    pub fn own_kind(&self, word: &str) -> Result<Option<u8>> {
+        let Some(word) = crate::fixes::own_word(word) else {
+            return Ok(None);
+        };
+        let folded = crate::search::fold(word);
+        let w = self.db.begin_write()?;
+        let kind = {
+            let mut t = w.open_table(OWN_KINDS)?;
+            let mut last = None;
+            let mut found = None;
+            for e in t.iter()? {
+                let (k, v) = e?;
+                last = Some(k.value());
+                if crate::search::fold(v.value()) == folded {
+                    found = Some(k.value());
+                }
+            }
+            let new = match last {
+                None => Some(crate::fixes::OWN_FIRST),
+                Some(k) => k.checked_add(1),
+            };
+            match (found, new) {
+                (Some(k), _) => Some(k),
+                (None, Some(k)) => {
+                    t.insert(k, word)?;
+                    Some(k)
+                }
+                (None, None) => None,
+            }
+        };
+        w.commit()?;
+        Ok(kind)
     }
 
     /// Put a word about a thing found, replacing an earlier word about the
