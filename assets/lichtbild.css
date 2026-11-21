@@ -115,7 +115,7 @@ details.appswitch nav.apps a {
   padding: 8px 10px; border-radius: 10px; color: var(--ink); text-decoration: none;
 }
 details.appswitch nav.apps a:hover { background: var(--paper-2); }
-details.appswitch nav.apps a.home { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; margin-bottom: 4px; }
+details.appswitch nav.apps a[class="home"] { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; margin-bottom: 4px; }
 details.appswitch .mark {
   grid-row: span 2; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
   font: 500 17px/1 var(--serif); background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
