@@ -901,6 +901,19 @@ details.albumtools { margin: 0 0 18px; }
 details.albumtools summary { cursor: pointer; color: var(--ink-faint); font-size: 13px; }
 details.albumtools form { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; max-width: 32em; }
 details.albumtools button.danger { background: var(--shu); color: #fff; }
+/* Relations on a person page (REQ-FACE-004). */
+section.relations { margin: 0 0 18px; }
+section.relations h2 { font-size: 15px; margin: 0 0 6px; }
+section.relations ul { list-style: none; margin: 0 0 8px; padding: 0; }
+section.relations li { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; padding: 4px 0; border-bottom: 1px solid var(--line); }
+section.relations li[data-weight="3"] a:first-of-type { font-weight: 600; }
+section.relations .rel { color: var(--ink-faint); font-size: 13px; }
+section.relations form.inline { display: inline; margin: 0; }
+form.relf { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; max-width: 40em; }
+form.relf input, form.relf select { font: inherit; min-height: 36px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--ink-faint); background: var(--paper); color: var(--ink); }
+form.relf input { flex: 1 1 10em; }
+form.relf button { font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 0; background: var(--ink); color: var(--paper); cursor: pointer; }
+p.together { margin: 0 0 12px; }
 .viewer dl.meta form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
 .viewer dl.meta form.albumf select, .viewer dl.meta form.albumf input,
 .viewer dl.meta form.albumf button {

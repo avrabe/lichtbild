@@ -2258,3 +2258,189 @@ async fn the_hidden_list_names_only_ones_own_files() {
         page.body
     );
 }
+
+// Relations between named people: set from a person page, read from both
+// sides, close ones first, seen only between people the viewer knows,
+// dropped with the name.
+// rivet: verifies REQ-FACE-004
+#[tokio::test]
+async fn relations_between_people_are_seen_only_between_known_people() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    let (x, z) = (&p1[0], &p2[0]);
+    e.idx
+        .set_faces(&x.1, lichtbild::faces::VERSION, &one_face(face_vec(0, 1)))
+        .unwrap();
+    e.idx
+        .set_faces(&z.1, lichtbild::faces::VERSION, &one_face(face_vec(5, 6)))
+        .unwrap();
+    e.people.rebuild(&e.idx).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    let opa = e.idx.create_person("Opa", "t", 0).unwrap();
+    e.idx.name_faces(&[(x.1.clone(), 0)], oma).unwrap();
+    e.idx.name_faces(&[(z.1.clone(), 0)], opa).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+    let post = |uri: String, body: &str, c: String| {
+        let body = body.to_string();
+        let app = e.app.clone();
+        async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
+    };
+
+    // p2 knows both: Opa is Oma's partner, and Oma's child too (loose).
+    let r = post(
+        format!("/person/{oma}/relate"),
+        "kind=partner&name=opa",
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let r = post(
+        format!("/person/{opa}/relate"),
+        "kind=child&name=Oma&weight=1",
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let mut rels = e.idx.relations().unwrap();
+    rels.sort();
+    let mut want = vec![((oma, opa, 1), 1), ((oma.min(opa), oma.max(opa), 0), 3)];
+    want.sort();
+    assert_eq!(rels, want);
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    let (partner, parent) = (
+        page.body.find("partner of</span>").expect("partner shown"),
+        page.body
+            .find("parent of</span>")
+            .expect("parent shown from Oma's side"),
+    );
+    assert!(partner < parent, "the close relation comes first");
+    assert!(page.body.contains(&format!("person/{oma}?with={opa}")));
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{opa}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(page.body.contains("child of</span>"), "{}", page.body);
+    // Together: no photo has both.
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}?with={opa}"),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        page.body.contains("Together with <b>Opa</b>"),
+        "{}",
+        page.body
+    );
+    assert!(!page.body.contains(&format!("thumb/{}?", x.0)));
+    // Oneself, an unknown name or an unknown kind is refused.
+    for body in [
+        "kind=friend&name=Oma",
+        "kind=friend&name=Zorro",
+        "kind=boss&name=Opa",
+    ] {
+        let r = post(format!("/person/{oma}/relate"), body, c2.clone()).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{body}");
+    }
+
+    // p1 knows only Oma: no relation to Opa shows, none can be made or dropped.
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/person/{oma}"),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert_eq!(page.status, StatusCode::OK);
+    assert!(!page.body.contains("Opa") && !page.body.contains("partner of</span>"));
+    let r = post(
+        format!("/person/{oma}/relate"),
+        "kind=friend&name=Opa",
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = post(
+        format!("/person/{opa}/relate"),
+        "kind=friend&name=Oma",
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let body = format!("a={}&b={}&kind=0", oma.min(opa), oma.max(opa));
+    let r = post(format!("/person/{oma}/unrelate"), &body, c1.clone()).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert_eq!(e.idx.relations().unwrap().len(), 2);
+    // A cross-site request changes nothing.
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{oma}/relate"),
+        Some(&c2),
+        "kind=friend&name=Opa",
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+
+    // p2 drops the partner relation, then the name Opa: nothing is left.
+    let r = post(format!("/person/{oma}/unrelate"), &body, c2.clone()).await;
+    assert!(r.status.is_redirection());
+    assert_eq!(e.idx.relations().unwrap(), vec![((oma, opa, 1), 1)]);
+    let r = post(format!("/person/{opa}/delete"), "", c2.clone()).await;
+    assert!(r.status.is_redirection());
+    assert!(e.idx.relations().unwrap().is_empty());
+}

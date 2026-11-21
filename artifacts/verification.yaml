@@ -1733,3 +1733,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MAP-003
+
+  - id: VER-123
+    type: verification
+    title: Relations read from both sides, close first, only between known people, gone with the name
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "relations_between_people_are_seen_only_between_known_people"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth relations_between_people_are_seen_only_between_known_people"
+        - run: "cargo test --lib relations"
+    links:
+      - type: verifies
+        target: REQ-FACE-004

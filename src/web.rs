@@ -197,6 +197,11 @@ pub fn router(state: AppState) -> Router {
         .route("/person/{id}", get(person_page))
         .route("/person/{id}/rename", axum::routing::post(person_rename))
         .route("/person/{id}/delete", axum::routing::post(person_delete))
+        .route("/person/{id}/relate", axum::routing::post(person_relate))
+        .route(
+            "/person/{id}/unrelate",
+            axum::routing::post(person_unrelate),
+        )
         .route("/face/{item}/{face}", get(face_crop))
         .route("/status", get(status_page))
         .route("/place/{id}", axum::routing::post(place))
@@ -5286,6 +5291,14 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 .into_iter()
                 .map(|(id, p)| (id, p.name))
                 .collect();
+            let known: std::collections::HashSet<u64> = seen
+                .iter()
+                .filter_map(|f| match f.face.who {
+                    crate::people::Who::Person(p) => Some(p),
+                    crate::people::Who::Group(_) => None,
+                })
+                .collect();
+            let close = crate::relations::closeness(&idx.relations()?, |p| known.contains(&p));
             let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
             for f in &seen {
                 by.entry(f.face.who).or_default().push(f);
@@ -5301,7 +5314,11 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 match who {
                     crate::people::Who::Person(p) => {
                         let Some(name) = names.get(p) else { continue };
-                        named.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                        let c = close.get(p).copied().unwrap_or(0);
+                        named.push((
+                            c,
+                            (format!("person/{p}"), name.clone(), photos(v), cover(v)),
+                        ));
                     }
                     crate::people::Who::Group(_) => {
                         let n = photos(v);
@@ -5317,10 +5334,13 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                     }
                 }
             }
-            named.sort_by(|a, b| {
-                b.2.cmp(&a.2)
+            // The people who matter most first (REQ-FACE-004), then by photos.
+            named.sort_by(|(ca, a), (cb, b)| {
+                cb.cmp(ca)
+                    .then(b.2.cmp(&a.2))
                     .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
             });
+            let named: Vec<Tile> = named.into_iter().map(|(_, t)| t).collect();
             groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
             groups.truncate(GROUPS_MAX);
             Ok((named, groups, singles))
@@ -5395,32 +5415,86 @@ fn photos_of(
     Ok((items, total))
 }
 
-/// GET /person/{id}: the photos of a named person the viewer may see.
+#[derive(Deserialize, Default)]
+pub struct PersonQuery {
+    /// Only the photos this other person is in too.
+    with: Option<u64>,
+}
+
+/// A person page's relations: (other id, other name, label, weight, stored key).
+type RelRow = (u64, String, &'static str, u8, (u64, u64, u8));
+
+/// GET /person/{id}: the photos of a named person the viewer may see, and
+/// how they stand to the others the viewer knows (REQ-FACE-004).
 async fn person_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath(pid): UrlPath<u64>,
+    Query(q): Query<PersonQuery>,
 ) -> Response {
     let who = default_who(&viewer);
     let labels = viewer.labels.clone();
     let (idx, people) = (st.index.clone(), st.people.clone());
     let me = person(&viewer);
-    let res = tokio::task::spawn_blocking(
-        move || -> anyhow::Result<Option<(index::Person, Vec<index::Item>, usize)>> {
-            let Some(p) = idx.person(pid)? else {
-                return Ok(None);
-            };
-            let (items, total) =
-                photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(pid))?;
-            // A name with no photo the viewer may see does not exist for them.
-            if items.is_empty() {
-                return Ok(None);
-            }
-            Ok(Some((p, items, total)))
-        },
-    )
+    let v2 = viewer.clone();
+    type Page = (
+        index::Person,
+        Vec<index::Item>,
+        usize,
+        Vec<RelRow>,
+        String,
+        Option<String>,
+    );
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Page>> {
+        let Some(p) = idx.person(pid)? else {
+            return Ok(None);
+        };
+        let (mut items, mut total) =
+            photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(pid))?;
+        // A name with no photo the viewer may see does not exist for them.
+        if items.is_empty() {
+            return Ok(None);
+        }
+        let seen = seen_people(&idx, &people, &v2)?;
+        let names: HashMap<u64, String> = idx
+            .people()?
+            .into_iter()
+            .map(|(id, p)| (id, p.name))
+            .collect();
+        let mut with_name = None;
+        if let Some(o) = q.with.filter(|o| *o != pid && seen.contains(o)) {
+            let (theirs, _) =
+                photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(o))?;
+            let both: std::collections::HashSet<u64> = theirs.iter().map(|it| it.id).collect();
+            items.retain(|it| both.contains(&it.id));
+            total = items.len();
+            with_name = names.get(&o).cloned();
+        }
+        let rels = crate::relations::of(&idx.relations()?, pid, |o| seen.contains(&o))
+            .into_iter()
+            .filter_map(|r| {
+                let name = names.get(&r.other)?.clone();
+                let key = crate::relations::key(pid, r.other, r.kind as u8).map(|k| {
+                    if r.kind == crate::relations::Kind::Parent && r.label == "child of" {
+                        (r.other, pid, k.2)
+                    } else {
+                        k
+                    }
+                })?;
+                Some((r.other, name, r.label, r.weight, key))
+            })
+            .collect();
+        Ok(Some((
+            p,
+            items,
+            total,
+            rels,
+            names_list(&idx, &seen),
+            with_name,
+        )))
+    })
     .await;
-    let (p, items, total) = match res {
+    let (p, items, total, rels, names, with_name) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -5429,13 +5503,22 @@ async fn person_page(
     let ones = vec![1; items.len()];
     let name = esc(&p.name);
     let w = esc(&who);
+    let relations = relations_block(pid, &rels, &names);
+    let together = with_name
+        .map(|o| {
+            format!(
+                "<p class=\"together\">Together with <b>{}</b> · <a href=\"person/{pid}\">all photos</a></p>",
+                esc(&o)
+            )
+        })
+        .unwrap_or_default();
     let manage = format!(
         "<details class=\"albumtools\"><summary>Rename or take the name off</summary>\
          <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{manage}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -5697,6 +5780,151 @@ async fn person_rename(
     match res {
         Ok(Ok(Some(to))) => back_to(&st, Some(&format!("person/{to}"))),
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// How much a relation matters, as shown and as chosen.
+const WEIGHTS: [(u8, &str); 3] = [(3, "close"), (2, "normal"), (1, "loose")];
+
+/// The relations list and the form to add one, on a person page.
+fn relations_block(pid: u64, rels: &[RelRow], names: &str) -> String {
+    let mut o = String::from("<section class=\"relations\"><h2>Relations</h2>");
+    if rels.is_empty() {
+        o += "<p class=\"dim\">None yet. Say how this person stands to someone else you know: partner, parent, schoolmate.</p>";
+    } else {
+        o += "<ul>";
+        for (other, oname, label, weight, (a, b, k)) in rels {
+            let wl = WEIGHTS
+                .iter()
+                .find(|(v, _)| v == weight)
+                .map_or("", |(_, l)| l);
+            o += &format!(
+                "<li data-weight=\"{weight}\"><span class=\"rel\">{label}</span> <a href=\"person/{other}\">{}</a> <span class=\"dim weight\">{wl}</span> \
+                 <a class=\"tbtn\" href=\"person/{pid}?with={other}\">Together</a>\
+                 <form method=\"post\" action=\"person/{pid}/unrelate\" class=\"inline\"><input type=\"hidden\" name=\"a\" value=\"{a}\"><input type=\"hidden\" name=\"b\" value=\"{b}\"><input type=\"hidden\" name=\"kind\" value=\"{k}\"><button type=\"submit\" class=\"tbtn\" title=\"Remove this relation\">✕</button></form></li>",
+                esc(oname)
+            );
+        }
+        o += "</ul>";
+    }
+    let kinds: String = crate::relations::CHOICES
+        .iter()
+        .map(|(v, l)| format!("<option value=\"{v}\">{l}</option>"))
+        .collect();
+    let weights: String = std::iter::once("<option value=\"\">as usual</option>".to_string())
+        .chain(
+            WEIGHTS
+                .iter()
+                .map(|(v, l)| format!("<option value=\"{v}\">{l}</option>")),
+        )
+        .collect();
+    o += &format!(
+        "<form class=\"relf\" method=\"post\" action=\"person/{pid}/relate\"><select name=\"kind\" aria-label=\"Relation\">{kinds}</select>\
+         <input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Name\" aria-label=\"Other person\">\
+         <select name=\"weight\" aria-label=\"How much it matters\">{weights}</select><button type=\"submit\">Add</button>{names}</form>\
+         <p class=\"dim\">Close relations come first here and on the People page. Everyone in the house sees them, between the people they know.</p></section>"
+    );
+    o
+}
+
+#[derive(Deserialize)]
+pub struct RelateForm {
+    kind: String,
+    name: String,
+    weight: Option<String>,
+}
+
+/// POST /person/{id}/relate: "this person is <kind> of <name>"; setting
+/// one again changes how much it matters.
+async fn person_relate(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<RelateForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some((kind, swap)) = crate::relations::parse(&f.kind) else {
+        return (StatusCode::BAD_REQUEST, "no such relation").into_response();
+    };
+    let weight = match f.weight.as_deref().filter(|w| !w.is_empty()) {
+        None => kind.weight(),
+        Some(w) => match w.parse::<u8>() {
+            Ok(v @ 1..=3) => v,
+            _ => return (StatusCode::BAD_REQUEST, "weight is 1 to 3").into_response(),
+        },
+    };
+    let name = f.name.trim().to_lowercase();
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Result<(), StatusCode>> {
+        let seen = seen_people(&idx, &people, &viewer)?;
+        if !seen.contains(&pid) {
+            return Ok(Err(StatusCode::NOT_FOUND));
+        }
+        // Only someone the viewer knows; a relation never makes a name.
+        let Some((other, _)) = idx
+            .people()?
+            .into_iter()
+            .find(|(id, p)| seen.contains(id) && p.name.to_lowercase() == name)
+        else {
+            return Ok(Err(StatusCode::BAD_REQUEST));
+        };
+        let (a, b) = if swap { (other, pid) } else { (pid, other) };
+        Ok(if idx.set_relation(a, b, kind as u8, weight)? {
+            Ok(())
+        } else {
+            Err(StatusCode::BAD_REQUEST)
+        })
+    })
+    .await;
+    match res {
+        Ok(Ok(Ok(()))) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(Err(StatusCode::BAD_REQUEST))) => (
+            StatusCode::BAD_REQUEST,
+            "the other person must be someone you know by name, and not the same person",
+        )
+            .into_response(),
+        Ok(Ok(Err(c))) => c.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct UnrelateForm {
+    a: u64,
+    b: u64,
+    kind: u8,
+}
+
+/// POST /person/{id}/unrelate: drop one relation of this person.
+async fn person_unrelate(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<UnrelateForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let seen = seen_people(&idx, &people, &viewer)?;
+        if (f.a != pid && f.b != pid) || !seen.contains(&f.a) || !seen.contains(&f.b) {
+            return Ok(false);
+        }
+        idx.remove_relation(f.a, f.b, f.kind)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => internal(e),
         Err(e) => internal(e),
     }

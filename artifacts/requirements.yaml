@@ -794,6 +794,30 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-FACE-004
+    type: requirement
+    title: Named people have relations, and the close ones come first
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: a person page says how this person stands
+      to another named person (partner, parent or child, sibling, family,
+      friend, schoolmate, colleague, neighbour) and how much it matters
+      (close, normal, loose; by default from the kind). Relations read
+      from both sides (parent of / child of), are listed close ones
+      first, link to the photos of both together, and order the People
+      page (closest first, then by photos). Like names they are the
+      household's, seen and changed only between people the viewer
+      knows (as with names), with a same-site request; a relation never
+      creates a name, refuses oneself, and goes with a name taken off or
+      merged into another.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MEDIA-004
     type: requirement
     title: Speech in videos is transcribed in the house, with times

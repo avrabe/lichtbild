@@ -343,6 +343,8 @@ artifacts:
         target: REQ-FACE-002
       - type: satisfies
         target: REQ-FACE-003
+      - type: satisfies
+        target: REQ-FACE-004
 
 
   - id: FEAT-016

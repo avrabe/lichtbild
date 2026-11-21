@@ -87,6 +87,10 @@ const KIND_OFF: TableDefinition<u8, &[u8]> = TableDefinition::new("kind_off");
 const TEXT_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("text_fixes");
 /// Positions set by hand (REQ-PLACE-002): item id -> JSON `Placed`.
 const PLACED: TableDefinition<u64, &[u8]> = TableDefinition::new("placed");
+/// How named people stand to each other (REQ-FACE-004): (a, b, kind) ->
+/// how much it matters (1 to 3). See `relations::Kind` for the order of a
+/// and b.
+const RELATIONS: TableDefinition<(u64, u64, u8), u8> = TableDefinition::new("relations");
 
 /// Sorts after every timestamp string ("YYYY-...").
 const TAKEN_MAX: &str = "\u{7f}";
@@ -264,6 +268,7 @@ impl Index {
             w.open_table(THING_FIXES)?;
             w.open_table(KIND_OFF)?;
             w.open_table(TEXT_FIXES)?;
+            w.open_table(RELATIONS)?;
         }
         w.commit()?;
         Ok(Index {
@@ -1269,6 +1274,21 @@ impl Index {
                     not.insert((h.as_str(), *i, into), ())?;
                 }
             }
+            let mut rel = w.open_table(RELATIONS)?;
+            let old: Vec<crate::relations::Row> = rel
+                .iter()?
+                .filter_map(|e| e.ok())
+                .map(|(k, v)| (k.value(), v.value()))
+                .filter(|((a, b, _), _)| *a == from || *b == from)
+                .collect();
+            for ((a, b, k), weight) in old {
+                rel.remove((a, b, k))?;
+                let swap = |x: u64| if x == from { into } else { x };
+                if let Some(key) = crate::relations::key(swap(a), swap(b), k) {
+                    let keep = rel.get(key)?.map_or(0, |v| v.value());
+                    rel.insert(key, weight.max(keep))?;
+                }
+            }
             w.open_table(PEOPLE)?.remove(from)?;
         }
         w.commit()?;
@@ -1299,10 +1319,55 @@ impl Index {
             for (h, i) in &gone {
                 not.remove((h.as_str(), *i, id))?;
             }
+            let mut rel = w.open_table(RELATIONS)?;
+            let gone: Vec<(u64, u64, u8)> = rel
+                .iter()?
+                .filter_map(|e| e.ok())
+                .map(|(k, _)| k.value())
+                .filter(|(a, b, _)| *a == id || *b == id)
+                .collect();
+            for k in gone {
+                rel.remove(k)?;
+            }
             w.open_table(PEOPLE)?.remove(id)?;
         }
         w.commit()?;
         Ok(())
+    }
+
+    /// Set how `a` stands to `b` and how much it matters (1 to 3). A kind
+    /// read from `b`'s side (child of) is stored from `a`'s; a relation
+    /// to oneself is refused.
+    pub fn set_relation(&self, a: u64, b: u64, kind: u8, weight: u8) -> Result<bool> {
+        let Some(key) = crate::relations::key(a, b, kind) else {
+            return Ok(false);
+        };
+        let w = self.db.begin_write()?;
+        w.open_table(RELATIONS)?.insert(key, weight.clamp(1, 3))?;
+        w.commit()?;
+        Ok(true)
+    }
+
+    pub fn remove_relation(&self, a: u64, b: u64, kind: u8) -> Result<()> {
+        let Some(key) = crate::relations::key(a, b, kind) else {
+            return Ok(());
+        };
+        let w = self.db.begin_write()?;
+        w.open_table(RELATIONS)?.remove(key)?;
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Every relation: ((a, b, kind), weight), as stored.
+    pub fn relations(&self) -> Result<Vec<crate::relations::Row>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(RELATIONS)?;
+        let mut out = Vec::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            out.push((k.value(), v.value()));
+        }
+        Ok(out)
     }
 
     /// Every named face: ((content hash, face number), person id).

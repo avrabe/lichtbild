@@ -19,6 +19,7 @@ pub mod ocr;
 pub mod people;
 pub mod place;
 pub mod places;
+pub mod relations;
 pub mod scan;
 pub mod search;
 pub mod source;
