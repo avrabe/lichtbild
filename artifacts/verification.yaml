@@ -1762,3 +1762,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-FACE-005
+
+  - id: VER-125
+    type: verification
+    title: The app switcher is a menu with home, marks, names and descriptions
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "nav_switcher_is_in_every_page_header"
+      test-location: tests/web.rs
+      steps:
+        - run: "cargo test --test web nav_switcher_is_in_every_page_header"
+        - run: "cargo test --lib menu_tests"
+    links:
+      - type: verifies
+        target: REQ-NAV-002

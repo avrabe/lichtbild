@@ -175,6 +175,95 @@ pub fn render(nav: &Nav, me: &str, esc: impl Fn(&str) -> String) -> String {
     s + "</nav>"
 }
 
+/// An app's mark in the switcher: the first letter of its name, upper
+/// case (nav v1 carries no mark of its own).
+pub fn mark(name: &str) -> String {
+    name.trim()
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().collect())
+        .unwrap_or_default()
+}
+
+/// The switcher as a menu (REQ-NAV-002): one button at the top right
+/// (four dots, for the house's apps) opening a panel like lichtbild's own
+/// menu: home first, then every app with its mark, name and description,
+/// this app marked aria-current="page". The same 1 + apps links as
+/// `render`, so the file's contract is unchanged; everything is escaped.
+pub fn render_menu(nav: &Nav, me: &str, esc: impl Fn(&str) -> String) -> String {
+    let mut s = format!(
+        "<details class=\"appswitch\"><summary aria-label=\"House apps\" title=\"House apps\"><span class=\"dots\" aria-hidden=\"true\"><i></i><i></i><i></i><i></i></span></summary>\
+         <nav class=\"apps\" aria-label=\"House apps\"><a class=\"home\" href=\"{}\"><span class=\"mark\" aria-hidden=\"true\">←</span><b>{}</b><span>Home</span></a>",
+        esc(&nav.home.url),
+        esc(&nav.home.name)
+    );
+    for a in &nav.apps {
+        let current = if a.id == me {
+            r#" aria-current="page""#
+        } else {
+            ""
+        };
+        let desc = a
+            .desc
+            .as_deref()
+            .map(|d| format!("<span>{}</span>", esc(d)))
+            .unwrap_or_default();
+        s += &format!(
+            "<a href=\"{}\"{current}><span class=\"mark\" aria-hidden=\"true\">{}</span><b>{}</b>{desc}</a>",
+            esc(&a.url),
+            esc(&mark(&a.name)),
+            esc(&a.name)
+        );
+    }
+    s + "</nav></details>"
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+
+    fn esc(s: &str) -> String {
+        s.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('"', "&quot;")
+    }
+
+    #[test]
+    fn the_menu_has_home_then_every_app_marked_and_escaped() {
+        let nav = Nav {
+            version: 1,
+            home: Link {
+                name: "home".into(),
+                url: "/".into(),
+            },
+            apps: vec![
+                App {
+                    id: "photos".into(),
+                    name: "photos".into(),
+                    url: "/photos/".into(),
+                    desc: Some("pictures <all>".into()),
+                },
+                App {
+                    id: "watch".into(),
+                    name: "watch".into(),
+                    url: "https://watch.example.test/".into(),
+                    desc: None,
+                },
+            ],
+        };
+        let h = render_menu(&nav, "photos", esc);
+        assert!(h.starts_with("<details class=\"appswitch\">"));
+        assert!(h.contains("<a class=\"home\" href=\"/\">"));
+        assert!(h.contains(
+            "<a href=\"/photos/\" aria-current=\"page\"><span class=\"mark\" aria-hidden=\"true\">P</span><b>photos</b><span>pictures &lt;all></span></a>"
+        ));
+        assert!(h.contains("<a href=\"https://watch.example.test/\"><span class=\"mark\" aria-hidden=\"true\">W</span><b>watch</b></a>"));
+        assert_eq!(h.matches("<a ").count(), 3, "1 + apps links");
+        assert_eq!(mark("  äpfel"), "Ä");
+        assert_eq!(mark(""), "");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

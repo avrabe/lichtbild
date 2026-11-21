@@ -1238,3 +1238,22 @@
     b.setAttribute("data-now", next);
   });
 })();
+
+// The menu and the house's app switcher (REQ-NAV-002): a tap outside or
+// Escape closes them; opening one closes the other.
+(function () {
+  const panels = () => document.querySelectorAll("details.appmenu, details.appswitch");
+  document.addEventListener("click", function (e) {
+    panels().forEach(function (d) {
+      if (d.open && !d.contains(e.target)) d.open = false;
+    });
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape") panels().forEach(function (d) { d.open = false; });
+  });
+  panels().forEach(function (d) {
+    d.addEventListener("toggle", function () {
+      if (d.open) panels().forEach(function (o) { if (o !== d) o.open = false; });
+    });
+  });
+})();

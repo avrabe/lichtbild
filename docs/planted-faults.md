@@ -189,6 +189,7 @@ at nice 0.
 | F179 | REQ-MAP-003 | the map shades the wrong countries | `the_countries_page_and_the_map_of_one_country` |
 | F180 | REQ-FACE-004 | relations to people the viewer does not know are shown | `relations_between_people_are_seen_only_between_known_people` |
 | F181 | REQ-FACE-004 | a name taken off keeps its relations | `relations_between_people_are_seen_only_between_known_people` |
+| F184 | REQ-NAV-002 | the apps in the switcher lose their marks | `nav_switcher_is_in_every_page_header` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |

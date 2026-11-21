@@ -811,6 +811,7 @@ async fn viewer_explains_an_undecodable_heic() {
 }
 
 // rivet: verifies REQ-NAV-001
+// rivet: verifies REQ-NAV-002
 #[tokio::test]
 async fn nav_switcher_is_in_every_page_header() {
     let fx = fixture();
@@ -840,17 +841,35 @@ async fn nav_switcher_is_in_every_page_header() {
             .split("</header>")
             .next()
             .unwrap();
+        // A menu at the top right (REQ-NAV-002): home, then every app with
+        // its mark, name and description.
         assert!(
-            header.contains(r#"<nav class="apps"><a class="home" href="/">← home</a>"#),
+            header.contains(r#"<details class="appswitch">"#),
+            "{uri}: {header}"
+        );
+        assert!(
+            header.contains(r#"<a class="home" href="/"><span class="mark" aria-hidden="true">←</span><b>home</b><span>Home</span></a>"#),
             "{uri}: {header}"
         );
         assert!(
             header.contains(
-                r#"<a href="/lichtbild/" aria-current="page" title="photos">lichtbild</a>"#
+                r#"<a href="/lichtbild/" aria-current="page"><span class="mark" aria-hidden="true">L</span><b>lichtbild</b><span>photos</span></a>"#
             ),
             "{uri}"
         );
-        assert!(header.contains(r#"<a href="/other/">other app</a>"#));
+        assert!(header.contains(
+            r#"<a href="/other/"><span class="mark" aria-hidden="true">O</span><b>other app</b></a>"#
+        ));
+        assert_eq!(
+            header
+                .split("<details class=\"appswitch\">")
+                .nth(1)
+                .unwrap()
+                .matches("<a ")
+                .count(),
+            4,
+            "1 + apps links"
+        );
         // Links to other house apps are links, never resources the page loads.
         assert!(!header.contains("src="), "{uri}");
         assert_eq!(header.matches("href=\"https://").count(), 1);

@@ -117,6 +117,8 @@ artifacts:
         target: REQ-AUTH-002
       - type: satisfies
         target: REQ-NAV-001
+      - type: satisfies
+        target: REQ-NAV-002
 
   - id: FEAT-006
     type: feature

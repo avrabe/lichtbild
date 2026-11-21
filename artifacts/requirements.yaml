@@ -602,6 +602,24 @@ artifacts:
       priority: should
       category: interface
 
+  - id: REQ-NAV-002
+    type: requirement
+    title: The house's apps open from one menu at the top right
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: instead of a row of links, the nav v1 apps
+      open from one button at the top right (four dots) as a panel like
+      lichtbild's own menu: home first, then every app with a mark, its
+      name and its description, this app marked as current. The nav file
+      and its contract are unchanged (the same 1 + apps links); a tap
+      outside or Escape closes the panel, and it scrolls when taller than
+      the screen, as the app menu does. The same look is proposed to the
+      other house apps through the nav contract's owner.
+    fields:
+      priority: should
+      category: interface
+
   - id: REQ-MAP-003
     type: requirement
     title: The countries one's pictures were taken in

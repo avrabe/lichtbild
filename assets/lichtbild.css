@@ -91,10 +91,38 @@ header .brand::before {
 }
 
 /* nav v1: home link and app switcher (LICHTBILD_NAV), as in haus. */
-nav.apps { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-left: auto; font: 13px/1.4 var(--sans); letter-spacing: .06em; }
-nav.apps a { color: var(--ink-soft); text-decoration: none; }
-nav.apps a:hover { color: var(--shu); }
-nav.apps a[aria-current="page"] { color: var(--ink); font-weight: 600; }
+/* The house's app switcher (REQ-NAV-002): four dots, one per corner of
+   the house, the first in vermilion; a panel like the app menu. */
+details.appswitch { position: relative; margin-left: auto; }
+details.appswitch > summary {
+  list-style: none; cursor: pointer; width: 40px; height: 40px; border-radius: 10px;
+  display: grid; place-items: center; border: 1px solid transparent;
+}
+details.appswitch > summary::-webkit-details-marker { display: none; }
+details.appswitch > summary:hover, details.appswitch[open] > summary { border-color: var(--line); background: var(--paper-2); }
+details.appswitch .dots { display: grid; grid-template-columns: 7px 7px; gap: 4px; }
+details.appswitch .dots i { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-soft); }
+details.appswitch .dots i:first-child { background: var(--shu); }
+details.appswitch[open] .dots i { background: var(--shu); }
+details.appswitch > nav.apps {
+  position: absolute; right: 0; top: 48px; z-index: 30; display: flex; flex-direction: column; gap: 2px;
+  padding: 8px; width: min(300px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: var(--shadow);
+  max-height: calc(100vh - 120px); max-height: calc(100dvh - 120px); overflow-y: auto; overscroll-behavior: contain;
+}
+details.appswitch nav.apps a {
+  display: grid; grid-template-columns: 34px 1fr; column-gap: 12px; align-items: center;
+  padding: 8px 10px; border-radius: 10px; color: var(--ink); text-decoration: none;
+}
+details.appswitch nav.apps a:hover { background: var(--paper-2); }
+details.appswitch nav.apps a.home { border-bottom: 1px solid var(--line); border-radius: 10px 10px 0 0; margin-bottom: 4px; }
+details.appswitch .mark {
+  grid-row: span 2; width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center;
+  font: 500 17px/1 var(--serif); background: var(--paper-2); color: var(--ink); border: 1px solid var(--line);
+}
+details.appswitch a[aria-current="page"] .mark { background: var(--shu); color: var(--paper); border-color: var(--shu); }
+details.appswitch nav.apps b { font: 500 16px/1.2 var(--serif); letter-spacing: .06em; }
+details.appswitch nav.apps a > span:not(.mark) { font-size: 12px; color: var(--ink-faint); }
 
 main { max-width: 1400px; margin: 0 auto; padding: 8px 28px 96px; }
 h1 {
@@ -514,6 +542,9 @@ details.appmenu > ul {
   position: absolute; left: 0; top: 48px; z-index: 30; margin: 0; padding: 8px; list-style: none;
   width: min(300px, calc(100vw - 32px)); background: var(--paper); border: 1px solid var(--line);
   border-radius: 14px; box-shadow: var(--shadow);
+  /* Taller than the screen (an iPad held sideways): the panel scrolls, not the page. */
+  max-height: calc(100vh - 120px); max-height: calc(100dvh - 120px);
+  overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
 }
 details.appmenu li.sep { border-top: 1px solid var(--line); margin-top: 6px; padding-top: 6px; }
 details.appmenu li a, details.appmenu li button {
