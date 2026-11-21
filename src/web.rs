@@ -245,7 +245,12 @@ pub fn router(state: AppState) -> Router {
     };
     let hosts = state.allowed_hosts.clone();
     let login_state = state.clone();
+    let page_state = state.clone();
     app.with_state(state)
+        .layer(middleware::from_fn(move |req: Request, next: Next| {
+            let st = page_state.clone();
+            async move { refusal_page(&st, req, next).await }
+        }))
         .layer(middleware::from_fn(move |req: Request, next: Next| {
             let st = login_state.clone();
             async move { require_login(&st, req, next).await }
@@ -543,6 +548,56 @@ fn notice(st: &AppState, status: StatusCode, title: &str, html: &str) -> Respons
         page(&st.base_path, title, &body, &st.nav_html, "", "", ""),
     )
         .into_response()
+}
+
+/// A browser that navigated (a link, a form) and got a refusal as plain
+/// text or nothing sees it on a page with the header and a way back.
+/// Scripts (fetch, htmx) still get the bare text they show in place.
+async fn refusal_page(st: &AppState, req: Request, next: Next) -> Response {
+    let navigated = req
+        .headers()
+        .get("sec-fetch-mode")
+        .is_some_and(|v| v.as_bytes() == b"navigate");
+    let res = next.run(req).await;
+    let status = res.status();
+    let plain = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .is_none_or(|v| v.as_bytes().starts_with(b"text/plain"));
+    if !navigated || !status.is_client_error() || !plain {
+        return res;
+    }
+    let (parts, body) = res.into_parts();
+    let Ok(bytes) = axum::body::to_bytes(body, 16 * 1024).await else {
+        return Response::from_parts(parts, Body::empty());
+    };
+    let text = String::from_utf8_lossy(&bytes);
+    let text = text.trim();
+    let title = match status {
+        StatusCode::NOT_FOUND => "Not found",
+        StatusCode::FORBIDDEN | StatusCode::UNAUTHORIZED => "Not allowed",
+        _ => "That did not work",
+    };
+    let mut c = text.chars();
+    let said = match c.next() {
+        Some(f) => format!("{}{}", f.to_uppercase(), c.as_str()),
+        None => status.canonical_reason().unwrap_or("").to_string(),
+    };
+    let mut out = notice(
+        st,
+        status,
+        title,
+        &format!(
+            "{}</p>\n<p><a href=\"./\" class=\"goback\">← Back</a>",
+            esc(&said)
+        ),
+    );
+    for (k, v) in parts.headers.iter() {
+        if k != header::CONTENT_TYPE && k != header::CONTENT_LENGTH {
+            out.headers_mut().insert(k.clone(), v.clone());
+        }
+    }
+    out
 }
 
 async fn security_headers(req: Request, next: Next) -> Response {
@@ -2841,8 +2896,20 @@ pub fn render_search(
         what = if hits.len() == 1 { "result" } else { "results" },
         q = esc(q)
     );
+    const HINT: &str = "Search what was said in videos, the text in pictures, things (Katze, Fahrrad), places, dates (2021, Juli, July) and file names, or describe a picture in your own words (\u{201c}Kinder am Strand\u{201d}).";
     if q.trim().is_empty() {
-        return "<section class=\"results\"><p class=\"dim\">Search what was said in videos, the text in pictures, things (Katze, Fahrrad), places, dates (2021, Juli, July) and file names, or describe a picture in your own words (\u{201c}Kinder am Strand\u{201d}).</p></section>".into();
+        return format!("<section class=\"results\"><p class=\"dim\">{HINT}</p></section>");
+    }
+    if hits.is_empty() {
+        // Not a dead end: what to try, and where words and things are listed.
+        let fewer = if q.split_whitespace().count() > 1 {
+            "Every word must match; try fewer words. "
+        } else {
+            ""
+        };
+        s += &format!(
+            "<p class=\"dim\">{fewer}{HINT}</p><p class=\"dim\">See what there is: <a href=\"words\">Words</a> \u{b7} <a href=\"things\">Things</a> \u{b7} <a href=\"people\">People</a></p>"
+        );
     }
     for (h, rec) in hits {
         let id = h.id;
@@ -4706,10 +4773,18 @@ async fn words_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     body += "<div class=\"cloud\">";
     for (size, w) in cloud {
         body += &format!(
-            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"in {v} pictures and videos, {t} times\">{word}</a>",
+            "<a class=\"w s{size}\" href=\"search?q={q}\" title=\"{v}, {t}\">{word}</a>",
             q = esc(&w.word),
-            v = w.items,
-            t = w.times,
+            v = if w.items == 1 {
+                "in 1 picture or video".to_string()
+            } else {
+                format!("in {} pictures and videos", w.items)
+            },
+            t = if w.times == 1 {
+                "once".to_string()
+            } else {
+                format!("{} times", w.times)
+            },
             word = esc(&w.word)
         );
     }
@@ -5103,6 +5178,11 @@ async fn days_page(
     let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
+    // No days asked for: the timeline, where every day is.
+    if dq.day.is_none() && dq.from.is_none() && dq.to.is_none() && dq.md.is_none() {
+        // scope() accepted it: "all" or a label of letters, digits, - and _.
+        return Redirect::to(&format!("{}/t/{who}", st.base_path)).into_response();
+    }
     if let Some(d) = dq.day.take() {
         dq.from = Some(d.clone());
         dq.to = Some(d);
@@ -5760,7 +5840,10 @@ async fn person_page(
             "<form class=\"hiddennote\" method=\"post\" action=\"person/{pid}/hide\"><input type=\"hidden\" name=\"hidden\" value=\"0\"><span class=\"dim\">Hidden: not on the People page, in a photo's faces, in names or search. The photos stay.</span> <button type=\"submit\">Show again</button></form>"
         )
     } else {
-        relations_block(pid, &rels, &names)
+        // Someone else to relate to: a name in the list besides this one.
+        let others = names.matches("<option ").count()
+            - usize::from(names.contains(&format!("<option value=\"{name}\">")));
+        relations_block(pid, &rels, &names, others > 0)
     };
     let hide = if p.hidden {
         String::new()
@@ -6142,8 +6225,13 @@ async fn person_rename(
 const WEIGHTS: [(u8, &str); 3] = [(3, "close"), (2, "normal"), (1, "loose")];
 
 /// The relations list and the form to add one, on a person page.
-fn relations_block(pid: u64, rels: &[RelRow], names: &str) -> String {
+fn relations_block(pid: u64, rels: &[RelRow], names: &str, others: bool) -> String {
     let mut o = String::from("<section class=\"relations\"><h2>Relations</h2>");
+    if !others && rels.is_empty() {
+        return o
+            + "<p class=\"dim\">Relations are between named people, and no one else you know has a name yet. \
+               Name someone first: open <a href=\"people\">People</a> and give a face group a name.</p></section>";
+    }
     if rels.is_empty() {
         o += "<p class=\"dim\">None yet. Say how this person stands to someone else you know: partner, parent, schoolmate.</p>";
     } else {
@@ -6372,9 +6460,11 @@ fn render_faces(
         "<details class=\"faces\"><summary title=\"People in the picture\" aria-label=\"People in the picture\">☺ {}</summary><div class=\"kpanel\"><ul class=\"facelist\">",
         faces.len()
     );
-    for f in &faces {
+    let total = faces.len();
+    for (nth, f) in faces.iter().enumerate() {
         let k = f.key.1;
         let img = face_img(id, k);
+        let nth = nth + 1;
         let row = match f.who {
             crate::people::Who::Person(p) if names.contains_key(&p) => {
                 let not = format!(
@@ -6388,8 +6478,8 @@ fn render_faces(
                 )
             }
             _ => format!(
-                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>\
-                 <form method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" class=\"not\" title=\"A stranger: hide this face\">Hide</button></form>"
+                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of face {nth} of {total}\"><button type=\"submit\">Name</button></form>\
+                 <form method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" class=\"not\" title=\"A stranger: hide this face\" aria-label=\"Hide face {nth} of {total}\">Hide</button></form>"
             ),
         };
         o += &format!("<li>{img}<span>{row}</span></li>");

@@ -942,6 +942,32 @@ artifacts:
       - type: satisfies
         target: SSC-002
 
+  - id: REQ-WEB-028
+    type: requirement
+    title: A refusal or an empty answer says what to do next
+    status: implemented
+    release: v0.11.0
+    description: >
+      Review before v0.11.0. A link or form that is refused (a 4xx answer
+      as plain text or empty) shows the reason on a normal page with the
+      header and a Back link that returns to the form as typed; scripts
+      that save in place still get the bare reason. A search without
+      results says every word must match and links Words, Things and
+      People. /days/{who} without days opens the timeline. A person page
+      offers relations only when someone else is named, and otherwise says
+      to name someone first. In the photo, Escape closes an open panel,
+      menu or the keys list before it leaves the photo; keys typed in a
+      list box are not shortcuts; naming a face reopens the faces panel at
+      the next face without a name; each face row is labelled "face n of
+      m"; after a correction the keyboard stays on that row; on a phone
+      the info sheet scrolls and the photo sits above it.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
   - id: REQ-MEDIA-004
     type: requirement
     title: Speech in videos is transcribed in the house, with times

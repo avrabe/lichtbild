@@ -99,8 +99,19 @@
   document.addEventListener("keydown", function (e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (onVideo(e.target) && e.key !== "Escape") return;
-    // Typing in the search box is not navigation.
-    if (e.target && e.target.closest && e.target.closest("input, textarea, .suggest")) return;
+    // Escape closes what is open (a panel, the menu, the keys list) and
+    // leaves the photo only when nothing is.
+    if (e.key === "Escape") {
+      if (document.querySelector("dialog[open]")) return;
+      var open = document.querySelectorAll("details[open]");
+      if (open.length) {
+        open.forEach(function (d) { d.open = false; });
+        e.preventDefault();
+        return;
+      }
+    }
+    // Typing in a field or choosing in a list is not navigation.
+    if (e.target && e.target.closest && e.target.closest("input, textarea, select, .suggest")) return;
     if (e.key === "ArrowLeft") go("a.prev");
     else if (e.key === "ArrowRight") go("a.next");
     else if (e.key === "Escape") go("a.back");
@@ -723,7 +734,8 @@
   });
   document.addEventListener("keydown", function (e) {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    if (e.target && e.target.closest && e.target.closest("input, textarea")) return;
+    if (e.target && e.target.closest && e.target.closest("input, textarea, select")) return;
+    if (e.key === "Escape" && document.querySelector("dialog[open], details[open]")) return;
     if (e.key === " ") { e.preventDefault(); setPlaying(!playing); }
     else if (e.key === "ArrowRight") go(i + 1);
     else if (e.key === "ArrowLeft") go(i - 1);
@@ -1227,8 +1239,13 @@
         doc.querySelectorAll("form[action=\"" + action + "\"]").forEach(function (f) {
           if (!mine && key(f) === k) mine = f.closest("li") || f;
         });
-        if (mine) row.replaceWith(document.importNode(mine, true));
-        else row.classList.remove("saving");
+        if (mine) {
+          var now = document.importNode(mine, true);
+          row.replaceWith(now);
+          // Keyboard users stay on the row they changed, not at the top.
+          var first = now.querySelector("button, input, a[href]");
+          if (first && !window.matchMedia("(pointer: coarse)").matches) first.focus({ preventScroll: true });
+        } else row.classList.remove("saving");
       }
       // The boxes over the photo follow: a find left out is gone, one
       // named anew carries its new name; so do the counts above the list.
@@ -1289,5 +1306,33 @@
     d.addEventListener("toggle", function () {
       if (d.open) panels().forEach(function (o) { if (o !== d) o.open = false; });
     });
+  });
+})();
+
+// A refusal page's "Back" returns to the form as it was typed, when there
+// is a page to return to; otherwise the link opens the timeline.
+document.addEventListener("click", function (e) {
+  var a = e.target.closest && e.target.closest("a.goback");
+  if (a && window.history.length > 1) { e.preventDefault(); window.history.back(); }
+});
+
+// Naming faces one after another (REQ-FACE-002): a Name, Not or Hide in the
+// faces panel reloads the photo; the panel opens again at the next face
+// still without a name, so a group photo is not reopened face by face.
+(function () {
+  var KEY = "lichtbild.faces";
+  var faces = document.querySelector(".viewer details.faces");
+  try {
+    var was = window.sessionStorage.getItem(KEY);
+    window.sessionStorage.removeItem(KEY);
+    if (faces && was === window.location.pathname) {
+      faces.open = true;
+      var next = faces.querySelector("form.namef input[name=name]");
+      if (next && !window.matchMedia("(pointer: coarse)").matches) next.focus({ preventScroll: true });
+    }
+  } catch (e) { /* no storage: the panel stays closed */ }
+  if (!faces) return;
+  faces.addEventListener("submit", function () {
+    try { window.sessionStorage.setItem(KEY, window.location.pathname); } catch (e) { /* ignore */ }
   });
 })();

@@ -447,6 +447,8 @@ artifacts:
       - type: satisfies
         target: REQ-WEB-027
       - type: satisfies
+        target: REQ-WEB-028
+      - type: satisfies
         target: REQ-FACE-004
       - type: satisfies
         target: REQ-FACE-005

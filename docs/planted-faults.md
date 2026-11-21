@@ -203,6 +203,11 @@ at nice 0.
 | F195 | REQ-FIX-003 | a correction to an own word is not saved with its kind | `a_thing_can_be_named_with_the_houses_own_word` |
 | F196 | REQ-SCAN-006 | serve scans at start although LICHTBILD_SCAN_AT_START=0 | `serve_can_skip_the_scan_at_start` |
 | F197 | REQ-SCAN-006 | any value of LICHTBILD_SCAN_AT_START is taken as 1 | `scan_at_start_takes_only_0_or_1` |
+| F198 | REQ-WEB-028 | a refusal reached by a link stays a bare text | `refusals_and_empty_answers_say_what_to_do_next` |
+| F199 | REQ-WEB-015 | Escape leaves the photo with a panel open | `refusals_and_empty_answers_say_what_to_do_next` |
+| F200 | REQ-WEB-028 | the relations form is offered when no one else is named | `relations_between_people_are_seen_only_between_known_people` |
+| F201 | REQ-WEB-028 | a search without results gives no hint | `refusals_and_empty_answers_say_what_to_do_next` |
+| F202 | REQ-WEB-028 | /days/{who} without days is refused | `refusals_and_empty_answers_say_what_to_do_next` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
