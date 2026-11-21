@@ -190,6 +190,26 @@
       .catch(function () {});
   }
 
+  // The countries one's pictures were taken in, shaded under everything
+  // else (REQ-MAP-003); the outlines are lichtbild's own file.
+  var visited = (attr("data-visited") || "").split(",").filter(Boolean);
+  if (visited.length && attr("data-outlines")) {
+    map.on("load", function () {
+      fetch(attr("data-outlines")).then(function (r) {
+        if (!r.ok) throw new Error("outlines: " + r.status);
+        return r.json();
+      }).then(function (geo) {
+        var first = (map.getStyle().layers || []).filter(function (l) { return l.type === "symbol"; })[0];
+        var colour = dark ? "#e0644a" : "#c8452d";
+        var only = ["in", ["get", "iso"], ["literal", visited]];
+        map.addSource("visited", { type: "geojson", data: geo });
+        map.addLayer({ id: "visited-fill", type: "fill", source: "visited", filter: only,
+          paint: { "fill-color": colour, "fill-opacity": 0.16 } }, first && first.id);
+        map.addLayer({ id: "visited-line", type: "line", source: "visited", filter: only,
+          paint: { "line-color": colour, "line-opacity": 0.5, "line-width": 1 } }, first && first.id);
+      }).catch(function () {});
+    });
+  }
   map.on("load", load);
   map.on("moveend", load);
 

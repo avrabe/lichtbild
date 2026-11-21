@@ -25,6 +25,8 @@ const HTMX: &str = include_str!("../assets/htmx-2.0.4.min.js");
 const CSS: &str = include_str!("../assets/lichtbild.css");
 const JS: &str = include_str!("../assets/lichtbild.js");
 const THEME_JS: &str = include_str!("../assets/theme.js");
+/// Country outlines for the map (REQ-MAP-003, assets/VENDORED.md).
+pub const COUNTRIES: &str = include_str!("../assets/countries.geojson");
 const PAGE_SIZE: u32 = 240;
 
 pub const CSP: &str = "default-src 'self'; img-src 'self'; media-src 'self'; script-src 'self'; \
@@ -4928,6 +4930,7 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
         "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
         "theme.js" => (THEME_JS, "text/javascript; charset=utf-8"),
+        "countries.geojson" => (COUNTRIES, "application/geo+json"),
         other => match crate::map::static_asset(other) {
             Some(x) => x,
             None => return StatusCode::NOT_FOUND.into_response(),

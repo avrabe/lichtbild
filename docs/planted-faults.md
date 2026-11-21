@@ -186,6 +186,7 @@ at nice 0.
 | F176 | REQ-WEB-025 | slow answers are not named | `answers_are_timed_by_route` |
 | F177 | REQ-WEB-025 | answers are not recorded | `answers_are_timed_by_route` |
 | F178 | REQ-WEB-026 | the chosen pictures are ignored | `a_slideshow_of_the_chosen_pictures` |
+| F179 | REQ-MAP-003 | the map shades the wrong countries | `the_countries_page_and_the_map_of_one_country` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

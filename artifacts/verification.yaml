@@ -1719,3 +1719,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-026
+
+  - id: VER-122
+    type: verification
+    title: The country outlines are the pinned Natural Earth reduction, served as GeoJSON
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "country_outlines_match_their_pinned_sha256"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map country_outlines_match_their_pinned_sha256"
+    links:
+      - type: verifies
+        target: REQ-MAP-003

@@ -616,8 +616,9 @@ artifacts:
       timeline shows them (one copy each, nothing hidden, only the
       viewer's libraries). A country opens the map on its pictures alone;
       a malformed country code is refused. Without place names the page
-      says so. Shading the countries on the map itself needs country
-      outlines, which the house does not have yet.
+      says so. The map shades the countries of what the viewer sees, from
+      Natural Earth's public-domain outlines (owner's approval 2026-11-21),
+      pinned by sha256 and served by lichtbild.
     fields:
       priority: should
       category: functional

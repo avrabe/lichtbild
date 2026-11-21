@@ -54,3 +54,21 @@ from the deployment's copy of protomaps/basemaps-assets
 Download the new tarballs, check their integrity against the registry,
 copy the same `dist/` files into a new versioned directory, update the file
 names in `src/map.rs` and this table, and run `cargo test --test map`.
+
+## Country outlines
+
+`countries.geojson` shades the countries one's pictures were taken in on
+the map (REQ-MAP-003). It is derived from Natural Earth 1:110m Admin 0 –
+Countries, version 5.1.2, which is in the public domain
+(https://www.naturalearthdata.com/about/terms-of-use/). The source file,
+`geojson/ne_110m_admin_0_countries.geojson` at tag `v5.1.2` of
+nvkelso/natural-earth-vector, has sha256
+`6866c877d39cba9c357620878839b336d569f8c662d3cfab4cb1dbe2d39c977f`
+(downloaded 2026-11-21 with the owner's approval).
+
+It was reduced once, by hand, to what the map needs: each feature keeps
+only `iso` (the `ISO_A2_EH` code, the one GeoNames uses), and coordinates
+are rounded to 0.01 degrees. Two features without a code (N. Cyprus,
+Somaliland) were left out. 177 features in, 175 out; the result has sha256
+`8fe86adced05cac8c7475e9cc9463345701eff093f6f405f27b270a0b11c2588`, checked
+by `country_outlines_match_their_pinned_sha256` in `tests/map.rs`.
