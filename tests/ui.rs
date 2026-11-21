@@ -213,6 +213,263 @@ async fn the_status_page_shows_scan_and_transcription() {
     assert!(list.contains("the server's log says why"), "{list}");
 }
 
+// The steps say what runs now, what is done and what waits: faces wait
+// for the photos to be looked at, with time left, and the People page says
+// so instead of "no faces".
+// rivet: verifies REQ-WEB-009
+#[tokio::test]
+async fn the_status_page_shows_the_steps_and_what_waits() {
+    let mut e = env();
+    e.state.vision_on = true;
+    e.state.faces_on = true;
+    let st = e.state.status.clone();
+    let app = web::router(e.state.clone());
+    st.set_phase(Phase::Looking {
+        since: std::time::SystemTime::now() - std::time::Duration::from_secs(41 * 60),
+        done: 856,
+        total: 14635,
+        report: Default::default(),
+    });
+    let (_, list) = get(&app, "/status", true).await;
+    assert!(
+        list.contains("Step 3 of 4: looking at photos, 856 of 14635 in this pass, about 10 h 5"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"run\"><b>Looking at photos</b><i>now</i>"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"wait\"><b>Faces</b><i>waits</i>"),
+        "{list}"
+    );
+    assert!(
+        list.contains("Starts when every photo has been looked at."),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"done\"><b>Transcripts</b>")
+            || list.contains("<li class=\"off\"><b>Transcripts</b>"),
+        "{list}"
+    );
+    let (_, people) = get(&app, "/people", false).await;
+    assert!(
+        people.contains("Faces are looked for once every photo has been looked at; that pass is at 856 of 14635."),
+        "{people}"
+    );
+    assert!(!people.contains("not in the vision directory"), "{people}");
+
+    st.set_phase(Phase::Faces {
+        since: std::time::SystemTime::now(),
+        done: 10,
+        total: 100,
+        report: Default::default(),
+    });
+    let (_, list) = get(&app, "/status", true).await;
+    assert!(
+        list.contains("Step 4 of 4: looking for faces, 10 of 100 photos"),
+        "{list}"
+    );
+    assert!(
+        list.contains("<li class=\"run\"><b>Faces</b><i>now</i>"),
+        "{list}"
+    );
+    let (_, people) = get(&app, "/people", false).await;
+    assert!(
+        people.contains("Looking for faces now: 10 of 100 photos."),
+        "{people}"
+    );
+}
+
+// A video's transcript plays along as captions: a track on the video, and
+// WebVTT cues with times; a photo, or an unknown item, has none.
+// rivet: verifies REQ-WEB-022
+#[tokio::test]
+async fn a_video_plays_with_its_transcript_as_captions() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    assert!(
+        page.contains(&format!(
+            "<track kind=\"captions\" src=\"captions/{}\" srclang=\"de\" label=\"What is said\" default></video>",
+            e.video
+        )),
+        "{page}"
+    );
+    let (s, vtt) = get(&app, &format!("/captions/{}", e.video), false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(vtt.starts_with("WEBVTT\n"), "{vtt}");
+    assert!(
+        vtt.contains("\n00:00:01.000 --> 00:00:02.000\nWir fahren heute zum Leuchtturm, und der Leuchtturm ist hoch.\n"),
+        "{vtt}"
+    );
+    assert_eq!(vtt.matches(" --> ").count(), 2, "{vtt}");
+    let photo = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.video.is_none() && r.label == "p1")
+        .unwrap()
+        .0;
+    assert_eq!(
+        get(&app, &format!("/captions/{photo}"), false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get(&app, "/captions/999999", false).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let (_, page) = get(&app, &format!("/v/p1/{photo}"), false).await;
+    assert!(!page.contains("<track"), "{page}");
+}
+
+// The viewer's script ships what has no server side: every panel over the
+// photo can move below it, and a correction is saved in place, keeping the
+// other rows. (This checks the served script, not a browser run.)
+// rivet: verifies REQ-WEB-023
+#[tokio::test]
+async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (s, js) = get(&app, "/static/lichtbild.js", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        js.contains(r#"viewer.querySelectorAll(".vbar .tpanel, .vbar .xpanel, .vbar .kpanel, .vbar dl.meta")"#),
+        "every panel kind moves below"
+    );
+    assert!(js.contains(r#"var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };"#));
+    assert!(js.contains("if (mine) row.replaceWith(document.importNode(mine, true));"));
+    let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
+    assert!(
+        page.contains("<section class=\"under\" hidden></section>"),
+        "{page}"
+    );
+    assert!(page.contains("<dl class=\"meta\">"), "{page}");
+}
+
+// Day or night: every page loads the theme script before its styles (so a
+// choice does not flash), the menu has the switch, and the styles hold a
+// night and a day that override the system's.
+// rivet: verifies REQ-WEB-024
+#[tokio::test]
+async fn day_or_night_is_the_persons_choice() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    for uri in ["/", "/status", &format!("/v/p1/{}", e.video)] {
+        let (_, page) = get(&app, uri, false).await;
+        let theme = page.find("<script src=\"static/theme.js?v=").expect(uri);
+        let css = page
+            .find("<link rel=\"stylesheet\" href=\"static/lichtbild.css")
+            .expect(uri);
+        assert!(theme < css, "{uri}: theme after styles");
+        assert!(
+            !page[theme..theme + 60].contains("defer"),
+            "{uri}: must run before drawing"
+        );
+        assert!(
+            page.contains(
+                "<button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b>"
+            ),
+            "{uri}"
+        );
+    }
+    let (s, js) = get(&app, "/static/theme.js", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(js.contains(r#"if (t === "day" || t === "night") document.documentElement.setAttribute("data-theme", t);"#));
+    let (_, css) = get(&app, "/static/lichtbild.css", false).await;
+    assert!(
+        css.contains(":root:not([data-theme=\"day\"]) {"),
+        "the system's night yields to day"
+    );
+    assert!(
+        css.contains(":root[data-theme=\"night\"] {\n  --paper: #16140f;"),
+        "night by choice"
+    );
+}
+
+// Every answer is timed by its route, never its ids: the answer says how
+// long it took (Server-Timing) and the status page shows the last hour's
+// pages and pictures; slow ones are named by route.
+// rivet: verifies REQ-WEB-025
+#[tokio::test]
+async fn answers_are_timed_by_route() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let r = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/v/p1/{}", e.video))
+                .header("host", "localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let st = r.headers()["server-timing"].to_str().unwrap().to_string();
+    assert!(st.starts_with("app;dur="), "{st}");
+    get(&app, &format!("/thumb/{}", e.video), false).await;
+    get(&app, "/static/lichtbild.css", false).await;
+    e.state
+        .timings
+        .record("/search", std::time::Duration::from_millis(2400));
+    let (_, list) = get(&app, "/status", true).await;
+    let at = list.find("<dt>Answers</dt><dd>").expect("answers row");
+    let row = &list[at..at + list[at..].find("</dd>").unwrap()];
+    // The viewer and the search; the status page is still being answered.
+    assert!(row.contains("2 pages: half within"), "{row}");
+    assert!(
+        row.contains("slower than a second: <code>/search</code> 2.4 s (1×)"),
+        "{row}"
+    );
+    assert!(row.contains("1 picture: half within"), "{row}");
+    assert!(!row.contains(&format!("/{}", e.video)), "an id in {row}");
+}
+
+// A slideshow of the chosen pictures: only those, only photos, only of the
+// timeline's libraries; the selection bar offers it.
+// rivet: verifies REQ-WEB-026
+#[tokio::test]
+async fn a_slideshow_of_the_chosen_pictures() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let all = e.idx.all().unwrap();
+    let photo = |l: &str| {
+        all.iter()
+            .find(|(_, r)| r.label == l && r.video.is_none() && !r.missing && r.thumb == "ok")
+            .unwrap()
+            .0
+    };
+    let (p1, p2) = (photo("p1"), photo("p2"));
+    let slides = |page: &str| -> Vec<u64> {
+        page.split("<li data-src")
+            .skip(1)
+            .filter_map(|s| {
+                let at = s.find("data-href=\"v/")? + 13;
+                let rest = &s[at..];
+                let rest = &rest[rest.find('/')? + 1..];
+                rest[..rest.find('"')?].parse().ok()
+            })
+            .collect()
+    };
+    let (s, page) = get(&app, &format!("/show/p1?ids={p1},{p2},{}", e.video), false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(slides(&page), vec![p1], "{page}");
+    let (_, page) = get(&app, &format!("/show/all?ids={p2}%2C{p1}"), false).await;
+    let mut both = slides(&page);
+    both.sort();
+    let mut want = vec![p1, p2];
+    want.sort();
+    assert_eq!(both, want, "{page}");
+    let (_, page) = get(&app, "/show/p1?ids=nonsense", false).await;
+    assert!(slides(&page).is_empty(), "{page}");
+    let (_, js) = get(&app, "/static/lichtbild.js", false).await;
+    assert!(js.contains(
+        r#"window.location.href = "show/" + who + "?ids=" + encodeURIComponent(list.join(","));"#
+    ));
+}
+
 // The words cloud: frequent words of the viewer's videos, without common
 // words, each a search; nothing from a library the viewer may not see.
 // rivet: verifies REQ-WORDS-001

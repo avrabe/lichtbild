@@ -474,7 +474,11 @@ artifacts:
       and the version and uptime. It refreshes itself and shows counts and
       times only, never paths, file names or error text; transcript counts
       cover the viewer's libraries, and totals over all libraries are shown
-      only to someone who may see all of them.
+      only to someone who may see all of them. Owner report 2026-11-20
+      (v0.9.0): the work is shown as four steps in order (scan,
+      transcripts, looking at photos, faces), each done, running, waiting
+      or off, with its totals, this pass's progress and the time left; the
+      People page says when faces are still waiting for the look pass.
     fields:
       priority: should
       category: functional
@@ -597,6 +601,49 @@ artifacts:
     fields:
       priority: should
       category: interface
+
+  - id: REQ-MAP-003
+    type: requirement
+    title: The countries one's pictures were taken in
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: mark the countries visited. The Countries
+      page lists every country the viewer's pictures were taken in, by
+      the offline place names' nearest town to each position (recorded,
+      set by hand or estimated), with its flag, how many pictures, on how
+      many days and in which years, most pictures first, counted as the
+      timeline shows them (one copy each, nothing hidden, only the
+      viewer's libraries). A country opens the map on its pictures alone;
+      a malformed country code is refused. Without place names the page
+      says so. Shading the countries on the map itself needs country
+      outlines, which the house does not have yet.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-MAP-002
+    type: requirement
+    title: The map narrows to a trip or a time range
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: select the trips on the map, and a time
+      slider for a rough range. The map offers the viewer's trips (as the
+      Trips page finds them) and a slider over the months that have a
+      position; a trip opens the map on its pictures alone, the slider
+      narrows the clusters in place. The clusters and the page's count
+      hold only pictures of those days, scoped as before; a malformed or
+      backward range is refused.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
 
   - id: REQ-MAP-001
     type: requirement
@@ -958,6 +1005,165 @@ artifacts:
       "♥" or "Favoriten" next to other words keeps only favourites, alone
       it opens the Favourites page, and a partly typed "Fav" is suggested
       to whoever has favourites. Nothing in the libraries changes.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-026
+    type: requirement
+    title: A slideshow of the chosen pictures
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: a slideshow of the pictures selected. The
+      selection bar of a timeline offers a slideshow of the chosen
+      pictures: only those, only photos, only of that timeline's
+      libraries and not hidden; anything else in the list is left out.
+      On a TV it plays through the device's own screen mirroring
+      (AirPlay); casting to other receivers would need a script from
+      another host, which the same-origin rule does not allow.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-025
+    type: requirement
+    title: How quickly the server answers is measured and shown
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner report 2026-11-20: the system sometimes feels unresponsive, and
+      there should be a measure (KPI) of it. Every answer is timed by its
+      route (the template, never ids or the query), kept for the last hour
+      in memory, sent back as Server-Timing, and an answer slower than a
+      second is logged by route. The status page shows, for pages and for
+      pictures, how many answers, the median and the 95th percentile, and
+      the slowest routes over a second. The status page's own counts,
+      which read every item, are kept for a minute so an open status page
+      does not keep the index busy.
+    fields:
+      priority: should
+      category: non-functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-024
+    type: requirement
+    title: Day or night is the person's choice
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: a day and a night view. The menu switches
+      between auto (the device's setting), day and night; the choice is
+      kept in the browser and applied before the page is drawn, the map
+      follows it, and nothing is sent to the server.
+    fields:
+      priority: could
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-023
+    type: requirement
+    title: Every panel over the photo can lie below it, and corrections save in place
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner report 2026-11-20: everything overlapping the photo should be
+      possible to move down; and changing several corrections lost what
+      was typed in the other rows. Each panel the viewer opens over the
+      photo (transcript, text, things, people, info) offers to lie below
+      the photo instead, all together, kept in the browser. A correction
+      is sent in the background and only its own row (or, for a kind
+      never in the house, its list) is replaced, so the other rows keep
+      what was typed and the panel stays open; without JavaScript the
+      forms post as before.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-022
+    type: requirement
+    title: A video plays with its transcript as captions
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: while a video plays, see what is said
+      without scrolling down to the transcript. A video with a transcript
+      carries it as a captions track (WebVTT, the transcript's times and
+      text, in its language), shown by default and turned off with the
+      player's own control, also in full screen and on a TV. The captions
+      are served only to whoever may see the video; a photo or an unknown
+      item has none.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-021
+    type: requirement
+    title: The best shot leads its series
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: similar photos grouped, ideally selecting
+      the best shot. In the timeline and on a day's page a series of
+      look-alike shots is led by the viewer's favourite among them, else
+      by the sharpest, well-exposed one; the rest follow in their order.
+      Opened, the series offers to keep the best and hide the others for
+      this person only, and to show them again.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-020
+    type: requirement
+    title: The hidden list sorts, narrows and shows several again
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: in the hidden view, select several and sort
+      by name or date or a word. The hidden list orders newest first,
+      oldest first or by file name, keeps only items whose file name or
+      date holds a word, and shows the chosen ones again at once, back to
+      the same order and word. File names come only from the viewer's own
+      library; an item of a granted library shows its date alone, and its
+      name does not find it.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-019
+    type: requirement
+    title: From a day to the days before and after, or any day
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: on the day view, choose any day and browse
+      forwards and backwards. A day (or a trip's days) links to the
+      nearest earlier and later day with a picture the viewer would see
+      there (one copy each, nothing hidden, only their libraries), and a
+      date picker opens any day; ← and → step a day. A malformed date is
+      refused.
     fields:
       priority: should
       category: functional

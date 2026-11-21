@@ -128,6 +128,36 @@ impl Places {
     /// The nearest town within about two degrees, labelled
     /// "Name, Region, Country" with whatever names are known.
     pub fn nearest(&self, lat: f64, lon: f64) -> Option<Nearest> {
+        let (i, km) = self.nearest_index(lat, lon)?;
+        let pl = &self.places[i as usize];
+        let mut parts = vec![pl.name.clone()];
+        if let Some(a) = self.admin1.get(&format!("{}.{}", pl.country, pl.admin1)) {
+            if a != &pl.name {
+                parts.push(a.clone());
+            }
+        }
+        parts.push(self.country_name(&pl.country));
+        Some(Nearest {
+            label: parts.join(", "),
+            km,
+        })
+    }
+
+    /// The country of the nearest town (REQ-MAP-003): its ISO code.
+    pub fn country(&self, lat: f64, lon: f64) -> Option<&str> {
+        let (i, _) = self.nearest_index(lat, lon)?;
+        Some(self.places[i as usize].country.as_str())
+    }
+
+    /// A country's name from countryInfo.txt, else its code.
+    pub fn country_name(&self, code: &str) -> String {
+        self.countries
+            .get(code)
+            .cloned()
+            .unwrap_or_else(|| code.to_string())
+    }
+
+    fn nearest_index(&self, lat: f64, lon: f64) -> Option<(u32, f64)> {
         let (cy, cx) = cell(lat, lon);
         let mut best: Option<(u32, f64)> = None;
         // Ring 1 (3x3 cells) holds the answer unless the area is empty;
@@ -152,24 +182,7 @@ impl Places {
                 break;
             }
         }
-        let (i, km) = best?;
-        let pl = &self.places[i as usize];
-        let mut parts = vec![pl.name.clone()];
-        if let Some(a) = self.admin1.get(&format!("{}.{}", pl.country, pl.admin1)) {
-            if a != &pl.name {
-                parts.push(a.clone());
-            }
-        }
-        parts.push(
-            self.countries
-                .get(&pl.country)
-                .cloned()
-                .unwrap_or_else(|| pl.country.clone()),
-        );
-        Some(Nearest {
-            label: parts.join(", "),
-            km,
-        })
+        best
     }
 }
 

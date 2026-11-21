@@ -1548,3 +1548,174 @@ artifacts:
         target: REQ-FIX-001
       - type: verifies
         target: REQ-FIX-002
+
+  - id: VER-110
+    type: verification
+    title: A day links to the days before and after with pictures, and the picker opens any day
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "days_away_from_home_are_one_trip_named_by_place"
+      test-location: tests/trips.rs
+      steps:
+        - run: "cargo test --test trips days_away_from_home_are_one_trip_named_by_place"
+    links:
+      - type: verifies
+        target: REQ-WEB-019
+
+
+  - id: VER-111
+    type: verification
+    title: The hidden list sorts by date and name, narrows by a word and shows several again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_hidden_list_sorts_narrows_and_shows_several_again"
+      test-location: tests/dups.rs
+      steps:
+        - run: "cargo test --test dups the_hidden_list_sorts_narrows_and_shows_several_again"
+    links:
+      - type: verifies
+        target: REQ-WEB-020
+
+  - id: VER-112
+    type: verification
+    title: The hidden list names files of one's own library only
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_hidden_list_names_only_ones_own_files"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth the_hidden_list_names_only_ones_own_files"
+    links:
+      - type: verifies
+        target: REQ-WEB-020
+
+  - id: VER-113
+    type: verification
+    title: The sharpest shot or a favourite leads its series, with the offer to hide the others
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_best_shot_leads_its_series"
+      test-location: tests/series.rs
+      steps:
+        - run: "cargo test --test series the_best_shot_leads_its_series"
+        - run: "cargo test --lib best::"
+    links:
+      - type: verifies
+        target: REQ-WEB-021
+
+  - id: VER-114
+    type: verification
+    title: A time range or a trip narrows the map's clusters and count
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_time_range_or_a_trip_narrows_the_map"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map a_time_range_or_a_trip_narrows_the_map"
+    links:
+      - type: verifies
+        target: REQ-MAP-002
+
+  - id: VER-115
+    type: verification
+    title: The countries page counts by nearest town and a country narrows the map
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_countries_page_and_the_map_of_one_country"
+      test-location: tests/map.rs
+      steps:
+        - run: "cargo test --test map the_countries_page_and_the_map_of_one_country"
+    links:
+      - type: verifies
+        target: REQ-MAP-003
+
+  - id: VER-116
+    type: verification
+    title: The status page shows the four steps, what runs and what waits, and the People page says faces wait
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_status_page_shows_the_steps_and_what_waits"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_status_page_shows_the_steps_and_what_waits"
+    links:
+      - type: verifies
+        target: REQ-WEB-009
+
+  - id: VER-117
+    type: verification
+    title: A video's transcript is a captions track with timed WebVTT cues
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_video_plays_with_its_transcript_as_captions"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_video_plays_with_its_transcript_as_captions"
+    links:
+      - type: verifies
+        target: REQ-WEB-022
+
+  - id: VER-118
+    type: verification
+    title: The served viewer script moves every panel below and saves corrections in place (script content, not a browser run)
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_viewer_script_moves_every_panel_below_and_saves_in_place"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui the_viewer_script_moves_every_panel_below_and_saves_in_place"
+    links:
+      - type: verifies
+        target: REQ-WEB-023
+
+  - id: VER-119
+    type: verification
+    title: Pages load the theme before the styles, the menu switches, and the styles hold day and night by choice
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "day_or_night_is_the_persons_choice"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui day_or_night_is_the_persons_choice"
+    links:
+      - type: verifies
+        target: REQ-WEB-024
+
+  - id: VER-120
+    type: verification
+    title: Answers are timed by route, sent as Server-Timing, and summarised on the status page
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "answers_are_timed_by_route"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui answers_are_timed_by_route"
+        - run: "cargo test --lib timing::"
+    links:
+      - type: verifies
+        target: REQ-WEB-025
+
+  - id: VER-121
+    type: verification
+    title: A slideshow shows only the chosen photos of the timeline's libraries
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_slideshow_of_the_chosen_pictures"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui a_slideshow_of_the_chosen_pictures"
+    links:
+      - type: verifies
+        target: REQ-WEB-026

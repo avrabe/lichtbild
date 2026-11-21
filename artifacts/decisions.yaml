@@ -833,3 +833,35 @@ artifacts:
         target: REQ-FIX-001
       - type: satisfies
         target: REQ-FIX-002
+
+  - id: DD-027
+    type: design-decision
+    title: The best shot of a series by sharpness and exposure of its thumbnail
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner request 2026-11-20: group similar photos and ideally select the
+      best shot. Series already group look-alike shots of one
+      moment; which of them leads was simply the newest.
+    fields:
+      decision: >
+        Each series is led by its best shot: a favourite of the viewer
+        first, else the highest score, where the score is the log variance
+        of the Laplacian over the thumbnail's grey values (edge energy:
+        blur and shake lower it) less a penalty for a mean far from mid
+        grey and for clipped pixels. Scores are read from the thumbnails
+        once per content hash and kept in memory. The others follow in
+        their order; opened, the series offers to keep the best and hide
+        the others for this person, with a way back.
+      rationale: >
+        Within one moment the scene is the same, so edge energy compares
+        focus and shake fairly, and the thumbnails are already on disk:
+        no model, nothing stored, about a millisecond a picture.
+      alternatives: >
+        An aesthetic model (another large download, slow on the Pi, and
+        its taste is not the house's); eyes-open and smile from the face
+        model (only for portraits; can come later on top of this score);
+        storing the scores in redb (not worth it for a millisecond).
+    links:
+      - type: satisfies
+        target: REQ-WEB-021

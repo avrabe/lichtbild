@@ -294,17 +294,18 @@
     if (l.panel) l.panel.addEventListener("toggle", showLayers);
   });
   viewer.addEventListener("lb-layout", showLayers);
-  // A find in "Something wrong?" lights up its box (REQ-FIX-001).
-  viewer.querySelectorAll("details.things li[data-n]").forEach(function (li) {
+  // A find in "Something wrong?" lights up its box (REQ-FIX-001); rows
+  // are replaced when a correction is saved, so this listens on the viewer.
+  function hot(e, on) {
+    var li = e.target.closest && e.target.closest("details.things li[data-n]");
+    if (!li) return;
     var box = viewer.querySelector(".thinglayer a[data-n=\"" + li.getAttribute("data-n") + "\"]");
-    if (!box) return;
-    function on() { box.classList.add("hot"); }
-    function off() { box.classList.remove("hot"); }
-    li.addEventListener("mouseenter", on);
-    li.addEventListener("mouseleave", off);
-    li.addEventListener("focusin", on);
-    li.addEventListener("focusout", off);
-  });
+    if (box) box.classList.toggle("hot", on);
+  }
+  viewer.addEventListener("mouseover", function (e) { hot(e, true); });
+  viewer.addEventListener("mouseout", function (e) { hot(e, false); });
+  viewer.addEventListener("focusin", function (e) { hot(e, true); });
+  viewer.addEventListener("focusout", function (e) { hot(e, false); });
   if (img.complete) showLayers(); else img.addEventListener("load", showLayers);
   window.addEventListener("resize", showLayers);
   function apply() {
@@ -407,17 +408,36 @@
   }, true);
 })();
 
-// Transcript and text in the picture: copy them, and show them below the
-// picture instead of over it (REQ-TEXT-001). The choice is kept in this
-// browser only.
+// Transcript and text in the picture: copy them; and every panel over the
+// picture (transcript, text, things, people, info) can be shown below it
+// instead (REQ-TEXT-001, REQ-WEB-023). The choice is kept in this browser
+// only.
 (function () {
   "use strict";
   var viewer = document.querySelector(".viewer");
   var under = viewer && viewer.querySelector("section.under");
   if (!under) return;
-  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".tpanel, .xpanel"));
+  var panels = Array.prototype.slice.call(viewer.querySelectorAll(".vbar .tpanel, .vbar .xpanel, .vbar .kpanel, .vbar dl.meta"));
   if (!panels.length) return;
   var homes = panels.map(function (p) { return p.parentNode; });
+  // Panels without their own tools get a "below" button.
+  panels.forEach(function (p) {
+    if (p.querySelector(".ptools")) return;
+    var tools = document.createElement("div");
+    tools.className = "ptools";
+    var b = document.createElement("button");
+    b.type = "button";
+    b.className = "place";
+    b.textContent = "Show below the photo";
+    tools.appendChild(b);
+    p.insertBefore(tools, p.firstChild);
+    p.setAttribute("data-below", "Show below the photo");
+    p.setAttribute("data-over", "Show over the photo");
+    if (!p.getAttribute("data-title")) {
+      var s = p.parentNode.querySelector("summary");
+      p.setAttribute("data-title", (s && (s.getAttribute("aria-label") || s.textContent)) || "");
+    }
+  });
   var KEY = "lichtbild.below";
   function stored() {
     try { return window.localStorage.getItem(KEY) === "1"; } catch (e) { return false; }
@@ -465,6 +485,7 @@
     under.hidden = !below;
     panels.forEach(function (p, i) {
       var label = p.querySelector("button.place");
+      homes[i].classList.toggle("moved", below);
       if (below) {
         var box = document.createElement("div");
         box.className = "ublock";
@@ -486,7 +507,8 @@
     var tools = p.querySelector(".ptools");
     if (!tools) return;
     tools.hidden = false;
-    tools.querySelector("button.copy").addEventListener("click", function (e) {
+    var cp = tools.querySelector("button.copy");
+    if (cp) cp.addEventListener("click", function (e) {
       copy(textOf(p), e.currentTarget);
     });
     tools.querySelector("button.place").addEventListener("click", function () {
@@ -766,10 +788,19 @@
       opts.innerHTML + '<option value="new">New album\u2026</option></select>' +
       '<input type="text" class="selname" maxlength="80" placeholder="Album name" aria-label="Name of the new album" hidden>' +
       '<button type="button" class="seladd" hidden>Add</button>' : '') +
+    '<button type="button" class="selshow">\u25b6 Slideshow</button>' +
     '<button type="button" class="selhide">Hide for me</button>' +
     '<button type="button" class="selcancel">Cancel</button>';
   document.body.appendChild(bar);
   var count = bar.querySelector(".seln"), hideBtn = bar.querySelector(".selhide");
+  // A slideshow of the chosen pictures (REQ-WEB-026), in this timeline.
+  bar.querySelector(".selshow").addEventListener("click", function () {
+    var list = chosen();
+    if (!list.length) return;
+    var own = document.querySelector('.thead a[href^="show/"]');
+    var who = own ? own.getAttribute("href").split("?")[0].slice(5) : "all";
+    window.location.href = "show/" + who + "?ids=" + encodeURIComponent(list.join(","));
+  });
   var favBtn = bar.querySelector(".selfav");
   var pick = bar.querySelector(".selalbum"), nameIn = bar.querySelector(".selname");
   var addBtn = bar.querySelector(".seladd"), outBtn = bar.querySelector(".selout");
@@ -1061,5 +1092,149 @@
     var menu = b.closest("details");
     if (menu) menu.open = false;
     open();
+  });
+})();
+
+// Days (REQ-WEB-019): picking a date goes there; ←/→ step a day.
+(function () {
+  const pick = document.querySelector('form.daypick input[type=date]');
+  if (!pick) return;
+  pick.addEventListener('change', () => { if (pick.value) pick.form.submit(); });
+  document.addEventListener('keydown', (e) => {
+    if (e.target.closest('input, textarea, select') || e.metaKey || e.ctrlKey || e.altKey) return;
+    const a = document.querySelector(e.key === 'ArrowLeft' ? '.daynav a[rel=prev]' : e.key === 'ArrowRight' ? '.daynav a[rel=next]' : null);
+    if (a) { e.preventDefault(); location.href = a.href; }
+  });
+})();
+
+// Hidden (REQ-WEB-020): choose several, then show them again at once.
+(function () {
+  const form = document.querySelector('form.hidmany');
+  if (!form) return;
+  const boxes = () => [...document.querySelectorAll('.hiddenlist input[type=checkbox]')];
+  const again = form.querySelector('button.again');
+  const n = form.querySelector('.n');
+  const sync = () => {
+    const on = boxes().filter((b) => b.checked);
+    form.elements.ids.value = on.map((b) => b.value).join(',');
+    again.disabled = on.length === 0;
+    n.textContent = on.length ? on.length + ' chosen' : '';
+  };
+  document.querySelector('.hiddenlist').addEventListener('change', sync);
+  form.querySelector('button.all').addEventListener('click', () => {
+    const all = boxes();
+    const to = !all.every((b) => b.checked);
+    all.forEach((b) => { b.checked = to; });
+    sync();
+  });
+  sync();
+})();
+
+// The best shot of a series (REQ-WEB-021): keep it, hide the others for
+// this person, with a way back.
+(function () {
+  "use strict";
+  function post(url, ids) {
+    return fetch(url, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: "ids=" + encodeURIComponent(ids)
+    }).then(function (r) { if (!r.ok) throw new Error(r.status); });
+  }
+  document.addEventListener("click", function (e) {
+    var b = e.target.closest && e.target.closest("button.keepbest");
+    if (!b) return;
+    e.preventDefault();
+    var series = b.closest(".series");
+    if (b.dataset.done) {
+      b.disabled = true;
+      post("unhide-many", b.dataset.ids).then(function () { location.reload(); },
+        function () { b.disabled = false; });
+      return;
+    }
+    b.disabled = true;
+    post("hide-many", b.dataset.ids).then(function () {
+      b.dataset.ids.split(",").forEach(function (id) {
+        var t = document.getElementById("i" + id);
+        if (t) t.hidden = true;
+      });
+      var stack = series && series.querySelector(".stack");
+      if (stack) stack.hidden = true;
+      b.dataset.done = "1";
+      b.textContent = "Hidden. Show them again";
+      b.disabled = false;
+    }, function () { b.disabled = false; b.textContent = "Could not hide, try again"; });
+  });
+})();
+
+// Corrections (REQ-FIX-001, REQ-FIX-002) are saved in place: only the row
+// that was sent changes, so what was typed in the other rows stays, and the
+// panel stays open. Without JavaScript the forms post and come back.
+(function () {
+  "use strict";
+  var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };
+  function key(form) {
+    var n = form.elements.n;
+    return form.getAttribute("action") + "#" + (n ? n.value : "");
+  }
+  document.addEventListener("submit", function (e) {
+    var form = e.target;
+    var action = form.getAttribute && form.getAttribute("action");
+    if (!KINDS[action] || !window.fetch || !window.DOMParser) return;
+    e.preventDefault();
+    var body = new URLSearchParams(new FormData(form));
+    if (e.submitter && e.submitter.name) body.append(e.submitter.name, e.submitter.value);
+    var row = form.closest("li") || form;
+    row.classList.add("saving");
+    fetch(action, {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: body.toString()
+    }).then(function (r) {
+      if (!r.ok) throw new Error(r.status);
+      return r.text();
+    }).then(function (html) {
+      var doc = new DOMParser().parseFromString(html, "text/html");
+      if (action === "fix/off") {
+        // A whole kind changed: every row of the list and every box.
+        var list = form.closest("details.fix");
+        var fresh = list && doc.querySelector("details.things details.fix");
+        if (fresh) { list.innerHTML = fresh.innerHTML; list.open = true; }
+      } else {
+        var k = key(form), mine = null;
+        doc.querySelectorAll("form[action=\"" + action + "\"]").forEach(function (f) {
+          if (!mine && key(f) === k) mine = f.closest("li") || f;
+        });
+        if (mine) row.replaceWith(document.importNode(mine, true));
+        else row.classList.remove("saving");
+      }
+      // The boxes over the photo follow: a find left out is gone.
+      document.querySelectorAll(".thinglayer a[data-n]").forEach(function (a) {
+        var b = doc.querySelector(".thinglayer a[data-n=\"" + a.getAttribute("data-n") + "\"]");
+        if (b) a.className = b.className;
+      });
+    }).catch(function () {
+      row.classList.remove("saving");
+      row.classList.add("failed");
+    });
+  });
+})();
+
+// Day or night (REQ-WEB-024): the menu switch goes auto → day → night.
+(function () {
+  "use strict";
+  var b = document.querySelector(".appmenu button.theme");
+  if (!b) return;
+  var ORDER = ["auto", "day", "night"];
+  var root = document.documentElement;
+  function now() { return root.getAttribute("data-theme") || "auto"; }
+  b.setAttribute("data-now", now());
+  b.addEventListener("click", function () {
+    var next = ORDER[(ORDER.indexOf(now()) + 1) % ORDER.length];
+    if (next === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", next);
+    try { window.localStorage.setItem("lichtbild.theme", next); } catch (e) { /* private mode */ }
+    b.setAttribute("data-now", next);
   });
 })();

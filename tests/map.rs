@@ -782,3 +782,183 @@ fn vendored_map_assets_match_their_pinned_sha256() {
         );
     }
 }
+
+// A time range or a trip narrows the map (REQ-MAP-002): the clusters and
+// the page's count hold only those days; the slider spans the months with
+// a position; malformed or backward days are refused.
+// rivet: verifies REQ-MAP-002
+#[tokio::test]
+async fn a_time_range_or_a_trip_narrows_the_map() {
+    let (_fx, cfg, idx) = scanned();
+    let mut state = AppState::new(&cfg, idx.clone());
+    state.map = Arc::new(map::MapState::new(&MapFiles {
+        pmtiles: Some(cfg.data_dir.join("x.pmtiles")),
+        assets: None,
+    }));
+    let app = web::router(state);
+    let n = |r: &Resp| listed(&serde_json::from_slice(&r.body).unwrap()).1;
+    // p1: 15 June 2021, 1 August 2022; p2: 2 January and 2 February 2023.
+    for (q, want) in [
+        ("from=2023-01-01&to=2023-01-31", 1),
+        ("from=2022-01-01", 3),
+        ("to=2022-12-31", 2),
+        ("from=2021-06-15&to=2021-06-15", 1),
+        ("from=2024-01-01", 0),
+    ] {
+        let r = get(&app, &format!("/map/clusters?z=18&{q}"), None).await;
+        assert_eq!(r.status, StatusCode::OK, "{q}");
+        assert_eq!(n(&r), want, "{q}");
+    }
+    for bad in [
+        "from=2023-13",
+        "from=2023-02-01&to=2023-01-01",
+        "to=yesterday",
+    ] {
+        let r = get(&app, &format!("/map/clusters?{bad}"), None).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(
+            get(&app, &format!("/map?{bad}"), None).await.status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+
+    let page = get(&app, "/map", None).await.text();
+    assert!(
+        page.contains("4 photos and videos have a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("class=\"mapslider\" data-first=\"2021-06\" data-last=\"2023-02\""),
+        "{page}"
+    );
+    assert!(
+        page.contains("<option value=\"\" selected>Any time</option>"),
+        "{page}"
+    );
+    let page = get(&app, "/map?from=2023-01-01&to=2023-01-31", None)
+        .await
+        .text();
+    assert!(
+        page.contains("1 photo or video of these has a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("data-from=\"2023-01-01\" data-to=\"2023-01-31\""),
+        "{page}"
+    );
+    // The map starts on those days' pictures only (Westdorf, 10.4 N 19.9 E).
+    let at = page.find("data-bounds=\"").unwrap() + 13;
+    let b: Vec<f64> = page[at..at + page[at..].find('"').unwrap()]
+        .split(',')
+        .map(|v| v.parse().unwrap())
+        .collect();
+    assert!(b[0] > 19.8 && b[2] < 20.0, "{b:?}");
+    // A trip from the chooser is the same as its days.
+    let page = get(&app, "/map?trip=2023-01-01..2023-01-31", None)
+        .await
+        .text();
+    assert!(
+        page.contains("1 photo or video of these has a position."),
+        "{page}"
+    );
+    assert!(
+        page.contains("<option value=\"2023-01-01..2023-01-31\" selected>"),
+        "{page}"
+    );
+    assert_eq!(
+        get(&app, "/map?trip=2023-01-01", None).await.status,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+// The countries one's pictures were taken in (REQ-MAP-003), by the nearest
+// town: counted as the timeline shows them, only the viewer's libraries;
+// a country opens the map on its pictures alone. Made-up countries.
+// rivet: verifies REQ-MAP-003
+#[tokio::test]
+async fn the_countries_page_and_the_map_of_one_country() {
+    let (_fx, cfg, idx) = scanned();
+    let cities = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/places-cities.txt"),
+    )
+    .unwrap()
+    .replace("PPL\tZZ\t\t02", "PPL\tYY\t\t02");
+    let places = lichtbild::places::Places::parse(
+        &cities,
+        None,
+        Some("ZZ\tZZZ\t999\tZZ\tTestland\nYY\tYYY\t998\tYY\tOtherland\n"),
+    );
+    let mut state = AppState::new(&cfg, idx.clone()).with_places(Some(places));
+    state.map = Arc::new(map::MapState::new(&MapFiles {
+        pmtiles: Some(cfg.data_dir.join("x.pmtiles")),
+        assets: None,
+    }));
+    let app = web::router(state);
+
+    // p1: one near Ostdorf (Testland), one in Bergheim (Otherland); p2: two
+    // near Westdorf on two days (Testland).
+    let r = get(&app, "/countries", None).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let page = r.text();
+    assert!(page.contains("2 countries,"), "{page}");
+    assert!(
+        page.contains("href=\"map?country=ZZ\"")
+            && page.contains("<b>🇿🇿 Testland</b><i>3</i></span><small>3 days · 2021–2023</small>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<b>🇾🇾 Otherland</b><i>1</i></span><small>1 day · 2022</small>"),
+        "{page}"
+    );
+    let at = |p: &str, s: &str| p.find(s).unwrap();
+    assert!(
+        at(&page, "Testland") < at(&page, "Otherland"),
+        "most first: {page}"
+    );
+
+    let n = |r: &Resp| listed(&serde_json::from_slice(&r.body).unwrap()).1;
+    assert_eq!(
+        n(&get(&app, "/map/clusters?z=18&country=YY", None).await),
+        1
+    );
+    assert_eq!(
+        n(&get(&app, "/map/clusters?z=18&country=ZZ", None).await),
+        3
+    );
+    assert_eq!(
+        n(&get(&app, "/map/clusters?z=18&who=p2&country=YY", None).await),
+        0
+    );
+    assert_eq!(
+        n(&get(&app, "/map/clusters?z=18&country=ZZ&from=2023-01-01", None).await),
+        2
+    );
+    for bad in ["country=Z", "country=../x", "country=TOOLONG"] {
+        assert_eq!(
+            get(&app, &format!("/map/clusters?{bad}"), None)
+                .await
+                .status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+        assert_eq!(
+            get(&app, &format!("/map?{bad}"), None).await.status,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
+    }
+    let page = get(&app, "/map?country=YY", None).await.text();
+    assert!(
+        page.contains("1 photo or video of these has a position."),
+        "{page}"
+    );
+    assert!(page.contains("data-country=\"YY\""), "{page}");
+    assert!(page.contains("Otherland · all countries"), "{page}");
+
+    // Without place names there are no countries to name.
+    let mut pv = AppState::new(&cfg, idx.clone());
+    pv.places = None;
+    let r = get(&web::router(pv), "/countries", None).await;
+    assert!(r.text().contains("none are configured"), "{}", r.text());
+}

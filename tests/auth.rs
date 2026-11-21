@@ -431,9 +431,13 @@ async fn every_route_needs_a_session_except_health_static_and_login() {
         format!("/thumb/{id}"),
         format!("/original/{id}"),
         format!("/preview/{id}"),
+        format!("/captions/{id}"),
         "/t/nobody".into(),
         "/corrections".into(),
         "/corrections.jsonl".into(),
+        "/countries".into(),
+        "/days/all?day=2021-07-05".into(),
+        "/hidden?sort=name".into(),
     ];
     for uri in &routes {
         let r = req(&e.app, "GET", uri, None, false).await;
@@ -2205,4 +2209,52 @@ async fn corrections_are_the_houses_and_seen_only_with_ones_photos() {
     .await;
     assert!(!e.idx.fixes().unwrap().things.contains_key(&x.1));
     assert_eq!(e.idx.objects(&x.1).unwrap().len(), 2);
+}
+
+// The hidden list names files of one's own library only: p2, who sees p1's
+// library, gets the date of a hidden p1 photo but not its file name, and a
+// word from that name does not find it.
+// rivet: verifies REQ-WEB-020
+#[tokio::test]
+async fn the_hidden_list_names_only_ones_own_files() {
+    let e = env("https://photos.example").await;
+    let (_, c2) = two_sessions(&e).await;
+    let all = e.idx.all().unwrap();
+    let first = |l: &str| {
+        all.iter()
+            .find(|(_, r)| r.label == l && !r.missing)
+            .map(|(id, r)| (*id, String::from_utf8_lossy(&r.rel).into_owned()))
+            .unwrap()
+    };
+    let ((theirs, their_path), (mine, my_path)) = (first("p1"), first("p2"));
+    e.idx.set_hidden("p2", theirs, true).unwrap();
+    e.idx.set_hidden("p2", mine, true).unwrap();
+    let page = req_with(&e.app, "GET", "/hidden", Some(&c2), false, &[]).await;
+    assert!(
+        page.body.contains(&format!("action=\"unhide/{theirs}\"")),
+        "{}",
+        page.body
+    );
+    assert!(
+        page.body.contains(&format!("title=\"{my_path}\"")),
+        "{}",
+        page.body
+    );
+    let their_name = their_path.rsplit('/').next().unwrap();
+    assert!(!page.body.contains(their_name), "{}", page.body);
+    let word = &their_name[..their_name.rfind('.').unwrap_or(their_name.len())];
+    let page = req_with(
+        &e.app,
+        "GET",
+        &format!("/hidden?q={}", word.replace(' ', "+")),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        !page.body.contains(&format!("action=\"unhide/{theirs}\"")),
+        "{}",
+        page.body
+    );
 }

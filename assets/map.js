@@ -17,7 +17,9 @@
   var protocol = new pmtiles.Protocol();
   maplibregl.addProtocol("pmtiles", protocol.tile);
 
-  var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+  // The person's day or night choice (REQ-WEB-024), else the system's.
+  var chosen = document.documentElement.getAttribute("data-theme");
+  var dark = chosen ? chosen === "night" : window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
   var flavor = dark ? "dark" : "light";
   var glyphs = attr("data-glyphs");
   var sprite = attr("data-sprite");
@@ -174,6 +176,11 @@
         .map(function (v) { return v.toFixed(5); }).join(",");
     if (who) q += "&who=" + encodeURIComponent(who);
     if (kind) q += "&kind=" + encodeURIComponent(kind);
+    var from = attr("data-from"), to = attr("data-to");
+    if (from) q += "&from=" + encodeURIComponent(from);
+    if (to) q += "&to=" + encodeURIComponent(to);
+    var country = attr("data-country");
+    if (country) q += "&country=" + encodeURIComponent(country);
     fetch(q, { signal: pending.signal, headers: { accept: "application/json" } })
       .then(function (r) {
         if (!r.ok) throw new Error("clusters: " + r.status);
@@ -185,4 +192,58 @@
 
   map.on("load", load);
   map.on("moveend", load);
+
+  // When (REQ-MAP-002): a trip reloads the page, which fits the map to it;
+  // the slider narrows the months shown in place.
+  var when = document.querySelector("form.mapwhen");
+  if (when) {
+    when.elements.trip.addEventListener("change", function () { when.submit(); });
+    var box = when.querySelector(".mapslider");
+    if (box) {
+      var first = box.getAttribute("data-first").split("-").map(Number);
+      var last = box.getAttribute("data-last").split("-").map(Number);
+      var n = (last[0] - first[0]) * 12 + (last[1] - first[1]);
+      var lo = box.querySelector(".lo"), hi = box.querySelector(".hi"), out = box.querySelector("output");
+      var NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      var month = function (i) {
+        var m = first[1] - 1 + i;
+        return [first[0] + Math.floor(m / 12), (m % 12) + 1];
+      };
+      var index = function (day) {
+        if (!day) return null;
+        var p = day.split("-").map(Number);
+        return Math.max(0, Math.min(n, (p[0] - first[0]) * 12 + (p[1] - first[1])));
+      };
+      var pad = function (v) { return (v < 10 ? "0" : "") + v; };
+      [lo, hi].forEach(function (r) { r.min = 0; r.max = n; });
+      lo.value = index(attr("data-from")) || 0;
+      var h = index(attr("data-to"));
+      hi.value = h === null ? n : h;
+      var label = function () {
+        var a = month(+lo.value), b = month(+hi.value);
+        out.textContent = NAMES[a[1] - 1] + " " + a[0] + " – " + NAMES[b[1] - 1] + " " + b[0];
+      };
+      var apply = function () {
+        var a = month(+lo.value), b = month(+hi.value);
+        var end = new Date(b[0], b[1], 0).getDate();
+        var f = +lo.value === 0 ? "" : a[0] + "-" + pad(a[1]) + "-01";
+        var t = +hi.value === n ? "" : b[0] + "-" + pad(b[1]) + "-" + pad(end);
+        if (f) el.setAttribute("data-from", f); else el.removeAttribute("data-from");
+        if (t) el.setAttribute("data-to", t); else el.removeAttribute("data-to");
+        when.elements.trip.value = "";
+        var u = new URL(location.href);
+        u.searchParams.delete("trip");
+        if (f) u.searchParams.set("from", f); else u.searchParams.delete("from");
+        if (t) u.searchParams.set("to", t); else u.searchParams.delete("to");
+        history.replaceState(null, "", u);
+        load();
+      };
+      lo.addEventListener("input", function () { if (+lo.value > +hi.value) hi.value = lo.value; label(); });
+      hi.addEventListener("input", function () { if (+hi.value < +lo.value) lo.value = hi.value; label(); });
+      lo.addEventListener("change", apply);
+      hi.addEventListener("change", apply);
+      label();
+      box.hidden = false;
+    }
+  }
 })();

@@ -165,6 +165,27 @@ at nice 0.
 | F155 | REQ-FIX-001 | wrong finds never raise their kind's bar | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
 | F156 | REQ-FIX-002 | a corrected line is searched as first read | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
 | F157 | REQ-FIX-001 | the download holds others' photos | `corrections_are_the_houses_and_seen_only_with_ones_photos` |
+| F158 | REQ-WEB-019 | the later day is the same day | `days_away_from_home_are_one_trip_named_by_place` |
+| F159 | REQ-WEB-019 | the date picker is ignored | `days_away_from_home_are_one_trip_named_by_place` |
+| F160 | REQ-WEB-020 | the hidden list names files of a granted library | `the_hidden_list_names_only_ones_own_files` |
+| F161 | REQ-WEB-020 | "by name" sorts by date | `the_hidden_list_sorts_narrows_and_shows_several_again` |
+| F162 | REQ-WEB-020 | the word does not narrow the list | `the_hidden_list_sorts_narrows_and_shows_several_again` |
+| F163 | REQ-WEB-021 | a series keeps its newest shot first | `the_best_shot_leads_its_series` |
+| F164 | REQ-WEB-021 | a favourite does not lead its series | `the_best_shot_leads_its_series` |
+| F165 | REQ-WEB-021 | the blurriest shot counts as best | `the_best_shot_leads_its_series` |
+| F166 | REQ-MAP-002 | the clusters ignore the days | `a_time_range_or_a_trip_narrows_the_map` |
+| F167 | REQ-MAP-002 | a backward range is taken | `a_time_range_or_a_trip_narrows_the_map` |
+| F168 | REQ-MAP-002 | the page counts and fits every day | `a_time_range_or_a_trip_narrows_the_map` |
+| F169 | REQ-MAP-003 | a country keeps every picture | `the_countries_page_and_the_map_of_one_country` |
+| F170 | REQ-MAP-003 | any country code is taken | `the_countries_page_and_the_map_of_one_country` |
+| F171 | REQ-MAP-003 | a country counts its pictures twice | `the_countries_page_and_the_map_of_one_country` |
+| F172 | REQ-WEB-009 | a later step shows as done while an earlier one runs | `the_status_page_shows_the_steps_and_what_waits` |
+| F173 | REQ-WEB-009 | the People page does not say faces wait for the look pass | `the_status_page_shows_the_steps_and_what_waits` |
+| F174 | REQ-WEB-022 | the video carries no captions track | `a_video_plays_with_its_transcript_as_captions` |
+| F175 | REQ-WEB-022 | cues get the wrong end | `a_video_plays_with_its_transcript_as_captions` |
+| F176 | REQ-WEB-025 | slow answers are not named | `answers_are_timed_by_route` |
+| F177 | REQ-WEB-025 | answers are not recorded | `answers_are_timed_by_route` |
+| F178 | REQ-WEB-026 | the chosen pictures are ignored | `a_slideshow_of_the_chosen_pictures` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
 | F105 | REQ-SEE-002 | search by meaning returns every picture, matching or not | `what_was_seen_is_stored_searched_and_shown` |
 | F27 | REQ-PLACE-001 | GeoNames lines are split on `\n` only, leaving `\r` from CRLF files | `crlf_line_endings` |

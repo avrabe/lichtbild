@@ -18,8 +18,10 @@
   --serif: "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", "Noto Serif CJK JP", "Songti SC", Georgia, "Times New Roman", serif;
   --sans: -apple-system, "Hiragino Sans", "Noto Sans JP", "Segoe UI", system-ui, sans-serif;
 }
+/* Night: the system's choice, unless the person chose day or night
+   (REQ-WEB-024, assets/theme.js). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="day"]) {
     --paper: #16140f;
     --paper-2: #1e1b15;
     --ink: #ece4d4;
@@ -31,8 +33,24 @@
     --kaki: #d99a4e;
     --tile: #26221b;
     --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 22px rgba(0, 0, 0, .35);
+    color-scheme: dark;
   }
 }
+:root[data-theme="night"] {
+  --paper: #16140f;
+  --paper-2: #1e1b15;
+  --ink: #ece4d4;
+  --ink-soft: #b3a995;
+  --ink-faint: #7a7262;
+  --line: #353026;
+  --ai: #8fb0d6;
+  --shu: #e0644a;
+  --kaki: #d99a4e;
+  --tile: #26221b;
+  --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 8px 22px rgba(0, 0, 0, .35);
+  color-scheme: dark;
+}
+:root[data-theme="day"] { color-scheme: light; }
 
 * { box-sizing: border-box; }
 html { background: var(--paper); }
@@ -238,6 +256,17 @@ h4.day {
 .viewer .vbar a:hover { color: var(--shu); }
 .viewer .when { color: #9a9184; font-variant-numeric: tabular-nums; }
 .viewer .weakdate { color: #d99a4e; }
+/* Phones: the bar stays one line. The back arrow alone, the date without
+   seconds-wrapping, and its source only as colour. */
+@media (max-width: 600px) {
+  .viewer .vbar { gap: 6px; padding: 10px 10px; align-items: center; }
+  .viewer .vbar a.back .lbl { display: none; }
+  .viewer .vbar a.back { font-size: 20px; padding: 0 6px 0 2px; }
+  .viewer .vbar a.when { white-space: nowrap; font-size: 12px; letter-spacing: .04em; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .viewer .vbar a.when .weakdate { display: none; }
+  .viewer .vbar a.when:has(.weakdate) { color: #d99a4e; }
+  .viewer .vbar summary { padding: 0 5px; }
+}
 .viewer .stage { flex: 1; display: flex; align-items: center; justify-content: center; min-height: 0; position: relative; padding: 0 24px 24px; touch-action: pan-y pinch-zoom; }
 .viewer .photo { max-width: 100%; max-height: 100%; object-fit: contain; user-select: none; border-radius: 2px; box-shadow: 0 10px 40px rgba(0, 0, 0, .5); }
 .viewer .prev, .viewer .next {
@@ -576,19 +605,19 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .lb-map .maplibregl-ctrl-zoom-out .maplibregl-ctrl-icon::before { color: var(--ink); }
 
 /* Hide, inside the info panel: a quiet text action, not a pill. */
-.viewer details.info .hiderow { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(233, 225, 209, .15); }
-.viewer details.info form.hidef { display: block; margin: 0; }
-.viewer details.info form.hidef button {
+.viewer dl.meta .hiderow { grid-column: 1 / -1; margin-top: 6px; padding-top: 10px; border-top: 1px solid rgba(233, 225, 209, .15); }
+.viewer dl.meta form.hidef { display: block; margin: 0; }
+.viewer dl.meta form.hidef button {
   border: 0; padding: 0; background: none; color: var(--ink-faint); font: 400 13px/1.4 var(--sans);
   letter-spacing: .04em; cursor: pointer;
 }
-.viewer details.info form.hidef button:hover { color: var(--kaki); }
-.viewer details.info .getrow { margin: 0 0 8px; display: flex; gap: 18px; }
-.viewer details.info .getrow a, .viewer details.info .getrow button {
+.viewer dl.meta form.hidef button:hover { color: var(--kaki); }
+.viewer dl.meta .getrow { margin: 0 0 8px; display: flex; gap: 18px; }
+.viewer dl.meta .getrow a, .viewer dl.meta .getrow button {
   border: 0; padding: 0; background: none; color: inherit; font: 400 13px/1.4 var(--sans);
   letter-spacing: .04em; cursor: pointer; text-decoration: none;
 }
-.viewer details.info .getrow a:hover, .viewer details.info .getrow button:hover { color: var(--kaki); }
+.viewer dl.meta .getrow a:hover, .viewer dl.meta .getrow button:hover { color: var(--kaki); }
 @media (max-width: 600px) {
   .card .cmeta .years { display: none; }
   dl.status { grid-template-columns: 1fr; gap: 4px; }
@@ -607,9 +636,9 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .placebar button { font: inherit; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--shu); background: var(--shu); color: #fff; cursor: pointer; }
 .placebar button:disabled { opacity: .45; cursor: default; }
 .placebar a { color: var(--ink-soft); }
-.viewer details.info .placeact { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--ink-faint); }
-.viewer details.info .placeact form { display: inline; }
-.viewer details.info .placeact button { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
+.viewer dl.meta .placeact { display: inline-block; margin-top: 4px; font-size: 12px; color: var(--ink-faint); }
+.viewer dl.meta .placeact form { display: inline; }
+.viewer dl.meta .placeact button { border: 0; padding: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 
 /* Text in the picture (REQ-TEXT-001): the panel beside the transcript's,
    and the line boxes over the photo. */
@@ -646,11 +675,11 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .ptools button:hover { border-color: var(--shu); }
 .viewer.below { overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .viewer.below .stage { flex: none; height: 68vh; height: 68dvh; }
-.viewer.below details.transcript, .viewer.below details.textp { display: none; }
+.viewer.below details.transcript, .viewer.below details.textp, .viewer.below details.moved { display: none; }
 .viewer section.under { padding: 4px 22px 40px; display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
 .viewer section.under[hidden] { display: none; }
 .viewer .ublock h2 { font: 400 15px/1.2 var(--serif); letter-spacing: .1em; color: #b3a995; margin: 0 0 8px; }
-.viewer .ublock .tpanel, .viewer .ublock .xpanel {
+.viewer .ublock .tpanel, .viewer .ublock .xpanel, .viewer .ublock .kpanel, .viewer .ublock dl.meta {
   position: static; width: auto; max-height: none; box-shadow: none; background: rgba(233, 225, 209, .05);
 }
 .viewer .tpanel li { transition: background-color .2s ease; border-radius: 4px; padding: 2px 6px; margin-left: -6px; }
@@ -689,6 +718,18 @@ dl.status progress { display: block; width: min(420px, 100%); margin-top: 8px; a
 .viewer .thinglayer a.hot { display: block; z-index: 2; border-color: var(--shu); background: rgba(200, 69, 45, .2); }
 .viewer .thinglayer a.gone.hot { border-style: dashed; }
 .viewer details.things li[data-n]:hover, .viewer details.things li[data-n]:focus-within { color: #fff; }
+/* The bar's panels hang from the bar's right edge, not from their own icon:
+   on an iPad the ◎ sits at the left, and a panel right-aligned to it ran off
+   the screen and over the photo. On phones they are a sheet at the bottom. */
+.viewer .vbar details.transcript, .viewer .vbar details.textp, .viewer .vbar details.things { position: static; }
+.viewer .vbar .tpanel, .viewer .vbar .xpanel, .viewer .vbar .kpanel {
+  right: 18px; top: 52px; z-index: 30; max-height: calc(100vh - 90px); max-height: calc(100dvh - 90px);
+}
+@media (max-width: 600px) {
+  .viewer .vbar .tpanel, .viewer .vbar .xpanel, .viewer .vbar .kpanel {
+    position: fixed; left: 12px; right: 12px; top: auto; bottom: 12px; width: auto; max-height: 60vh; max-height: 60dvh;
+  }
+}
 section.looks { margin-top: 28px; }
 
 /* Things (REQ-SEE-001): a tile per kind with its surest photo. */
@@ -860,14 +901,14 @@ details.albumtools { margin: 0 0 18px; }
 details.albumtools summary { cursor: pointer; color: var(--ink-faint); font-size: 13px; }
 details.albumtools form { display: flex; gap: 8px; align-items: center; margin: 10px 0 0; max-width: 32em; }
 details.albumtools button.danger { background: var(--shu); color: #fff; }
-.viewer details.info form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
-.viewer details.info form.albumf select, .viewer details.info form.albumf input,
-.viewer details.info form.albumf button {
+.viewer dl.meta form.albumf { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 8px; }
+.viewer dl.meta form.albumf select, .viewer dl.meta form.albumf input,
+.viewer dl.meta form.albumf button {
   font: 400 13px/1.4 var(--sans); min-height: 30px; padding: 0 8px; border-radius: 6px;
   border: 1px solid rgba(233, 225, 209, .25); background: transparent; color: inherit;
 }
-.viewer details.info form.albumf button { cursor: pointer; }
-.viewer details.info form.albumf [hidden] { display: none; }
+.viewer dl.meta form.albumf button { cursor: pointer; }
+.viewer dl.meta form.albumf [hidden] { display: none; }
 
 /* People (REQ-FACE-002, REQ-FACE-003): a round face per person, and the
    faces of a photo in the viewer. */
@@ -932,3 +973,89 @@ ul.fixlist button, form.fixadd button {
 }
 ul.fixlist button:hover, form.fixadd button:hover { border-color: var(--shu); }
 ul.fixrows img { width: 48px; height: 48px; object-fit: cover; border-radius: 4px; display: block; }
+
+/* Days (REQ-WEB-019): the day before and after, and a picker for any day. */
+.daynav { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 6px 0 14px; font: 500 14px/1.3 var(--sans); }
+.daynav a { color: var(--ink); text-decoration: none; padding: 6px 2px; }
+.daynav a:hover { color: var(--shu); }
+.daynav form.daypick { display: flex; gap: 6px; align-items: center; margin: 0; }
+.daynav form.daypick label { color: var(--ink-faint); }
+.daynav form.daypick input, .daynav form.daypick button {
+  font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--ink-faint); background: var(--paper-2); color: var(--ink);
+}
+.daynav form.daypick button { cursor: pointer; }
+
+/* Hidden (REQ-WEB-020): a word, an order, and several shown again at once. */
+.hidtools, .hidmany { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 12px; }
+.hidtools input, .hidtools select, .hidtools button, .hidmany button {
+  font: 500 13px/1.2 var(--sans); padding: 6px 10px; border-radius: 10px; border: 1px solid var(--line); background: var(--paper-2); color: var(--ink);
+}
+.hidtools input { min-width: 14em; flex: 1 1 14em; max-width: 26em; }
+.hidtools button, .hidmany button { cursor: pointer; }
+.hidmany button.again:not(:disabled) { background: var(--shu); border-color: var(--shu); color: #fff8ee; }
+.hidmany button:disabled { opacity: .5; cursor: default; }
+.hiddenlist .hid label.pick { display: flex; gap: 6px; align-items: center; font: 500 12px/1.2 var(--sans); cursor: pointer; }
+.hiddenlist .hid label.pick input { width: 18px; height: 18px; accent-color: var(--shu); }
+.hiddenlist .hid .fname { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.hiddenlist .hid:has(input:checked) a.item { outline: 3px solid var(--shu); outline-offset: 2px; }
+
+/* The best shot of a series (REQ-WEB-021): opened, the series offers to
+   keep it and hide the others. */
+.series:not(.open) .keepbest { display: none; }
+.keepbest {
+  align-self: stretch; width: 130px; min-height: 64px; border: 1px dashed var(--shu); border-radius: 3px; background: none; color: var(--shu);
+  font: 600 13px/1.35 var(--sans); padding: 10px; cursor: pointer;
+}
+.keepbest:hover { background: var(--shu); color: #fff8ee; }
+.keepbest:disabled { opacity: .6; cursor: default; }
+
+.item[hidden], .item .stack[hidden] { display: none; }
+
+/* The map's time row (REQ-MAP-002): a trip, and a slider over the months. */
+.mapwhen { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 10px; font: 500 13px/1.3 var(--sans); }
+.mapwhen label { color: var(--ink-faint); display: flex; gap: 6px; align-items: center; }
+.mapwhen select, .mapwhen button {
+  font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--paper-2); color: var(--ink); max-width: 70vw;
+}
+.mapwhen button { cursor: pointer; }
+.mapslider { flex: 1 1 18em; display: grid; grid-template-columns: 1fr 1fr; gap: 4px 10px; align-items: center; min-width: 14em; }
+.mapslider[hidden] { display: none; }
+.mapslider input[type=range] { width: 100%; accent-color: var(--shu); }
+.mapslider output { grid-column: 1 / -1; color: var(--ink); font-variant-numeric: tabular-nums; }
+.mapwhen a.countrylink { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--line); }
+.mapwhen a.countrylink:hover { color: var(--shu); border-color: var(--shu); }
+
+/* Status (REQ-WEB-009): the four steps, one after another. */
+ol.steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+ol.steps li { display: grid; grid-template-columns: 11em 5.5em 1fr; gap: 4px 10px; align-items: baseline; padding: 8px 10px; border-radius: 8px; background: var(--paper-2); }
+ol.steps li b { font-weight: 600; }
+ol.steps li i { font: 600 11px/1.6 var(--sans); letter-spacing: .08em; text-transform: uppercase; font-style: normal; text-align: center; border-radius: 999px; padding: 0 8px; }
+ol.steps li.done i { background: #2f7d4f; color: #fff; }
+ol.steps li.run i { background: var(--shu); color: #fff8ee; }
+ol.steps li.run { box-shadow: inset 3px 0 0 var(--shu); }
+ol.steps li.wait i, ol.steps li.part i { border: 1px solid var(--ink-faint); color: var(--ink-faint); }
+ol.steps li.off { opacity: .6; }
+ol.steps li.off i { color: var(--ink-faint); }
+ol.steps li span { overflow-wrap: anywhere; }
+@media (max-width: 600px) {
+  ol.steps li { grid-template-columns: 1fr auto; }
+  ol.steps li span { grid-column: 1 / -1; }
+}
+.viewer .fixlist li.saving { opacity: .55; }
+.viewer .fixlist li.failed { outline: 1px solid var(--shu); }
+
+/* Below the photo (REQ-WEB-023): every panel lies in the page, not over it. */
+.viewer .ublock .kpanel, .viewer .ublock dl.meta { position: static; width: auto; max-height: none; box-shadow: none; border: 0; backdrop-filter: none; }
+.viewer .ublock dl.meta .ptools { grid-column: 1 / -1; }
+.viewer dl.meta .ptools { grid-column: 1 / -1; margin: 0; }
+.viewer .ublock dl.meta {
+  margin: 0; padding: 12px 16px; display: grid; grid-template-columns: auto 1fr; gap: 8px 16px;
+  background: rgba(233, 225, 209, .05); border-radius: 6px; font: 13px/1.5 var(--sans); letter-spacing: .02em;
+}
+.viewer .ublock dl.meta dt { color: #9a9184; font: 500 11px/1.9 var(--sans); text-transform: uppercase; letter-spacing: .16em; }
+.viewer .ublock dl.meta dd { margin: 0; color: #e9e1d1; overflow-wrap: anywhere; }
+.viewer .ublock dl.meta a { color: #e9e1d1; }
+.viewer .ublock dl.meta .hiderow, .viewer .ublock dl.meta .getrow, .viewer .ublock dl.meta form.albumf { grid-column: 1 / -1; }
+
+/* The day/night switch in the menu (REQ-WEB-024). */
+.appmenu button.theme b::after { content: " · " attr(data-now); font-weight: 400; color: var(--ink-faint); }

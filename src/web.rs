@@ -24,6 +24,7 @@ use crate::media::DateSource;
 const HTMX: &str = include_str!("../assets/htmx-2.0.4.min.js");
 const CSS: &str = include_str!("../assets/lichtbild.css");
 const JS: &str = include_str!("../assets/lichtbild.js");
+const THEME_JS: &str = include_str!("../assets/theme.js");
 const PAGE_SIZE: u32 = 240;
 
 pub const CSP: &str = "default-src 'self'; img-src 'self'; media-src 'self'; script-src 'self'; \
@@ -68,6 +69,15 @@ pub struct AppState {
     pub people: Arc<crate::people::People>,
     /// Search rebuilt after a correction, one at a time (REQ-FIX-001).
     pub rebuild: Arc<Later>,
+    /// Thumbnail scores for the best shot of a series (REQ-WEB-021).
+    pub best: Arc<crate::best::Best>,
+    /// The face models are in the vision directory: faces are looked for
+    /// after the photos (DD-025).
+    pub faces_on: bool,
+    /// How quickly the last hour's answers came (REQ-WEB-025).
+    pub timings: Arc<crate::timing::Timings>,
+    /// The status page's counts, per set of libraries, for a minute.
+    pub status_counts: Arc<std::sync::Mutex<HashMap<String, (std::time::Instant, StatusCounts)>>>,
 }
 
 /// A search rebuild in the background that runs again, once, if asked
@@ -128,6 +138,13 @@ impl AppState {
             map: Arc::new(crate::map::MapState::new(&cfg.map)),
             people: Arc::new(crate::people::People::default()),
             rebuild: Arc::new(Later::default()),
+            best: Arc::new(crate::best::Best::default()),
+            timings: Arc::new(crate::timing::Timings::default()),
+            status_counts: Arc::default(),
+            faces_on: cfg
+                .vision_dir
+                .as_deref()
+                .is_some_and(|d| crate::faces::present(d).unwrap_or(false)),
         }
     }
 
@@ -190,9 +207,11 @@ pub fn router(state: AppState) -> Router {
         .route("/fix/text", axum::routing::post(fix_text))
         .route("/fix/off", axum::routing::post(fix_off))
         .route("/trips", get(trips_page))
+        .route("/countries", get(countries_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
         .route("/thumb/{id}", get(thumb))
+        .route("/captions/{id}", get(captions))
         .route("/original/{id}", get(original))
         .route("/preview/{id}", get(preview))
         .route("/static/{file}", get(static_file))
@@ -203,7 +222,8 @@ pub fn router(state: AppState) -> Router {
         .route("/auth/login", get(auth_login))
         .route("/auth/callback", get(auth_callback))
         .route("/auth/logout", axum::routing::post(auth_logout))
-        .route("/healthz", get(|| async { "ok" }));
+        .route("/healthz", get(|| async { "ok" }))
+        .route_layer(middleware::from_fn_with_state(state.clone(), timed));
     // With a base path, "/base", "/base/" and "/base/..." reach the app;
     // nothing else does.
     let app = if base.is_empty() {
@@ -225,6 +245,31 @@ pub fn router(state: AppState) -> Router {
             async move { check_host(&hosts, req, next).await }
         }))
         .layer(middleware::from_fn(security_headers))
+}
+
+/// Time each answer by its route (REQ-WEB-025): the template, never the
+/// ids or the query. The answer carries it as Server-Timing too.
+async fn timed(State(st): State<AppState>, req: Request, next: Next) -> Response {
+    let route = req
+        .extensions()
+        .get::<axum::extract::MatchedPath>()
+        .map(|m| m.as_str().to_string())
+        .unwrap_or_default();
+    let route = route
+        .strip_prefix(st.base_path.as_str())
+        .filter(|r| r.starts_with('/'))
+        .map(str::to_string)
+        .unwrap_or(route);
+    let start = std::time::Instant::now();
+    let mut res = next.run(req).await;
+    let took = start.elapsed();
+    st.timings.record(&route, took);
+    if let Ok(v) =
+        header::HeaderValue::from_str(&format!("app;dur={:.1}", took.as_secs_f64() * 1000.0))
+    {
+        res.headers_mut().insert("server-timing", v);
+    }
+    res
 }
 
 /// The host part of a Host header or authority: "[::1]:8080" -> "::1",
@@ -575,6 +620,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
+         <li><a href=\"countries\"><b>Countries</b><span>Where you have been</span></a></li>\
          <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
@@ -583,6 +629,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
+         <li><button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b><span>Auto follows this device</span></button></li>\
          <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
          {signout}</ul></details>"
     )
@@ -632,6 +679,7 @@ fn page(
 <base href="{base}/">
 <title>{title}</title>
 <meta name="htmx-config" content='{{"includeIndicatorStyles":false}}'>
+<script src="static/theme.js?v={v}"></script>
 {head}<link rel="stylesheet" href="static/lichtbild.css?v={v}">
 <script src="static/htmx-2.0.4.min.js" defer></script>
 <script src="static/lichtbild.js?v={v}" defer></script>
@@ -869,6 +917,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
              <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
+             <a href=\"countries\"><b>Countries</b><span>Where you have been</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
              <a href=\"status\"><b>Status</b><span>Scan and transcripts</span></a></nav>";
@@ -1043,6 +1092,22 @@ pub fn series(items: &[index::Item], space: Option<&crate::embed::Space>) -> Vec
     out
 }
 
+/// The series of `items` (REQ-WEB-012), each led by its best shot
+/// (REQ-WEB-021); the thumbnails are read off the async threads.
+async fn series_best(
+    st: &AppState,
+    mut items: Vec<index::Item>,
+) -> Result<(Vec<index::Item>, Vec<usize>), tokio::task::JoinError> {
+    let space = st.vision_on.then(|| st.space.clone());
+    let (best, dd) = (st.best.clone(), st.data_dir.clone());
+    tokio::task::spawn_blocking(move || {
+        let runs = series(&items, space.as_deref());
+        crate::best::best_first(&mut items, &runs, |it| best.of(&dd, it));
+        (items, runs)
+    })
+    .await
+}
+
 pub fn render_items(
     who: &str,
     items: &[index::Item],
@@ -1054,6 +1119,7 @@ pub fn render_items(
     let mut s = String::new();
     // Items of the open series still to come.
     let mut left = 0usize;
+    let mut keep = String::new();
     let mut prev = prev_day.map(str::to_string);
     let mut open = prev.is_some();
     if open {
@@ -1129,8 +1195,20 @@ pub fn render_items(
         let dur = if n >= 2 {
             left = n - 1;
             s += &format!("<span class=\"series\" id=\"s{}\">", it.id);
+            // Opened, the series offers to keep its best shot (this one,
+            // REQ-WEB-021) and hide the others for this person.
+            let others: Vec<String> = items[i + 1..(i + n).min(items.len())]
+                .iter()
+                .map(|o| o.id.to_string())
+                .collect();
+            keep = format!(
+                "<button type=\"button\" class=\"keepbest\" data-ids=\"{}\" data-best=\"{}\">Keep the best, hide {}</button>",
+                others.join(","),
+                it.id,
+                if others.len() == 1 { "the other".to_string() } else { format!("the other {}", others.len()) },
+            );
             format!(
-                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another\">{n}</span>"
+                "{dur}<span class=\"stack\" role=\"button\" tabindex=\"0\" aria-expanded=\"false\" title=\"{n} pictures taken one after another, the best first\">{n}</span>"
             )
         } else {
             dur
@@ -1148,18 +1226,24 @@ pub fn render_items(
         if follows {
             left -= 1;
             if left == 0 {
+                s += &std::mem::take(&mut keep);
                 s += "</span>";
             }
         }
     }
     if left > 0 {
+        s += &keep;
         s += "</span>";
     }
     if open {
         s += "</div>\n";
     }
     if more {
-        if let (Some(last), Some(day)) = (items.last(), prev.as_deref()) {
+        // The oldest on the page: a series' best shot may have moved ahead.
+        let last = items
+            .iter()
+            .min_by(|a, b| (&a.taken_local, a.id).cmp(&(&b.taken_local, b.id)));
+        if let (Some(last), Some(day)) = (last, prev.as_deref()) {
             s += &format!(
                 "<div class=\"more\" hx-get=\"t/{who}?before={b}&amp;id={id}&amp;day={d}{kq}\" hx-trigger=\"revealed\" hx-swap=\"outerHTML\">loading…</div>\n",
                 who = esc(who),
@@ -1237,7 +1321,10 @@ async fn timeline(
     };
     let more = items.len() > PAGE_SIZE as usize;
     items.truncate(PAGE_SIZE as usize);
-    let runs = series(&items, st.vision_on.then_some(st.space.as_ref()));
+    let (items, runs) = match series_best(&st, items).await {
+        Ok(x) => x,
+        Err(e) => return internal(e),
+    };
     let fragment = render_items(&who, &items, &runs, cur.day.as_deref(), more, kq);
     if !full_page {
         return Html(fragment).into_response();
@@ -1681,6 +1768,94 @@ pub fn render_info(
 
 /// The viewer's photo, or a note when the original is a format browsers
 /// cannot display and no preview could be made from it.
+/// A video with a transcript gets it as captions (REQ-WEB-022): shown
+/// over the video while it plays, in full screen and on a TV too.
+fn with_captions(html: String, id: u64, tr: Option<&crate::stt::Transcript>) -> String {
+    let Some(tr) = tr.filter(|t| !t.pieces.is_empty()) else {
+        return html;
+    };
+    let lang = tr.pieces[0].lang.as_str();
+    let lang = if lang.len() <= 3 && lang.bytes().all(|b| b.is_ascii_lowercase()) {
+        lang
+    } else {
+        "und"
+    };
+    html.replacen(
+        "></video>",
+        &format!("><track kind=\"captions\" src=\"captions/{id}\" srclang=\"{lang}\" label=\"What is said\" default></video>"),
+        1,
+    )
+}
+
+/// WebVTT time: HH:MM:SS.mmm.
+fn vtt_time(s: f32) -> String {
+    let ms = (f64::from(s.max(0.0)) * 1000.0).round() as u64;
+    format!(
+        "{:02}:{:02}:{:02}.{:03}",
+        ms / 3_600_000,
+        ms / 60_000 % 60,
+        ms / 1000 % 60,
+        ms % 1000
+    )
+}
+
+/// The transcript as WebVTT cues; a piece without a sensible end lasts
+/// until the next one, at most five seconds.
+pub fn vtt(tr: &crate::stt::Transcript) -> String {
+    let mut s = String::from("WEBVTT\n");
+    for (i, p) in tr.pieces.iter().enumerate() {
+        let next = tr.pieces.get(i + 1).map(|n| n.start);
+        let end = if p.end > p.start {
+            p.end
+        } else {
+            next.unwrap_or(p.start + 5.0).min(p.start + 5.0)
+        };
+        // "-->" may not appear in a cue's text.
+        let text = p.text.trim().replace("-->", "→");
+        if text.is_empty() {
+            continue;
+        }
+        s += &format!("\n{} --> {}\n{}\n", vtt_time(p.start), vtt_time(end), text);
+    }
+    s
+}
+
+/// GET /captions/{id}: a video's transcript as captions, for whoever may
+/// see the video.
+async fn captions(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(id): UrlPath<u64>,
+) -> Response {
+    let idx = st.index.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<String>> {
+        let Some(rec) = idx.locate(id)?.filter(|r| viewer.may_see(&r.label)) else {
+            return Ok(None);
+        };
+        if rec.video.is_none() {
+            return Ok(None);
+        }
+        Ok(idx
+            .transcript(&rec.hash)?
+            .filter(|t| !t.pieces.is_empty())
+            .map(|t| vtt(&t)))
+    })
+    .await;
+    match res {
+        Ok(Ok(Some(v))) => (
+            [
+                (header::CONTENT_TYPE, "text/vtt; charset=utf-8"),
+                (header::CACHE_CONTROL, "private, no-cache"),
+            ],
+            v,
+        )
+            .into_response(),
+        Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
 pub fn photo_html(id: u64, rec: &index::Record) -> String {
     if rec.video.is_some() {
         // The original plays in the browser, seeking by range requests;
@@ -1738,6 +1913,9 @@ pub struct ShowQuery {
     from: Option<String>,
     to: Option<String>,
     md: Option<String>,
+    /// Only these items, chosen in a timeline (REQ-WEB-026): ids
+    /// separated by commas.
+    ids: Option<String>,
 }
 
 /// "19 April 2014, 12:00" from "2014-04-19T12:00:00".
@@ -1778,7 +1956,7 @@ async fn show(
         from: sq.from.clone(),
         to: sq.to.clone(),
         md: sq.md.clone(),
-        title: None,
+        ..Default::default()
     };
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, String, String)>> {
         let hidden = idx.hidden(&me)?;
@@ -1788,9 +1966,16 @@ async fn show(
             from: sq.from.clone(),
             to: sq.to.clone(),
             md: sq.md.clone(),
-            title: None,
+            ..Default::default()
         };
+        let chosen: Option<std::collections::HashSet<u64>> = sq.ids.as_deref().map(|s| {
+            s.split(',')
+                .filter_map(|i| i.trim().parse().ok())
+                .take(SHOW_MAX)
+                .collect()
+        });
         let favs = match (sq.fav, sq.album) {
+            _ if chosen.is_some() => chosen,
             _ if dq.valid() => Some(
                 day_items(&idx, &dups, &labels, &hidden, &dq, true)?
                     .into_iter()
@@ -2119,22 +2304,26 @@ async fn viewer(
     };
     let body = format!(
         "<div class=\"viewer\">\n\
-         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\">← Timeline</a> <a class=\"when\" href=\"days/{w}?from={day}&amp;to={day}#i{id}\" title=\"All pictures of this day\">{when}</a>{tr}{textp}{things}{faces}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
+         <div class=\"vbar\"><a class=\"back\" href=\"t/{w}?before={taken}&amp;id={after}{kq}#i{id}\" aria-label=\"Timeline\">←<span class=\"lbl\"> Timeline</span></a> <a class=\"when\" href=\"days/{w}?from={day}&amp;to={day}#i{id}\" title=\"All pictures of this day\">{when}</a>{tr}{textp}{things}{faces}{info}{heart}<a class=\"slideshow\" href=\"show/{w}?at={id}\" title=\"Slideshow from here (s)\" aria-label=\"Slideshow from here\">▶</a><button type=\"button\" class=\"fs\" hidden title=\"Full screen (f)\" aria-label=\"Full screen\">⛶</button></div>\n\
          <div class=\"stage\">{prev}{photo}{layer}{thinglayer}{next}</div>\n\
          <section class=\"under\" hidden></section>\n\
          {prefetch}</div>",
         taken = esc(&rec.taken_local),
         day = esc(rec.taken_local.get(..10).unwrap_or("")),
         after = id + 1,
-        photo = match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
-            // A W3C media fragment (#t=) starts the video at the hit.
-            Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
-                &format!("src=\"original/{id}\""),
-                &format!("src=\"original/{id}#t={t:.1}\""),
-                1,
-            ),
-            _ => photo_html(id, &rec),
-        },
+        photo = with_captions(
+            match vq.t.filter(|t| t.is_finite() && *t > 0.0) {
+                // A W3C media fragment (#t=) starts the video at the hit.
+                Some(t) if rec.video.is_some() => photo_html(id, &rec).replacen(
+                    &format!("src=\"original/{id}\""),
+                    &format!("src=\"original/{id}#t={t:.1}\""),
+                    1,
+                ),
+                _ => photo_html(id, &rec),
+            },
+            id,
+            transcript.as_ref(),
+        ),
         tr = transcript
             .as_ref()
             .map(|t| render_transcript(id, &who, t))
@@ -3455,32 +3644,104 @@ async fn keep(
 }
 
 /// GET /hidden: what this person hid, to show it again.
-async fn hidden_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+#[derive(Deserialize, Default)]
+pub struct HiddenQuery {
+    /// "new" (default), "old" or "name".
+    sort: Option<String>,
+    /// Keep only items whose file name, folder or date holds this.
+    q: Option<String>,
+}
+
+/// GET /hidden: what this person hid (REQ-WEB-020), newest first, oldest
+/// first or by file name, narrowed by a word in the name, folder or date;
+/// several are chosen and shown again at once.
+async fn hidden_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    Query(hq): Query<HiddenQuery>,
+) -> Response {
     let idx = st.index.clone();
     let me = person(&viewer);
     let labels = viewer.labels.clone();
-    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(u64, index::Record)>> {
+    // File names only from the viewer's own library, as on the duplicates
+    // page; a granted library's items show their date alone.
+    let own = owned(st.auth.is_some(), &viewer);
+    let sort = match hq.sort.as_deref() {
+        Some("old") => "old",
+        Some("name") => "name",
+        _ => "new",
+    };
+    let word = hq.q.as_deref().unwrap_or("").trim().to_lowercase();
+    let word2 = word.clone();
+    type Hidden = (usize, Vec<(u64, index::Record, String)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Hidden> {
         let mut out = Vec::new();
-        let mut ids: Vec<u64> = idx.hidden(&me)?.into_iter().collect();
-        ids.sort_unstable();
-        for id in ids {
-            if let Some(r) = idx.locate(id)?.filter(|r| labels.contains(&r.label)) {
-                out.push((id, r));
+        let mut all = 0;
+        for id in idx.hidden(&me)? {
+            let Some(r) = idx.locate(id)?.filter(|r| labels.contains(&r.label)) else {
+                continue;
+            };
+            all += 1;
+            let path = if own.contains(&r.label) {
+                String::from_utf8_lossy(&r.rel).into_owned()
+            } else {
+                String::new()
+            };
+            if !word2.is_empty()
+                && !path.to_lowercase().contains(&word2)
+                && !r.taken_local.contains(&word2)
+            {
+                continue;
             }
+            out.push((id, r, path));
         }
-        Ok(out)
+        let name = |p: &str| p.rsplit('/').next().unwrap_or(p).to_lowercase();
+        match sort {
+            "old" => out.sort_by(|a, b| (&a.1.taken_local, a.0).cmp(&(&b.1.taken_local, b.0))),
+            "name" => out.sort_by_key(|a| (name(&a.2), a.0)),
+            _ => out.sort_by(|a, b| (&b.1.taken_local, b.0).cmp(&(&a.1.taken_local, a.0))),
+        }
+        Ok((all, out))
     })
     .await;
-    let items = match res {
+    let (all, items) = match res {
         Ok(Ok(i)) => i,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
-    let mut body = format!(
-        "<h1>Hidden</h1><p class=\"dim\">{} hidden by you; only your view changes, nothing in the library.</p><div class=\"grid hiddenlist\">",
-        items.len()
+    let back = format!(
+        "hidden?sort={sort}{}",
+        if word.is_empty() {
+            String::new()
+        } else {
+            format!("&q={}", urlencode(&word))
+        }
     );
-    for (id, r) in &items {
+    let opt = |v: &str, label: &str| {
+        format!(
+            "<option value=\"{v}\"{}>{label}</option>",
+            if v == sort { " selected" } else { "" }
+        )
+    };
+    let shown = if word.is_empty() {
+        String::new()
+    } else {
+        format!(" {} with “{}”.", items.len(), esc(&word))
+    };
+    let mut body = format!(
+        "<h1>Hidden</h1><p class=\"dim\">{all} hidden by you; only your view changes, nothing in the library.{shown}</p>\
+         <form class=\"hidtools\" method=\"get\" action=\"hidden\"><input type=\"search\" name=\"q\" value=\"{q}\" placeholder=\"Word in the file name or date\" aria-label=\"Word in the file name or date\">\
+         <select name=\"sort\" aria-label=\"Order\">{}{}{}</select><button type=\"submit\">Show</button></form>\
+         <form class=\"hidmany\" method=\"post\" action=\"unhide-many\"><input type=\"hidden\" name=\"ids\" value=\"\"><input type=\"hidden\" name=\"back\" value=\"{b}\">\
+         <button type=\"button\" class=\"all\">Choose all</button><button type=\"submit\" class=\"again\" disabled>Show the chosen again</button><span class=\"dim n\"></span></form>\
+         <div class=\"grid hiddenlist\">",
+        opt("new", "Newest first"),
+        opt("old", "Oldest first"),
+        opt("name", "By name"),
+        q = esc(&word),
+        b = esc(&back),
+    );
+    for (id, r, path) in &items {
         let img = if r.thumb == "ok" {
             format!(
                 "<img src=\"thumb/{id}?h={}\" loading=\"lazy\" alt=\"\">",
@@ -3489,10 +3750,17 @@ async fn hidden_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         } else {
             "<span class=\"nothumb\">no preview</span>".to_string()
         };
+        let name = path.rsplit('/').next().unwrap_or(path);
         body += &format!(
             "<div class=\"hid\"><a class=\"item\" href=\"v/{l}/{id}\">{img}</a>\
-             <form method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"hidden\"><button type=\"submit\">Show again</button></form></div>",
-            l = esc(&r.label)
+             <label class=\"pick\"><input type=\"checkbox\" value=\"{id}\"> <span>{when}</span></label>\
+             <small class=\"dim fname\" title=\"{p}\">{n}</small>\
+             <form method=\"post\" action=\"unhide/{id}\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\">Show again</button></form></div>",
+            l = esc(&r.label),
+            when = esc(r.taken_local.get(..10).unwrap_or("")),
+            p = esc(path),
+            n = esc(name),
+            b = esc(&back),
         );
     }
     body += "</div>";
@@ -3706,6 +3974,71 @@ async fn duplicates_csv(
 
 /// GET /status: what the server is doing (REQ-WEB-009): scan,
 /// transcription, duplicates, search, version. Counts and times only.
+/// The status page's counts, which read every item: kept for a minute per
+/// set of libraries, so an open status page (it refreshes every 10 s) does
+/// not keep the index busy (REQ-WEB-025).
+#[derive(Clone)]
+pub struct StatusCounts {
+    transcripts: Option<(u64, u64, u64)>,
+    looks: Option<(u64, u64, u64, u64)>,
+    positions: crate::place::Counts,
+    faced: Option<(u64, u64)>,
+}
+
+/// How long the status counts are kept.
+const STATUS_COUNTS_FOR: std::time::Duration = std::time::Duration::from_secs(60);
+
+async fn status_counts(st: &AppState, labels: &[String]) -> anyhow::Result<StatusCounts> {
+    let key = labels.join("\u{1f}");
+    if let Some((at, c)) = st
+        .status_counts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&key)
+    {
+        if at.elapsed() < STATUS_COUNTS_FOR {
+            return Ok(c.clone());
+        }
+    }
+    let (idx, pc, labels2) = (st.index.clone(), st.positions.clone(), labels.to_vec());
+    let (model, vision, version, faces) = (
+        st.transcribe_model.clone(),
+        st.vision_on,
+        st.vision_version.clone(),
+        st.faces_on,
+    );
+    let c = tokio::task::spawn_blocking(move || -> anyhow::Result<StatusCounts> {
+        let transcripts = match model {
+            Some(m) => Some(idx.transcript_counts(&labels2, &m)?),
+            None => None,
+        };
+        let looks = if vision {
+            Some(idx.look_counts(&labels2, &version)?)
+        } else {
+            None
+        };
+        let pos = pc.get(&idx)?;
+        let positions = crate::place::counts(&idx.all()?, &pos, &labels2);
+        let faced = if faces {
+            Some(idx.faces_counts(&labels2, crate::faces::VERSION)?)
+        } else {
+            None
+        };
+        Ok(StatusCounts {
+            transcripts,
+            looks,
+            positions,
+            faced,
+        })
+    })
+    .await??;
+    st.status_counts
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(key, (std::time::Instant::now(), c.clone()));
+    Ok(c)
+}
+
 async fn status_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
@@ -3713,183 +4046,232 @@ async fn status_page(
 ) -> Response {
     use crate::status::{relative, span, Phase};
     let s = st.status.snapshot();
-    let counts = match st.transcribe_model.clone() {
-        Some(m) => {
-            let idx = st.index.clone();
-            let labels = viewer.labels.clone();
-            match tokio::task::spawn_blocking(move || idx.transcript_counts(&labels, &m)).await {
-                Ok(Ok(c)) => Some(c),
-                Ok(Err(e)) => return internal(e),
-                Err(e) => return internal(e),
-            }
-        }
-        None => None,
+    let c = match status_counts(&st, &viewer.labels).await {
+        Ok(c) => c,
+        Err(e) => return internal(e),
     };
-    let read_counts = if st.vision_on {
-        let (idx, labels, version) = (
-            st.index.clone(),
-            viewer.labels.clone(),
-            st.vision_version.clone(),
-        );
-        match tokio::task::spawn_blocking(move || idx.look_counts(&labels, &version)).await {
-            Ok(Ok(c)) => Some(c),
-            Ok(Err(e)) => return internal(e),
-            Err(e) => return internal(e),
-        }
-    } else {
-        None
-    };
-    let positions = {
-        let (pc, idx, labels) = (
-            st.positions.clone(),
-            st.index.clone(),
-            viewer.labels.clone(),
-        );
-        match tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-            let pos = pc.get(&idx)?;
-            Ok(crate::place::counts(&idx.all()?, &pos, &labels))
-        })
-        .await
-        {
-            Ok(Ok(c)) => c,
-            Ok(Err(e)) => return internal(e),
-            Err(e) => return internal(e),
-        }
-    };
+    let (counts, read_counts, positions, faced) = (c.transcripts, c.looks, c.positions, c.faced);
     let now = std::time::SystemTime::now();
     let everything = st.labels.iter().all(|l| viewer.labels.contains(l));
     let mut rows: Vec<(&str, String)> = Vec::new();
+    // The work comes in four steps, one after another (REQ-WEB-009): what
+    // runs now, what is done, and what waits for it.
+    let left = |since: std::time::SystemTime, done: u64, total: u64| -> String {
+        let spent = now.duration_since(since).unwrap_or_default().as_secs_f64();
+        if done < 5 || total <= done || spent < 60.0 {
+            return String::new();
+        }
+        let rest = std::time::Duration::from_secs_f64(spent * (total - done) as f64 / done as f64);
+        format!(", about {} left", span(rest))
+    };
+    let pct = |done: u64, total: u64| {
+        // Only while a step is not done.
+        if total == 0 || done >= total {
+            String::new()
+        } else {
+            format!(" ({} %)", done * 100 / total)
+        }
+    };
+    let bar = |done: u64, total: u64| {
+        if total == 0 {
+            String::new()
+        } else {
+            format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
+        }
+    };
+    let current = match &s.phase {
+        Phase::Scanning { .. } => Some(0),
+        Phase::Transcribing { .. } => Some(1),
+        Phase::Looking { .. } => Some(2),
+        Phase::Faces { .. } => Some(3),
+        _ => None,
+    };
     let (state, cls) = match &s.phase {
         Phase::Starting => ("Starting".to_string(), "busy"),
         Phase::Scanning { since } => (
-            format!("Scanning the libraries, since {}", relative(*since, now)),
+            format!(
+                "Step 1 of 4: scanning the libraries, since {}",
+                relative(*since, now)
+            ),
             "busy",
         ),
         Phase::Transcribing {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
             format!(
-                "Transcribing videos: {done} of {total} done ({} with speech, {} without, {} failed), since {}",
-                report.transcribed,
-                report.no_speech,
-                report.failed,
-                relative(*since, now)
+                "Step 2 of 4: transcribing videos, {done} of {total} done{}",
+                left(*since, *done, *total)
             ),
             "busy",
         ),
         Phase::Looking {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
             format!(
-                "Looking at photos: {done} of {total} done ({} with text, {} with things, {} failed), since {}",
-                report.with_text,
-                report.with_things,
-                report.failed,
-                relative(*since, now)
+                "Step 3 of 4: looking at photos, {done} of {total} in this pass{}",
+                left(*since, *done, *total)
             ),
             "busy",
         ),
         Phase::Faces {
-            since,
-            done,
-            total,
-            report,
+            since, done, total, ..
         } => (
-            if everything {
-                format!(
-                    "Looking for faces: {done} of {total} photos done ({} faces, {} failed), since {}",
-                    report.faces,
-                    report.failed,
-                    relative(*since, now)
-                )
-            } else {
-                format!("Looking for faces, since {}", relative(*since, now))
-            },
+            format!(
+                "Step 4 of 4: looking for faces, {done} of {total} photos{}",
+                left(*since, *done, *total)
+            ),
             "busy",
         ),
-        Phase::Idle { next: Some(n) } => (format!("Idle; next scan {}", relative(*n, now)), "ok"),
-        Phase::Idle { next: None } => ("Idle".to_string(), "ok"),
+        Phase::Idle { next: Some(n) } => (
+            format!("All steps done; next scan {}", relative(*n, now)),
+            "ok",
+        ),
+        Phase::Idle { next: None } => ("All steps done".to_string(), "ok"),
     };
     let progress = match &s.phase {
         Phase::Transcribing { done, total, .. }
         | Phase::Looking { done, total, .. }
-        | Phase::Faces { done, total, .. }
-            if *total > 0 =>
-        {
-            format!("<progress max=\"{total}\" value=\"{done}\">{done} of {total}</progress>")
-        }
+        | Phase::Faces { done, total, .. } => bar(*done, *total),
         _ => String::new(),
     };
     rows.push((
         "Now",
         format!("<span class=\"dot {cls}\"></span>{}{progress}", esc(&state)),
     ));
-    rows.push((
-        "Last scan",
+    // One step: its state (done, running, waiting, off) and its line.
+    let step = |i: usize, name: &str, on: bool, complete: bool, line: String| -> String {
+        let (c, mark) = match (on, current) {
+            (false, _) => ("off", "off"),
+            (true, Some(k)) if k == i => ("run", "now"),
+            (true, Some(k)) if k < i => ("wait", "waits"),
+            (true, _) if complete => ("done", "done"),
+            (true, _) => ("part", "so far"),
+        };
+        format!("<li class=\"{c}\"><b>{name}</b><i>{mark}</i><span>{line}</span></li>")
+    };
+    let mut steps = String::from("<ol class=\"steps\">");
+    steps += &step(
+        0,
+        "Scan",
+        true,
+        s.last_scan.as_ref().is_some_and(|d| !d.failed),
         match &s.last_scan {
             None => "not yet".into(),
-            Some(d) => match () {
-                _ if d.failed => format!(
-                    "failed {}; the server's log says why",
-                    relative(d.ended, now)
-                ),
-                _ if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
-                _ => format!(
-                    "{}, took {}: {} files found, {} indexed, {} skipped{}",
-                    relative(d.ended, now),
-                    span(d.took),
-                    d.found,
-                    d.indexed,
-                    d.skipped,
-                    if d.reconciled {
-                        ""
-                    } else {
-                        " (did not reconcile)"
-                    }
-                ),
-            },
+            Some(d) if d.failed => format!(
+                "failed {}; the server's log says why",
+                relative(d.ended, now)
+            ),
+            Some(d) if !everything => format!("{}, took {}", relative(d.ended, now), span(d.took)),
+            Some(d) => format!(
+                "{}, took {}: {} files found, {} indexed, {} skipped{}",
+                relative(d.ended, now),
+                span(d.took),
+                d.found,
+                d.indexed,
+                d.skipped,
+                if d.reconciled {
+                    ""
+                } else {
+                    " (did not reconcile)"
+                }
+            ),
         },
-    ));
-    rows.push((
+    );
+    steps += &step(
+        1,
         "Transcripts",
-        match (st.transcribe_model.as_deref(), counts) {
-            (Some(m), Some((videos, done, speech))) => format!(
-                "{done} of {videos} videos transcribed, {speech} with speech <span class=\"dim\">(model {})</span>{}",
-                esc(m),
-                match &s.last_pass {
-                    Some(p) => format!(
-                        "<br><span class=\"dim\">last pass ended {}</span>",
-                        relative(p.ended, now)
+        st.transcribe_model.is_some(),
+        counts.is_some_and(|(v, d, _)| d >= v),
+        match (st.transcribe_model.as_deref(), counts, &s.phase) {
+            (Some(m), Some((videos, done, speech)), ph) => {
+                let run = match ph {
+                    Phase::Transcribing { since, done: d, total, report } => format!(
+                        "<br>This pass: {d} of {total} done ({} with speech, {} without, {} failed){}",
+                        report.transcribed,
+                        report.no_speech,
+                        report.failed,
+                        left(*since, *d, *total),
                     ),
-                    None => String::new(),
-                }
-            ),
-            _ => "off (no speech model configured)".into(),
+                    _ => String::new(),
+                };
+                format!(
+                    "{done} of {videos} videos transcribed, {speech} with speech <span class=\"dim\">(model {})</span>{run}",
+                    esc(m)
+                )
+            }
+            _ => "off: no speech model configured".into(),
         },
-    ));
-    rows.push((
-        "Photos looked at",
-        match read_counts {
-            Some((photos, done, with, things)) => format!(
-                "{done} of {photos} photos looked at: {with} with text, {things} with things <span class=\"dim\">({})</span>{}",
-                esc(&st.vision_version),
-                match s.last_read {
-                    Some(t) => format!(
-                        "<br><span class=\"dim\">last pass ended {}</span>",
-                        relative(t, now)
+    );
+    steps += &step(
+        2,
+        "Looking at photos",
+        st.vision_on,
+        read_counts.is_some_and(|(p, d, _, _)| d >= p),
+        match (read_counts, &s.phase) {
+            (Some((photos, done, with, things)), ph) => {
+                let run = match ph {
+                    Phase::Looking {
+                        since,
+                        done: d,
+                        total,
+                        report,
+                    } => format!(
+                        "<br>This pass: {d} of {total} ({} with text, {} with things, {} failed){}",
+                        report.with_text,
+                        report.with_things,
+                        report.failed,
+                        left(*since, *d, *total),
                     ),
-                    None => String::new(),
-                }
-            ),
-            None => "off (no vision models configured)".into(),
+                    _ => String::new(),
+                };
+                format!(
+                    "{done} of {photos} photos looked at{}: {with} with text, {things} with things <span class=\"dim\">({})</span>{run}",
+                    pct(done, photos),
+                    esc(&st.vision_version),
+                )
+            }
+            (None, _) => "off: no vision models configured".into(),
         },
-    ));
+    );
+    steps += &step(
+        3,
+        "Faces",
+        st.faces_on,
+        faced.is_some_and(|(p, d)| d >= p),
+        match (faced, &s.phase) {
+            (None, _) => "off: the face models are not in the vision directory".into(),
+            (Some((photos, done)), ph) => {
+                let run = match ph {
+                    Phase::Faces {
+                        since,
+                        done: d,
+                        total,
+                        report,
+                    } => format!(
+                        "<br>This pass: {d} of {total}{}{}",
+                        if everything {
+                            format!(" ({} faces, {} failed)", report.faces, report.failed)
+                        } else {
+                            String::new()
+                        },
+                        left(*since, *d, *total),
+                    ),
+                    _ => String::new(),
+                };
+                let waits = if current.is_some_and(|k| k < 3) {
+                    " Starts when every photo has been looked at."
+                } else {
+                    ""
+                };
+                format!(
+                    "{done} of {photos} photos looked at for faces{}.{waits}{run}",
+                    pct(done, photos)
+                )
+            }
+        },
+    );
+    steps += "</ol>";
+    rows.push(("Steps", steps));
     let c = positions;
     rows.push((
         "Positions",
@@ -3926,6 +4308,45 @@ async fn status_page(
         "Place names",
         if st.places.is_some() { "on" } else { "off" }.into(),
     ));
+    // How quickly the server answered in the last hour (REQ-WEB-025).
+    {
+        use crate::timing::{short, Kind};
+        let at = std::time::Instant::now();
+        let line = |what: &str, s: &crate::timing::Summary| -> String {
+            if s.n == 0 {
+                return format!("no {what} in the last hour");
+            }
+            let mut l = format!(
+                "{} {}: half within {}, 95 % within {}",
+                s.n,
+                if s.n == 1 {
+                    what.trim_end_matches('s')
+                } else {
+                    what
+                },
+                short(s.median),
+                short(s.p95)
+            );
+            if !s.slow.is_empty() {
+                l += "; slower than a second: ";
+                l += &s
+                    .slow
+                    .iter()
+                    .map(|(r, d, n)| format!("<code>{}</code> {} ({n}×)", esc(r), short(*d)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+            }
+            l
+        };
+        rows.push((
+            "Answers",
+            format!(
+                "{}<br>{}",
+                line("pages", &st.timings.summary(Kind::Page, at)),
+                line("pictures", &st.timings.summary(Kind::Picture, at))
+            ),
+        ));
+    }
     rows.push((
         "Running",
         format!(
@@ -4003,7 +4424,7 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
 
 /// "3–9 July 2021", "30 June – 2 July 2021", "30 December 2021 – 2 January
 /// 2022".
-fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
+pub(crate) fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
     use chrono::Datelike;
     let m = |d: chrono::NaiveDate| MONTHS[d.month0() as usize];
     if a == b {
@@ -4027,6 +4448,31 @@ fn day_span(a: chrono::NaiveDate, b: chrono::NaiveDate) -> String {
 
 /// GET /trips: days away from home, grouped and named by place
 /// (REQ-TRIP-001); a trip opens the timeline at its last day.
+/// Trips, and the items they were found in.
+pub(crate) type TripsAndItems = (Vec<crate::trips::Trip>, Vec<(u64, index::Record)>);
+
+/// The trips in `labels` as this person's timeline shows them (one copy
+/// each, nothing hidden), with the items they were found in.
+pub(crate) fn trips_of(
+    idx: &index::Index,
+    dups: &crate::dups::Dups,
+    labels: &[String],
+    me: &str,
+    positions: &crate::place::Cache,
+    places: Option<&crate::places::Places>,
+) -> anyhow::Result<TripsAndItems> {
+    let hidden = idx.hidden(me)?;
+    let items: Vec<(u64, index::Record)> = idx
+        .all()?
+        .into_iter()
+        .filter(|(id, r)| {
+            !r.missing && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
+        })
+        .collect();
+    let pos = positions.get(idx)?;
+    Ok((crate::trips::find(&items, &pos, places), items))
+}
+
 async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let (idx, dups, labels, me) = (
         st.index.clone(),
@@ -4036,16 +4482,7 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     );
     let (pc, places) = (st.positions.clone(), st.places.clone());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<_> {
-        let hidden = idx.hidden(&me)?;
-        let items: Vec<(u64, index::Record)> = idx
-            .all()?
-            .into_iter()
-            .filter(|(id, r)| {
-                !r.missing && labels.contains(&r.label) && dups.shown(*id, &labels, &hidden).shown
-            })
-            .collect();
-        let pos = pc.get(&idx)?;
-        let trips = crate::trips::find(&items, &pos, places.as_deref());
+        let (trips, items) = trips_of(&idx, &dups, &labels, &me, &pc, places.as_deref())?;
         let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
         Ok(trips
             .into_iter()
@@ -4096,6 +4533,123 @@ async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Vie
     }
     body += "</section>";
     page_for(&st, "lichtbild trips", &body).into_response()
+}
+
+/// One country the viewer's pictures were taken in (REQ-MAP-003).
+struct Country {
+    code: String,
+    name: String,
+    items: usize,
+    days: std::collections::BTreeSet<String>,
+    /// The newest picture: (taken, id, hash).
+    cover: (String, u64, String),
+}
+
+/// A flag from a two-letter ISO code (regional indicator symbols); any
+/// other code gets none.
+fn flag(code: &str) -> String {
+    if code.len() != 2 || !code.bytes().all(|b| b.is_ascii_uppercase()) {
+        return String::new();
+    }
+    code.bytes()
+        .filter_map(|b| char::from_u32(0x1F1E6 + u32::from(b - b'A')))
+        .collect()
+}
+
+/// GET /countries: the countries the viewer's pictures were taken in, by
+/// the nearest town of each position (recorded, set by hand or
+/// estimated), as the timeline shows them: one copy each, nothing hidden,
+/// only the viewer's libraries. A country opens the map on its pictures.
+async fn countries_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+) -> Response {
+    let Some(places) = st.places.clone() else {
+        let body = "<h1>Countries</h1><p class=\"dim\">Countries come from the offline place names, and none are configured.</p>";
+        return page_for(&st, "lichtbild countries", body).into_response();
+    };
+    let (idx, dups, labels, me) = (
+        st.index.clone(),
+        st.dups.clone(),
+        viewer.labels.clone(),
+        person(&viewer),
+    );
+    let pc = st.positions.clone();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Country>> {
+        let hidden = idx.hidden(&me)?;
+        let pos = pc.get(&idx)?;
+        let mut by: HashMap<String, Country> = HashMap::new();
+        for (id, r) in idx.all()? {
+            if r.missing || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
+                continue;
+            }
+            let Some(p) = pos.get(&id) else { continue };
+            let Some(code) = places.country(p.lat, p.lon) else {
+                continue;
+            };
+            let c = by.entry(code.to_string()).or_insert_with(|| Country {
+                code: code.to_string(),
+                name: places.country_name(code),
+                items: 0,
+                days: Default::default(),
+                cover: (String::new(), 0, String::new()),
+            });
+            c.items += 1;
+            c.days
+                .insert(r.taken_local.get(..10).unwrap_or("").to_string());
+            if r.thumb == "ok" && (r.taken_local.as_str(), id) > (c.cover.0.as_str(), c.cover.1) {
+                c.cover = (r.taken_local.clone(), id, r.hash.clone());
+            }
+        }
+        let mut out: Vec<Country> = by.into_values().collect();
+        out.sort_by(|a, b| b.items.cmp(&a.items).then(a.name.cmp(&b.name)));
+        Ok(out)
+    })
+    .await;
+    let countries = match res {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = format!(
+        "<h1>Countries</h1><p class=\"dim\">{} by the nearest town of each picture with a position. A country opens the map on its pictures.</p>",
+        match countries.len() {
+            0 => "No countries yet,".to_string(),
+            1 => "1 country,".to_string(),
+            n => format!("{n} countries,"),
+        }
+    );
+    body += "<section class=\"thingtiles countries\">";
+    for c in &countries {
+        let first = c.days.first().map(String::as_str).unwrap_or("");
+        let last = c.days.last().map(String::as_str).unwrap_or("");
+        let (y1, y2) = (first.get(..4).unwrap_or(""), last.get(..4).unwrap_or(""));
+        let years = if y1 == y2 {
+            y1.to_string()
+        } else {
+            format!("{y1}–{y2}")
+        };
+        let img = if c.cover.1 == 0 {
+            String::new()
+        } else {
+            format!(
+                "<img src=\"thumb/{}?h={}\" loading=\"lazy\" alt=\"\">",
+                c.cover.1,
+                esc(c.cover.2.get(..12).unwrap_or(""))
+            )
+        };
+        body += &format!(
+            "<a class=\"thing\" href=\"map?country={code}\">{img}<span><b>{flag} {name}</b><i>{n}</i></span><small>{days} · {years}</small></a>",
+            code = esc(&c.code),
+            flag = flag(&c.code),
+            name = esc(&c.name),
+            n = c.items,
+            days = if c.days.len() == 1 { "1 day".to_string() } else { format!("{} days", c.days.len()) },
+            years = esc(&years),
+        );
+    }
+    body += "</section>";
+    page_for(&st, "lichtbild countries", &body).into_response()
 }
 
 /// GET /words: the words most videos share, as bubbles (REQ-WORDS-001);
@@ -4373,6 +4927,7 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
         "htmx-2.0.4.min.js" => (HTMX, "text/javascript; charset=utf-8"),
         "lichtbild.css" => (CSS, "text/css; charset=utf-8"),
         "lichtbild.js" => (JS, "text/javascript; charset=utf-8"),
+        "theme.js" => (THEME_JS, "text/javascript; charset=utf-8"),
         other => match crate::map::static_asset(other) {
             Some(x) => x,
             None => return StatusCode::NOT_FOUND.into_response(),
@@ -4390,11 +4945,12 @@ async fn static_file(UrlPath(file): UrlPath<String>) -> Response {
 
 /// All embedded assets, for the no-outside-URL test (REQ-WEB-003).
 /// The vendored map libraries are listed in `map::vendored`.
-pub fn embedded_assets() -> [(&'static str, &'static str); 4] {
+pub fn embedded_assets() -> [(&'static str, &'static str); 5] {
     [
         ("htmx-2.0.4.min.js", HTMX),
         ("lichtbild.css", CSS),
         ("lichtbild.js", JS),
+        ("theme.js", THEME_JS),
         ("map.js", crate::map::MAP_JS),
     ]
 }
@@ -4410,9 +4966,11 @@ pub struct DaysQuery {
     md: Option<String>,
     /// A heading for the page (a trip's places).
     title: Option<String>,
+    /// One day, YYYY-MM-DD, from the date picker: the same as from=to=day.
+    day: Option<String>,
 }
 
-fn is_day(s: &str) -> bool {
+pub(crate) fn is_day(s: &str) -> bool {
     s.len() == 10
         && s.bytes().enumerate().all(|(i, b)| {
             if i == 4 || i == 7 {
@@ -4521,42 +5079,62 @@ async fn days_page(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
     UrlPath(who): UrlPath<String>,
-    Query(dq): Query<DaysQuery>,
+    Query(mut dq): Query<DaysQuery>,
 ) -> Response {
     let Some(labels) = scope(&viewer, &who) else {
         return (StatusCode::NOT_FOUND, "no such timeline").into_response();
     };
+    if let Some(d) = dq.day.take() {
+        dq.from = Some(d.clone());
+        dq.to = Some(d);
+        dq.md = None;
+    }
     if !dq.valid() {
         return (StatusCode::BAD_REQUEST, "which days?").into_response();
     }
     let (idx, dups, me) = (st.index.clone(), st.dups.clone(), person(&viewer));
     let space = st.vision_on.then(|| st.space.clone());
+    let (best, dd) = (st.best.clone(), st.data_dir.clone());
     let dq2 = dq.clone();
-    let res =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<index::Item>, Vec<usize>)> {
-            let hidden = idx.hidden(&me)?;
-            let favs = idx.favs(&me)?;
-            let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
-            for it in &mut items {
-                it.copies = dups.shown(it.id, &labels, &hidden).copies;
-                it.fav = favs.contains(&it.id);
-            }
-            let runs = series(&items, space.as_deref());
-            Ok((items, runs))
-        })
-        .await;
-    let (items, runs) = match res {
+    type Days = (Vec<index::Item>, Vec<usize>, Option<String>, Option<String>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Days> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let mut items = day_items(&idx, &dups, &labels, &hidden, &dq2, false)?;
+        for it in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
+        }
+        let runs = series(&items, space.as_deref());
+        crate::best::best_first(&mut items, &runs, |it| best.of(&dd, it));
+        // The days before and after with a picture the viewer would see here.
+        let (mut before, mut after) = (None, None);
+        if let (None, Some(f), Some(t)) = (&dq2.md, &dq2.from, &dq2.to) {
+            let shown = |id: u64, _: &index::Record| dups.shown(id, &labels, &hidden).shown;
+            before = idx
+                .timeline_where(&labels, Some((f.as_str(), 0)), 1, shown)?
+                .pop()
+                .and_then(|it| it.taken_local.get(..10).map(str::to_string));
+            after = idx
+                .first_from(&labels, &format!("{t}T99"), shown)?
+                .and_then(|it| it.taken_local.get(..10).map(str::to_string));
+        }
+        Ok((items, runs, before, after))
+    })
+    .await;
+    let (items, runs, before, after) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
     };
     let head = esc(&dq.heading());
     let w = esc(&who);
+    let nav = day_nav(&w, &dq, before.as_deref(), after.as_deref());
     let body = if items.is_empty() {
-        format!("<h1>{head}</h1><p class=\"dim\">No pictures from these days.</p>")
+        format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n<div class=\"timeline days\">\n{}</div>\n{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
@@ -4564,6 +5142,35 @@ async fn days_page(
         )
     };
     page_for(&st, "lichtbild days", &body).into_response()
+}
+
+/// Earlier and later day with pictures, and a date picker for any day
+/// (REQ-WEB-019). `before` and `after` are YYYY-MM-DD.
+fn day_nav(w: &str, dq: &DaysQuery, before: Option<&str>, after: Option<&str>) -> String {
+    let day = |d: &str| {
+        long_date(&format!("{d}T00:00"))
+            .trim_end_matches(", 00:00")
+            .to_string()
+    };
+    let link = |d: Option<&str>, rel: &str, arrow_first: bool| match d {
+        Some(d) => {
+            let (d, label) = (esc(d), esc(&day(d)));
+            let text = if arrow_first {
+                format!("‹ {label}")
+            } else {
+                format!("{label} ›")
+            };
+            format!("<a rel=\"{rel}\" href=\"days/{w}?from={d}&amp;to={d}\">{text}</a>")
+        }
+        None => "<span></span>".to_string(),
+    };
+    let value = dq.from.as_deref().filter(|_| dq.md.is_none()).unwrap_or("");
+    format!(
+        "<nav class=\"daynav\">{}<form class=\"daypick\" method=\"get\" action=\"days/{w}\"><label>Day <input type=\"date\" name=\"day\" value=\"{}\" required></label><button type=\"submit\">Go</button></form>{}</nav>\n",
+        link(before, "prev", true),
+        esc(value),
+        link(after, "next", false),
+    )
 }
 
 // ---- People (REQ-FACE-002, REQ-FACE-003, DD-025) ----
@@ -4641,6 +5248,27 @@ const GROUPS_MAX: usize = 48;
 
 /// GET /people: the named people the viewer has photos of, then groups of
 /// one unnamed person each, biggest first, to be named.
+/// Where the looking for faces stands, for the People page: still waiting
+/// for the photos to be looked at, or under way (REQ-WEB-009).
+fn faces_note(st: &AppState) -> String {
+    use crate::status::Phase;
+    if !st.faces_on {
+        return String::new();
+    }
+    match st.status.snapshot().phase {
+        Phase::Starting | Phase::Scanning { .. } | Phase::Transcribing { .. } => {
+            "<p class=\"note\">Faces are looked for after the scan, the transcripts and the looking at photos. <a href=\"status\">Status</a></p>".to_string()
+        }
+        Phase::Looking { done, total, .. } => format!(
+            "<p class=\"note\">Faces are looked for once every photo has been looked at; that pass is at {done} of {total}. <a href=\"status\">Status</a></p>"
+        ),
+        Phase::Faces { done, total, .. } => format!(
+            "<p class=\"note\">Looking for faces now: {done} of {total} photos. People appear here as they are found. <a href=\"status\">Status</a></p>"
+        ),
+        Phase::Idle { .. } => String::new(),
+    }
+}
+
 async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let (idx, people) = (st.index.clone(), st.people.clone());
     let me = person(&viewer);
@@ -4701,9 +5329,12 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         Err(e) => return internal(e),
     };
     let mut body = String::from("<h1>People</h1>");
+    body += &faces_note(&st);
     if named.is_empty() && groups.is_empty() {
-        body += if st.people.is_empty() {
-            "<p class=\"dim\">No faces yet. With the face models in the vision directory, lichtbild looks for faces after it has looked at the photos.</p>"
+        body += if !st.faces_on {
+            "<p class=\"dim\">No faces: the face models are not in the vision directory.</p>"
+        } else if st.people.is_empty() {
+            "<p class=\"dim\">No faces yet.</p>"
         } else {
             "<p class=\"dim\">No one twice yet in the photos you see.</p>"
         };

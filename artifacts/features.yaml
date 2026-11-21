@@ -367,3 +367,48 @@ artifacts:
         target: REQ-FIX-001
       - type: satisfies
         target: REQ-FIX-002
+
+  - id: FEAT-017
+    type: feature
+    title: Browse, sort and choose more easily
+    status: implemented
+    release: v0.9.0
+    description: >
+      Owner requests 2026-11-20 evening, after trying v0.8.0 on the iPad:
+      any day and the days around it, sorting and selecting what is
+      hidden, the best shot of a series, trips and a time range on the
+      map, and the countries visited.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - From a day, the day before and after with pictures are one tap away, and any day is one pick away
+        - Hidden pictures sort by date or name, narrow by a word, and come back several at a time
+        - A series shows its best shot first, and the others go away in one tap
+        - The map shows one trip, or the months chosen on a slider
+        - The countries visited are listed with their pictures, and each opens on the map
+        - What is said in a video shows over it while it plays
+        - Nothing has to cover the photo, and several corrections can be made one after another
+        - Day or night by a switch in the menu
+        - How quickly pages answer is a number on the status page, with the slow ones named
+        - A slideshow of just the pictures chosen
+    links:
+      - type: satisfies
+        target: REQ-WEB-026
+      - type: satisfies
+        target: REQ-WEB-025
+      - type: satisfies
+        target: REQ-WEB-024
+      - type: satisfies
+        target: REQ-WEB-023
+      - type: satisfies
+        target: REQ-WEB-022
+      - type: satisfies
+        target: REQ-MAP-003
+      - type: satisfies
+        target: REQ-MAP-002
+      - type: satisfies
+        target: REQ-WEB-021
+      - type: satisfies
+        target: REQ-WEB-019
+      - type: satisfies
+        target: REQ-WEB-020
