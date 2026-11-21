@@ -1477,7 +1477,16 @@ impl Index {
     /// so only those who see it are offered the word. A kind no
     /// correction uses any more is free again. None when the word is not
     /// one (`fixes::own_word`) or every own kind is in use.
-    pub fn own_kind(&self, word: &str, label: &str) -> Result<Option<u8>> {
+    ///
+    /// With `fix` (a photo's content hash and a correction), the
+    /// correction is saved as this kind in the same write: a kind given
+    /// out is in use before anyone else can take it back.
+    pub fn own_kind(
+        &self,
+        word: &str,
+        label: &str,
+        fix: Option<(&str, crate::fixes::ThingFix)>,
+    ) -> Result<Option<u8>> {
         let Some(word) = crate::fixes::own_word(word) else {
             return Ok(None);
         };
@@ -1531,6 +1540,10 @@ impl Index {
             t.insert(kind, serde_json::to_vec(&entry)?.as_slice())?;
             kind
         };
+        if let Some((hash, mut f)) = fix {
+            f.now = Some(kind);
+            put_thing_fix(&w, hash, Some(f), None)?;
+        }
         w.commit()?;
         Ok(Some(kind))
     }
@@ -1544,24 +1557,7 @@ impl Index {
         undo: Option<usize>,
     ) -> Result<()> {
         let w = self.db.begin_write()?;
-        {
-            let mut t = w.open_table(THING_FIXES)?;
-            let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
-                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            if let Some(i) = undo.filter(|i| *i < v.len()) {
-                v.remove(i);
-            }
-            if let Some(f) = fix {
-                crate::fixes::put(&mut v, f);
-            }
-            if v.is_empty() {
-                t.remove(hash)?;
-            } else {
-                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
-            }
-        }
+        put_thing_fix(&w, hash, fix, undo)?;
         w.commit()?;
         Ok(())
     }
@@ -1977,4 +1973,31 @@ impl crate::auth::SessionStore for Index {
         w.commit()?;
         Ok(())
     }
+}
+
+/// Put a word about a thing found within the write `w` (see
+/// `Index::fix_thing`).
+fn put_thing_fix(
+    w: &redb::WriteTransaction,
+    hash: &str,
+    fix: Option<crate::fixes::ThingFix>,
+    undo: Option<usize>,
+) -> Result<()> {
+    let mut t = w.open_table(THING_FIXES)?;
+    let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
+        Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    if let Some(i) = undo.filter(|i| *i < v.len()) {
+        v.remove(i);
+    }
+    if let Some(f) = fix {
+        crate::fixes::put(&mut v, f);
+    }
+    if v.is_empty() {
+        t.remove(hash)?;
+    } else {
+        t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+    }
+    Ok(())
 }

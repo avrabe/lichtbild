@@ -200,6 +200,7 @@ at nice 0.
 | F192 | REQ-FIX-003 | on a phone the open sheet covers the photo | `the_viewer_script_moves_every_panel_below_and_saves_in_place` |
 | F193 | REQ-FIX-003 | own words typed in a library the viewer may not see are offered | `a_thing_can_be_named_with_the_houses_own_word` |
 | F194 | REQ-FIX-003 | own kinds no correction uses are never given out again | `a_thing_can_be_named_with_the_houses_own_word` |
+| F195 | REQ-FIX-003 | a correction to an own word is not saved with its kind | `a_thing_can_be_named_with_the_houses_own_word` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |

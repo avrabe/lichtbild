@@ -6589,10 +6589,24 @@ async fn fix_thing(
                 let word = f.kind.as_deref().unwrap_or("");
                 match crate::fixes::detector_kind(word) {
                     Some(k) => Some(k),
-                    None => match idx.own_kind(word, &rec.label)? {
-                        Some(k) => Some(k),
-                        None => return Ok(StatusCode::BAD_REQUEST),
-                    },
+                    // The own kind and the correction in one write, so
+                    // the kind cannot be given to another word between.
+                    None => {
+                        let fix = crate::fixes::ThingFix {
+                            kind: o.kind,
+                            bbox: o.bbox,
+                            score: o.score,
+                            now: None,
+                            by: me,
+                            at: now_secs(),
+                        };
+                        return Ok(
+                            match idx.own_kind(word, &rec.label, Some((&rec.hash, fix)))? {
+                                Some(_) => StatusCode::OK,
+                                None => StatusCode::BAD_REQUEST,
+                            },
+                        );
+                    }
                 }
             }
             "undo" => {

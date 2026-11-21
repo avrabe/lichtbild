@@ -2276,7 +2276,7 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
     assert!(fixes.own(|l| l == "p2").is_empty(), "used in p1 only");
     assert_eq!(fixes.kind_of("CAPYBARA"), Some(lichtbild::fixes::OWN_FIRST));
     assert_eq!(
-        e.idx.own_kind(" CAPYBARA ", "p1").unwrap(),
+        e.idx.own_kind(" CAPYBARA ", "p1", None).unwrap(),
         Some(lichtbild::fixes::OWN_FIRST),
         "the index too knows the word in other letters"
     );
@@ -2374,7 +2374,11 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
     // When every own kind is taken, one no correction uses is given to a
     // new word; one in use keeps its word.
     let mut n = 0;
-    while e.idx.own_kind(&format!("Wort{n}"), "p1").unwrap().is_some()
+    while e
+        .idx
+        .own_kind(&format!("Wort{n}"), "p1", None)
+        .unwrap()
+        .is_some()
         && e.idx.fixes().unwrap().own(|_| true).len() < 128
     {
         n += 1;
@@ -2382,7 +2386,7 @@ async fn a_thing_can_be_named_with_the_houses_own_word() {
     assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 128);
     let k = e
         .idx
-        .own_kind("Neu", "p1")
+        .own_kind("Neu", "p1", None)
         .unwrap()
         .expect("a free kind again");
     let fixes = e.idx.fixes().unwrap();
