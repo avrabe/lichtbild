@@ -129,14 +129,21 @@ impl Object {
 
 /// The words search should know a picture by: each kind once, in German
 /// (singular and plural) and English.
-pub fn words(objects: &[Object]) -> String {
+/// The house's own words (REQ-FIX-003) come from `fixes`.
+pub fn words(objects: &[Object], fixes: &crate::fixes::Fixes) -> String {
     let mut kinds: Vec<u8> = objects.iter().map(|o| o.kind).collect();
     kinds.sort_unstable();
     kinds.dedup();
     kinds
         .iter()
-        .filter_map(|k| KINDS.get(*k as usize))
-        .map(|(en, de, pl)| format!("{de} {pl} {en}"))
+        .filter_map(|k| fixes.names(*k))
+        .map(|(en, de, pl)| {
+            if de == en {
+                de.to_string()
+            } else {
+                format!("{de} {pl} {en}")
+            }
+        })
         .collect::<Vec<_>>()
         .join(" ")
 }
@@ -243,7 +250,7 @@ mod tests {
             bbox: [0.0, 0.0, 1.0, 1.0],
         };
         assert_eq!(
-            words(&[o(16), o(0), o(16)]),
+            words(&[o(16), o(0), o(16)], &crate::fixes::Fixes::default()),
             "Person Personen person Hund Hunde dog"
         );
         assert_eq!(o(15).name(), "Katze");

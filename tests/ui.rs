@@ -340,6 +340,16 @@ async fn the_viewer_script_moves_every_panel_below_and_saves_in_place() {
     );
     assert!(js.contains(r#"var KINDS = { "fix/thing": 1, "fix/text": 1, "fix/off": 1 };"#));
     assert!(js.contains("if (mine) row.replaceWith(document.importNode(mine, true));"));
+    // A refused correction says why, not only a red line (REQ-FIX-003).
+    assert!(js.contains("why.className = \"why\";"));
+    assert!(js.contains("throw new Error(t || \"\")"));
+    // On a phone the photo moves above an open sheet instead of staying
+    // behind it (owner report on 0.9.0).
+    let (_, css) = get(&app, "/static/lichtbild.css", false).await;
+    assert!(
+        css.contains(".viewer:has(.vbar details[open] > :is(.tpanel, .xpanel, .kpanel)) .stage {\n    flex: none; height: calc(42dvh - 56px);"),
+        "the photo above the sheet"
+    );
     let (_, page) = get(&app, &format!("/v/p1/{}", e.video), false).await;
     assert!(
         page.contains("<section class=\"under\" hidden></section>"),

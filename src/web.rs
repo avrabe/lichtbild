@@ -1525,6 +1525,8 @@ pub fn render_text(text: &crate::ocr::Text, q: Option<&str>, fixes: &str) -> (St
 /// like it (REQ-SEE-002): a panel with a chip per kind (a tap searches for
 /// it) and a strip of look-alikes, and a layer of boxes over the picture
 /// while the panel is open.
+// The viewer decides which of the house's own words are offered.
+#[allow(clippy::too_many_arguments)]
 pub fn render_things(
     who: &str,
     id: u64,
@@ -1533,6 +1535,7 @@ pub fn render_things(
     raw: &[crate::objects::Object],
     fixes: &crate::fixes::Fixes,
     similar: &[(u64, index::Record)],
+    viewer: &Viewer,
 ) -> (String, String) {
     if raw.is_empty() && similar.is_empty() {
         return (String::new(), String::new());
@@ -1551,7 +1554,7 @@ pub fn render_things(
     if !kinds.is_empty() {
         panel += "<p class=\"dim\">Found in this picture, in the house. A thing searches for it.</p><p class=\"chips\">";
         for (k, n) in &kinds {
-            let (_, one, many) = crate::objects::KINDS[*k as usize];
+            let (_, one, many) = fixes.names(*k).unwrap_or(("?", "?", "?"));
             let label = if *n > 1 {
                 format!("{n} {many}")
             } else {
@@ -1577,7 +1580,7 @@ pub fn render_things(
         }
         panel += "</div>";
     }
-    panel += &render_thing_fixes(id, back, hash, raw, fixes);
+    panel += &render_thing_fixes(id, back, hash, raw, fixes, viewer);
     panel += "</div></details>";
     let mut layer = String::from(
         "<div class=\"boxlayer thinglayer\" data-for=\"things\" hidden aria-hidden=\"true\">",
@@ -1587,7 +1590,7 @@ pub fn render_things(
     for (n, o) in raw.iter().enumerate() {
         let [x0, y0, x1, y1] = o.bbox;
         let kept = fixes.verdict(hash, o);
-        let name = crate::fixes::kind_name(kept.unwrap_or(o.kind));
+        let name = fixes.name(kept.unwrap_or(o.kind));
         layer += &format!(
             "<a href=\"search?q={q}\" data-n=\"{n}\"{gone} data-quad=\"{x0:.4},{y0:.4},{x1:.4},{y0:.4},{x1:.4},{y1:.4},{x0:.4},{y1:.4}\" title=\"{name}\"><span>{name}</span></a>",
             q = esc(&urlencode(name)),
@@ -2232,7 +2235,7 @@ async fn viewer(
         })
         .await;
         match res {
-            Ok(Ok((o, f, h, s))) => render_things(&who, id, &back, &h, &o, &f, &s),
+            Ok(Ok((o, f, h, s))) => render_things(&who, id, &back, &h, &o, &f, &s, &viewer),
             _ => Default::default(),
         }
     } else {
@@ -2693,7 +2696,7 @@ async fn search(
                 kinds.sort_unstable();
                 kinds.dedup();
                 for k in kinds {
-                    if let Some((_, de, _)) = crate::objects::KINDS.get(k as usize) {
+                    if let Some((_, de, _)) = fixes.names(k) {
                         terms.push((crate::search::Kind::Thing, de.to_string()));
                     }
                 }
@@ -4404,10 +4407,10 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 out.push((kind, n, id, rec));
             }
         }
-        Ok(out)
+        Ok((out, idx.fixes()?))
     })
     .await;
-    let things = match res {
+    let (things, fixes) = match res {
         Ok(Ok(t)) => t,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -4425,7 +4428,7 @@ async fn things_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     }
     body += "<section class=\"thingtiles\">";
     for (kind, n, id, rec) in &things {
-        let (_, one, many) = crate::objects::KINDS[*kind as usize];
+        let (_, one, many) = fixes.names(*kind).unwrap_or(("?", "?", "?"));
         body += &format!(
             "<a class=\"thing\" href=\"search?q={q}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{name}</b><i>{n}</i></span></a>",
             q = esc(&urlencode(one)),
@@ -6397,9 +6400,14 @@ fn render_faces(
 
 // ---- Corrections (REQ-FIX-001, REQ-FIX-002) ----
 
-/// The kinds of thing to pick from, German and English.
-fn kinds_datalist() -> String {
+/// The kinds of thing to pick from, German and English, and the
+/// house's own words (REQ-FIX-003). Any other word may be typed too.
+/// Only own words used in a library the viewer sees are offered.
+fn kinds_datalist(fixes: &crate::fixes::Fixes, viewer: Option<&Viewer>) -> String {
     let mut s = String::from("<datalist id=\"kinds\">");
+    for (_, w) in fixes.own(|l| viewer.is_some_and(|v| v.may_see(l))) {
+        s += &format!("<option value=\"{}\">", esc(w));
+    }
     for (en, de, _) in crate::objects::KINDS {
         s += &format!(
             "<option value=\"{}\"><option value=\"{}\">",
@@ -6408,15 +6416,6 @@ fn kinds_datalist() -> String {
         );
     }
     s + "</datalist>"
-}
-
-/// The kind a name stands for: German singular or plural, or English.
-fn kind_of(name: &str) -> Option<u8> {
-    let n = crate::search::fold(name.trim());
-    crate::objects::KINDS
-        .iter()
-        .position(|(en, de, pl)| [en, de, pl].iter().any(|w| crate::search::fold(w) == n))
-        .map(|k| k as u8)
 }
 
 /// The "Something wrong?" part of the things panel: each find with what
@@ -6428,6 +6427,7 @@ fn render_thing_fixes(
     hash: &str,
     raw: &[crate::objects::Object],
     fixes: &crate::fixes::Fixes,
+    viewer: &Viewer,
 ) -> String {
     if raw.is_empty() {
         return String::new();
@@ -6441,7 +6441,7 @@ fn render_thing_fixes(
             Some(f) if f.right() => "marked right".to_string(),
             Some(f) => match f.now {
                 None => "marked not there".to_string(),
-                Some(k) => format!("is a {}", crate::fixes::kind_name(k)),
+                Some(k) => format!("is a {}", fixes.name(k)),
             },
             None if fixes.off.contains_key(&o.kind) => "never in our house".to_string(),
             None if o.score < fixes.bar(o.kind) => {
@@ -6479,7 +6479,7 @@ fn render_thing_fixes(
         );
     }
     s += "</ul>";
-    s += &kinds_datalist();
+    s += &kinds_datalist(fixes, Some(viewer));
     s += "</details>";
     s
 }
@@ -6559,6 +6559,16 @@ async fn fix_thing(
     if !same_site(&headers) {
         return StatusCode::FORBIDDEN.into_response();
     }
+    if f.now == "kind" && crate::fixes::own_word(f.kind.as_deref().unwrap_or("")).is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!(
+                "Not saved: a thing's name needs a letter and at most {} characters.",
+                crate::fixes::OWN_MAX_CHARS
+            ),
+        )
+            .into_response();
+    }
     let idx = st.index.clone();
     let me = person(&viewer);
     let back = f.back.clone();
@@ -6573,10 +6583,32 @@ async fn fix_thing(
         let now = match f.now.as_str() {
             "right" => Some(o.kind),
             "wrong" => None,
-            "kind" => match f.kind.as_deref().and_then(kind_of) {
-                Some(k) => Some(k),
-                None => return Ok(StatusCode::BAD_REQUEST),
-            },
+            // A detector kind, a word the house has, or a new own word
+            // (REQ-FIX-003).
+            "kind" => {
+                let word = f.kind.as_deref().unwrap_or("");
+                match crate::fixes::detector_kind(word) {
+                    Some(k) => Some(k),
+                    // The own kind and the correction in one write, so
+                    // the kind cannot be given to another word between.
+                    None => {
+                        let fix = crate::fixes::ThingFix {
+                            kind: o.kind,
+                            bbox: o.bbox,
+                            score: o.score,
+                            now: None,
+                            by: me,
+                            at: now_secs(),
+                        };
+                        return Ok(
+                            match idx.own_kind(word, &rec.label, Some((&rec.hash, fix)))? {
+                                Some(_) => StatusCode::OK,
+                                None => StatusCode::BAD_REQUEST,
+                            },
+                        );
+                    }
+                }
+            }
             "undo" => {
                 let fixes = idx.fixes()?;
                 let list = fixes.things.get(&rec.hash).cloned().unwrap_or_default();
@@ -6706,7 +6738,7 @@ async fn fix_off(
     let kind = match f.kind.parse::<u8>() {
         Ok(k) if (k as usize) < crate::objects::KINDS.len() => Some(k),
         Ok(_) => None,
-        Err(_) => kind_of(&f.kind),
+        Err(_) => crate::fixes::detector_kind(&f.kind),
     };
     let Some(kind) = kind else {
         return StatusCode::BAD_REQUEST.into_response();
@@ -6763,7 +6795,7 @@ async fn corrections_page(
         // Kinds never in the house.
         body += "<h2>Never in our house</h2>";
         let mut off: Vec<(&u8, &crate::fixes::Mark)> = fixes.off.iter().collect();
-        off.sort_by_key(|(k, _)| crate::fixes::kind_name(**k));
+        off.sort_by_key(|(k, _)| fixes.name(**k));
         if off.is_empty() {
             body += "<p class=\"dim\">Nothing yet.</p>";
         } else {
@@ -6771,25 +6803,26 @@ async fn corrections_page(
             for (k, _) in off {
                 body += &format!(
                     "<li><b>{}</b><form method=\"post\" action=\"fix/off\"><input type=\"hidden\" name=\"kind\" value=\"{k}\"><input type=\"hidden\" name=\"back\" value=\"corrections\"><button type=\"submit\">Find them again</button></form></li>",
-                    esc(crate::objects::KINDS[*k as usize].2),
+                    esc(fixes.names(*k).map_or("?", |n| n.2)),
                 );
             }
             body += "</ul>";
         }
         body += "<form method=\"post\" action=\"fix/off\" class=\"fixadd\"><input type=\"hidden\" name=\"off\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"corrections\"><input name=\"kind\" list=\"kinds\" placeholder=\"A kind of thing\" aria-label=\"A kind of thing never in our house\" required><button type=\"submit\">Never in our house</button></form>";
-        body += &kinds_datalist();
+        // "Never in our house" is for the detector's kinds only.
+        body += &kinds_datalist(&fixes, None);
         // Bars learned.
         let mut bars: Vec<(u8, f32)> = (0..crate::objects::KINDS.len() as u8)
             .map(|k| (k, fixes.bar(k)))
             .filter(|(_, b)| *b > crate::objects::MIN_SCORE)
             .collect();
         if !bars.is_empty() {
-            bars.sort_by_key(|(k, _)| crate::fixes::kind_name(*k));
+            bars.sort_by_key(|(k, _)| fixes.name(*k));
             body += "<h2>Learned</h2><p class=\"dim\">Kinds marked wrong more than once are kept only when the looking is surer than it was then.</p><ul class=\"fixlist\">";
             for (k, b) in bars {
                 body += &format!(
                     "<li><b>{}</b> from {:.0} % on</li>",
-                    esc(crate::objects::KINDS[k as usize].2),
+                    esc(fixes.names(k).map_or("?", |n| n.2)),
                     b * 100.0
                 );
             }
@@ -6805,9 +6838,9 @@ async fn corrections_page(
                 let said = match f.now {
                     _ if f.right() => "right".to_string(),
                     None => "not there".to_string(),
-                    Some(k) => format!("a {}", crate::fixes::kind_name(k)),
+                    Some(k) => format!("a {}", fixes.name(k)),
                 };
-                rows.push((*id, label.clone(), crate::fixes::kind_name(f.kind).to_string(), said));
+                rows.push((*id, label.clone(), fixes.name(f.kind).to_string(), said));
             }
         }
         rows.sort();
@@ -6882,7 +6915,7 @@ async fn corrections_jsonl(
             out += &v.to_string();
             out.push('\n');
         };
-        let en = |k: u8| crate::objects::KINDS.get(k as usize).map_or("?", |t| t.0);
+        let en = |k: u8| fixes.names(k).map_or("?", |t| t.0);
         let mut things: Vec<_> = fixes
             .things
             .iter()

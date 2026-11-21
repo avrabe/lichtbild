@@ -1203,6 +1203,9 @@
     var body = new URLSearchParams(new FormData(form));
     if (e.submitter && e.submitter.name) body.append(e.submitter.name, e.submitter.value);
     var row = form.closest("li") || form;
+    row.classList.remove("failed");
+    var said = row.querySelector(".why");
+    if (said) said.remove();
     row.classList.add("saving");
     fetch(action, {
       method: "POST",
@@ -1210,7 +1213,7 @@
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: body.toString()
     }).then(function (r) {
-      if (!r.ok) throw new Error(r.status);
+      if (!r.ok) return r.text().then(function (t) { throw new Error(t || ""); });
       return r.text();
     }).then(function (html) {
       var doc = new DOMParser().parseFromString(html, "text/html");
@@ -1227,14 +1230,28 @@
         if (mine) row.replaceWith(document.importNode(mine, true));
         else row.classList.remove("saving");
       }
-      // The boxes over the photo follow: a find left out is gone.
+      // The boxes over the photo follow: a find left out is gone, one
+      // named anew carries its new name; so do the counts above the list.
       document.querySelectorAll(".thinglayer a[data-n]").forEach(function (a) {
         var b = doc.querySelector(".thinglayer a[data-n=\"" + a.getAttribute("data-n") + "\"]");
-        if (b) a.className = b.className;
+        if (!b) return;
+        a.className = b.className;
+        a.title = b.title;
+        a.innerHTML = b.innerHTML;
+        a.href = b.getAttribute("href");
       });
-    }).catch(function () {
+      var chips = document.querySelector("details.things .kpanel p.chips");
+      var freshChips = doc.querySelector("details.things .kpanel p.chips");
+      if (chips && freshChips) chips.innerHTML = freshChips.innerHTML;
+    }).catch(function (err) {
       row.classList.remove("saving");
       row.classList.add("failed");
+      // Say why, not only a red line (a word the house could not take).
+      var why = document.createElement("span");
+      why.className = "why";
+      why.setAttribute("role", "alert");
+      why.textContent = err && err.message && err.message.length < 200 ? err.message : "Not saved. Try again.";
+      row.appendChild(why);
     });
   });
 })();

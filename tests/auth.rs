@@ -2211,6 +2211,190 @@ async fn corrections_are_the_houses_and_seen_only_with_ones_photos() {
     assert_eq!(e.idx.objects(&x.1).unwrap().len(), 2);
 }
 
+// A thing the detector does not know (a capybara it calls a bear) gets
+// the house's own word: shown, searched and offered again; the same word
+// in other letters is the same kind; a word without letters is refused
+// with a reason.
+// rivet: verifies REQ-FIX-003
+#[tokio::test]
+async fn a_thing_can_be_named_with_the_houses_own_word() {
+    use lichtbild::objects::Object;
+    let e = env_with("https://photos.example", true).await;
+    let all = e.idx.all().unwrap();
+    let mut p1 = all
+        .iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none() && !r.missing)
+        .map(|(id, r)| (*id, r.hash.clone()));
+    let (x, y) = (p1.next().unwrap(), p1.next().unwrap());
+    let bear = |bbox: [f32; 4]| Object {
+        kind: 21,
+        score: 0.95,
+        bbox,
+    };
+    let look = |objects: Vec<Object>| lichtbild::vision::Look {
+        text: lichtbild::ocr::Text {
+            state: "none".into(),
+            model: "test".into(),
+            lines: vec![],
+            docs: vec![],
+        },
+        objects,
+        vector: vec![],
+    };
+    for h in [&x.1, &y.1] {
+        e.idx
+            .set_look(
+                h,
+                "test",
+                &look(vec![bear([0.1, 0.1, 0.5, 0.5]), bear([0.5, 0.5, 0.9, 0.9])]),
+            )
+            .unwrap();
+    }
+    e.search.rebuild(&e.idx, None).unwrap();
+    let (c1, c2) = two_sessions(&e).await;
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let fix =
+        |item: u64, n: usize, rest: &str| format!("item={item}&n={n}&back=v%2Fp1%2F{item}&{rest}");
+    let post = |body: String| {
+        let (app, c1) = (&e.app, &c1);
+        async move { req_with_body(app, "POST", "/fix/thing", Some(c1), &body, &form).await }
+    };
+
+    let r = post(fix(x.0, 0, "now=kind&kind=+Capybara+")).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    // Other letters, the same word: one own kind, not two.
+    let r = post(fix(y.0, 1, "now=kind&kind=capybara")).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let fixes = e.idx.fixes().unwrap();
+    assert_eq!(
+        fixes.own(|l| l == "p1"),
+        vec![(lichtbild::fixes::OWN_FIRST, "Capybara")]
+    );
+    assert!(fixes.own(|l| l == "p2").is_empty(), "used in p1 only");
+    assert_eq!(fixes.kind_of("CAPYBARA"), Some(lichtbild::fixes::OWN_FIRST));
+    assert_eq!(
+        e.idx.own_kind(" CAPYBARA ", "p1", None).unwrap(),
+        Some(lichtbild::fixes::OWN_FIRST),
+        "the index too knows the word in other letters"
+    );
+    // A known kind stays the detector's, not an own word.
+    let r = post(fix(y.0, 0, "now=kind&kind=Hund")).await;
+    assert!(r.status.is_redirection());
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 1);
+
+    let v = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(v.body.contains("is a Capybara"), "{}", v.body);
+    assert!(
+        v.body.contains("title=\"Capybara\""),
+        "the box carries the word"
+    );
+    assert!(
+        v.body.contains("<option value=\"Capybara\">"),
+        "offered again"
+    );
+    let things = req_with(&e.app, "GET", "/things", Some(&c1), false, &[])
+        .await
+        .body;
+    assert!(things.contains("<b>Capybara</b>"), "{things}");
+    let has = |page: &str, id: u64| {
+        page.contains(&format!("/{id}\"")) || page.contains(&format!("/{id}?q="))
+    };
+    search_until(&e, &c1, "capybara", |p| has(p, x.0) && has(p, y.0)).await;
+
+    // No letters, or too long: refused, and the answer says why.
+    for bad in [
+        "now=kind&kind=+42+",
+        &format!("now=kind&kind={}", "a".repeat(41)),
+    ] {
+        let r = post(fix(x.0, 1, bad)).await;
+        assert_eq!(r.status, StatusCode::BAD_REQUEST, "{bad}");
+        assert!(r.body.contains("at most 40 characters"), "{}", r.body);
+    }
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 1);
+
+    // A word typed on a photo of a library one may not see is not offered:
+    // p2 names a find in p2, which p1 may not see.
+    let z = all
+        .iter()
+        .find(|(_, r)| r.label == "p2" && r.video.is_none() && !r.missing)
+        .map(|(id, r)| (*id, r.hash.clone()))
+        .unwrap();
+    e.idx
+        .set_look(&z.1, "test", &look(vec![bear([0.1, 0.1, 0.5, 0.5])]))
+        .unwrap();
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        "/fix/thing",
+        Some(&c2),
+        &format!(
+            "item={}&n=0&back=v%2Fp2%2F{}&now=kind&kind=Wombat",
+            z.0, z.0
+        ),
+        &form,
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let mine = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p1/{}", x.0),
+        Some(&c1),
+        false,
+        &[],
+    )
+    .await;
+    assert!(!mine.body.contains("Wombat"), "{}", mine.body);
+    let theirs = req_with(
+        &e.app,
+        "GET",
+        &format!("/v/p2/{}", z.0),
+        Some(&c2),
+        false,
+        &[],
+    )
+    .await;
+    assert!(
+        theirs.body.contains("<option value=\"Wombat\">")
+            && theirs.body.contains("<option value=\"Capybara\">"),
+        "p2 sees both libraries"
+    );
+
+    // When every own kind is taken, one no correction uses is given to a
+    // new word; one in use keeps its word.
+    let mut n = 0;
+    while e
+        .idx
+        .own_kind(&format!("Wort{n}"), "p1", None)
+        .unwrap()
+        .is_some()
+        && e.idx.fixes().unwrap().own(|_| true).len() < 128
+    {
+        n += 1;
+    }
+    assert_eq!(e.idx.fixes().unwrap().own(|_| true).len(), 128);
+    let k = e
+        .idx
+        .own_kind("Neu", "p1", None)
+        .unwrap()
+        .expect("a free kind again");
+    let fixes = e.idx.fixes().unwrap();
+    assert_eq!(fixes.name(k), "Neu");
+    assert_eq!(fixes.name(lichtbild::fixes::OWN_FIRST), "Capybara");
+    assert!(fixes.own(|_| true).iter().any(|(_, w)| *w == "Wombat"));
+}
+
 // The hidden list names files of one's own library only: p2, who sees p1's
 // library, gets the date of a hidden p1 photo but not its file name, and a
 // word from that name does not find it.

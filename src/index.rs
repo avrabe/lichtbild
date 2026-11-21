@@ -82,6 +82,10 @@ const FACE_NOT: TableDefinition<(&str, u32, u64), ()> = TableDefinition::new("fa
 const THING_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("thing_fixes");
 /// Kinds never in the house (REQ-FIX-001): kind -> JSON `fixes::Mark`.
 const KIND_OFF: TableDefinition<u8, &[u8]> = TableDefinition::new("kind_off");
+/// The house's own words for things (REQ-FIX-003): kind (from
+/// `fixes::OWN_FIRST`) -> JSON `fixes::OwnWord` (the word and the
+/// libraries it was used in).
+const OWN_KINDS: TableDefinition<u8, &[u8]> = TableDefinition::new("own_kinds");
 /// Corrections of text read (REQ-FIX-002): content hash -> JSON
 /// `[fixes::TextFix]`.
 const TEXT_FIXES: TableDefinition<&str, &[u8]> = TableDefinition::new("text_fixes");
@@ -272,6 +276,7 @@ impl Index {
             w.open_table(FACE_NOT)?;
             w.open_table(THING_FIXES)?;
             w.open_table(KIND_OFF)?;
+            w.open_table(OWN_KINDS)?;
             w.open_table(TEXT_FIXES)?;
             w.open_table(RELATIONS)?;
         }
@@ -1455,7 +1460,92 @@ impl Index {
                 off.insert(k.value(), m);
             }
         }
-        Ok(crate::fixes::Fixes::new(things, off))
+        let t = r.open_table(OWN_KINDS)?;
+        let mut own = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            if let Ok(o) = serde_json::from_slice(v.value()) {
+                own.insert(k.value(), o);
+            }
+        }
+        Ok(crate::fixes::Fixes::new(things, off).with_own(own))
+    }
+
+    /// The kind of the house's own word `word` (REQ-FIX-003), used on a
+    /// photo of library `label`: the one it already has under that word
+    /// (case and accents aside), else a free one; the library is noted,
+    /// so only those who see it are offered the word. A kind no
+    /// correction uses any more is free again. None when the word is not
+    /// one (`fixes::own_word`) or every own kind is in use.
+    ///
+    /// With `fix` (a photo's content hash and a correction), the
+    /// correction is saved as this kind in the same write: a kind given
+    /// out is in use before anyone else can take it back.
+    pub fn own_kind(
+        &self,
+        word: &str,
+        label: &str,
+        fix: Option<(&str, crate::fixes::ThingFix)>,
+    ) -> Result<Option<u8>> {
+        let Some(word) = crate::fixes::own_word(word) else {
+            return Ok(None);
+        };
+        let folded = crate::search::fold(word);
+        let w = self.db.begin_write()?;
+        let kind = {
+            let mut t = w.open_table(OWN_KINDS)?;
+            let mut have: HashMap<u8, crate::fixes::OwnWord> = HashMap::new();
+            for e in t.iter()? {
+                let (k, v) = e?;
+                if let Ok(o) = serde_json::from_slice(v.value()) {
+                    have.insert(k.value(), o);
+                }
+            }
+            let found = have
+                .iter()
+                .find(|(_, o)| crate::search::fold(&o.word) == folded)
+                .map(|(k, o)| (*k, o.clone()));
+            let (kind, mut entry) = match found {
+                Some(f) => f,
+                None => {
+                    let mut free =
+                        (crate::fixes::OWN_FIRST..=u8::MAX).find(|k| !have.contains_key(k));
+                    if free.is_none() {
+                        // All taken: a word no correction uses any more
+                        // gives up its kind.
+                        let mut used = std::collections::HashSet::new();
+                        for e in w.open_table(THING_FIXES)?.iter()? {
+                            let (_, v) = e?;
+                            let list: Vec<crate::fixes::ThingFix> =
+                                serde_json::from_slice(v.value()).unwrap_or_default();
+                            used.extend(list.iter().filter_map(|f| f.now));
+                        }
+                        free = (crate::fixes::OWN_FIRST..=u8::MAX).find(|k| !used.contains(k));
+                    }
+                    let Some(k) = free else {
+                        return Ok(None);
+                    };
+                    (
+                        k,
+                        crate::fixes::OwnWord {
+                            word: word.to_string(),
+                            labels: Vec::new(),
+                        },
+                    )
+                }
+            };
+            if !entry.labels.iter().any(|l| l == label) {
+                entry.labels.push(label.to_string());
+            }
+            t.insert(kind, serde_json::to_vec(&entry)?.as_slice())?;
+            kind
+        };
+        if let Some((hash, mut f)) = fix {
+            f.now = Some(kind);
+            put_thing_fix(&w, hash, Some(f), None)?;
+        }
+        w.commit()?;
+        Ok(Some(kind))
     }
 
     /// Put a word about a thing found, replacing an earlier word about the
@@ -1467,24 +1557,7 @@ impl Index {
         undo: Option<usize>,
     ) -> Result<()> {
         let w = self.db.begin_write()?;
-        {
-            let mut t = w.open_table(THING_FIXES)?;
-            let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
-                Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
-                None => Vec::new(),
-            };
-            if let Some(i) = undo.filter(|i| *i < v.len()) {
-                v.remove(i);
-            }
-            if let Some(f) = fix {
-                crate::fixes::put(&mut v, f);
-            }
-            if v.is_empty() {
-                t.remove(hash)?;
-            } else {
-                t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
-            }
-        }
+        put_thing_fix(&w, hash, fix, undo)?;
         w.commit()?;
         Ok(())
     }
@@ -1900,4 +1973,31 @@ impl crate::auth::SessionStore for Index {
         w.commit()?;
         Ok(())
     }
+}
+
+/// Put a word about a thing found within the write `w` (see
+/// `Index::fix_thing`).
+fn put_thing_fix(
+    w: &redb::WriteTransaction,
+    hash: &str,
+    fix: Option<crate::fixes::ThingFix>,
+    undo: Option<usize>,
+) -> Result<()> {
+    let mut t = w.open_table(THING_FIXES)?;
+    let mut v: Vec<crate::fixes::ThingFix> = match t.get(hash)? {
+        Some(v) => serde_json::from_slice(v.value()).unwrap_or_default(),
+        None => Vec::new(),
+    };
+    if let Some(i) = undo.filter(|i| *i < v.len()) {
+        v.remove(i);
+    }
+    if let Some(f) = fix {
+        crate::fixes::put(&mut v, f);
+    }
+    if v.is_empty() {
+        t.remove(hash)?;
+    } else {
+        t.insert(hash, serde_json::to_vec(&v)?.as_slice())?;
+    }
+    Ok(())
 }

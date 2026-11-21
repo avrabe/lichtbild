@@ -81,18 +81,106 @@ pub fn quad_box(q: &[f32; 8]) -> [f32; 4] {
     [min(xs), min(ys), max(xs), max(ys)]
 }
 
+/// The house's own words for things (a capybara the detector calls a
+/// bear) are kinds from here on; the detector's kinds stay below.
+pub const OWN_FIRST: u8 = 128;
+/// An own word is at most this many characters.
+pub const OWN_MAX_CHARS: usize = 40;
+
+/// A word the house may add as its own kind: trimmed, with a letter, no
+/// control characters, at most `OWN_MAX_CHARS`.
+pub fn own_word(word: &str) -> Option<&str> {
+    let w = word.trim();
+    (w.chars().any(char::is_alphabetic)
+        && !w.chars().any(char::is_control)
+        && w.chars().count() <= OWN_MAX_CHARS)
+        .then_some(w)
+}
+
+/// The detector's kind a name stands for: German singular or plural, or
+/// English; case and accents do not matter.
+pub fn detector_kind(name: &str) -> Option<u8> {
+    let n = crate::search::fold(name.trim());
+    KINDS
+        .iter()
+        .position(|(en, de, pl)| [en, de, pl].iter().any(|w| crate::search::fold(w) == n))
+        .map(|k| k as u8)
+}
+
+/// One of the house's own words, and the libraries it was used in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OwnWord {
+    pub word: String,
+    pub labels: Vec<String>,
+}
+
 /// Every correction of things, read once and applied to many photos.
 #[derive(Debug, Clone, Default)]
 pub struct Fixes {
     pub things: HashMap<String, Vec<ThingFix>>,
     pub off: HashMap<u8, Mark>,
     bar: HashMap<u8, f32>,
+    /// The house's own kinds: kind -> word.
+    own: HashMap<u8, OwnWord>,
 }
 
 impl Fixes {
     pub fn new(things: HashMap<String, Vec<ThingFix>>, off: HashMap<u8, Mark>) -> Fixes {
         let bar = bars(things.values().flatten());
-        Fixes { things, off, bar }
+        Fixes {
+            things,
+            off,
+            bar,
+            own: HashMap::new(),
+        }
+    }
+
+    /// With the house's own kinds.
+    pub fn with_own(mut self, own: HashMap<u8, OwnWord>) -> Fixes {
+        self.own = own;
+        self
+    }
+
+    /// A kind's names: English, German singular and plural. An own word
+    /// is all three, as the house wrote it.
+    pub fn names(&self, k: u8) -> Option<(&str, &str, &str)> {
+        if let Some((en, de, pl)) = KINDS.get(k as usize) {
+            return Some((en, de, pl));
+        }
+        self.own
+            .get(&k)
+            .map(|o| (o.word.as_str(), o.word.as_str(), o.word.as_str()))
+    }
+
+    /// A kind's name in the house's language, singular.
+    pub fn name(&self, k: u8) -> &str {
+        self.names(k).map_or("?", |n| n.1)
+    }
+
+    /// The house's own kinds used in a library `may_see` lets through,
+    /// by word: a word typed on a photo one may not see is not offered.
+    pub fn own(&self, may_see: impl Fn(&str) -> bool) -> Vec<(u8, &str)> {
+        let mut v: Vec<(u8, &str)> = self
+            .own
+            .iter()
+            .filter(|(_, o)| o.labels.iter().any(|l| may_see(l)))
+            .map(|(k, o)| (*k, o.word.as_str()))
+            .collect();
+        v.sort_by_key(|(_, w)| crate::search::fold(w));
+        v
+    }
+
+    /// The kind a name stands for: a detector kind in German singular or
+    /// plural or English, else one of the house's own words; case and
+    /// accents do not matter.
+    pub fn kind_of(&self, name: &str) -> Option<u8> {
+        detector_kind(name).or_else(|| {
+            let n = crate::search::fold(name.trim());
+            self.own
+                .iter()
+                .find(|(_, o)| crate::search::fold(&o.word) == n)
+                .map(|(k, _)| *k)
+        })
     }
 
     /// The score a find of `kind` needs to be kept.
@@ -228,11 +316,6 @@ pub fn text_about<'a>(fixes: &'a [TextFix], b: [f32; 4], was: &str) -> Option<&'
         .filter(|(v, f)| *v >= SAME || (f.was == was && *v > 0.0))
         .max_by(|a, b| a.0.total_cmp(&b.0))
         .map(|(_, f)| f)
-}
-
-/// The name of a kind in the house's language, singular.
-pub fn kind_name(k: u8) -> &'static str {
-    KINDS.get(k as usize).map_or("?", |t| t.1)
 }
 
 #[cfg(test)]
