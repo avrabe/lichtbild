@@ -1072,3 +1072,9 @@ ol.steps li span { overflow-wrap: anywhere; }
 
 /* The day/night switch in the menu (REQ-WEB-024). */
 .appmenu button.theme b::after { content: " · " attr(data-now); font-weight: 400; color: var(--ink-faint); }
+/* Hidden strangers and people (REQ-FACE-005). */
+form.hidef, form.hiddennote { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0 14px; }
+form.hidef button, form.hiddennote button { font: inherit; min-height: 36px; padding: 0 14px; border-radius: 6px; border: 1px solid var(--ink-faint); background: transparent; color: var(--ink); cursor: pointer; }
+details.hiddenpeople { margin: 18px 0; }
+details.hiddenpeople summary { cursor: pointer; color: var(--ink-faint); }
+details.hiddenpeople .thing { opacity: .7; }

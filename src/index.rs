@@ -169,10 +169,15 @@ pub struct Item {
 /// A name given to faces (REQ-FACE-003), shared in the household.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Person {
+    /// Empty for faces hidden without a name (strangers).
     pub name: String,
     /// Who gave the name.
     pub by: String,
     pub created: u64,
+    /// Hidden (REQ-FACE-005): not on the People page, in a photo's faces,
+    /// in name suggestions, search by name or relations; the photos stay.
+    #[serde(default)]
+    pub hidden: bool,
 }
 
 /// An album (REQ-WEB-017): whose it is, its name, when it was made.
@@ -1165,6 +1170,7 @@ impl Index {
                 name: name.to_string(),
                 by: by.to_string(),
                 created: now,
+                hidden: false,
             };
             t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
         }
@@ -1206,6 +1212,25 @@ impl Index {
             found = p.is_some();
             if let Some(mut p) = p {
                 p.name = name.to_string();
+                t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(found)
+    }
+
+    /// Hide a person or show them again; false when there is no such person.
+    pub fn set_person_hidden(&self, id: u64, hidden: bool) -> Result<bool> {
+        let w = self.db.begin_write()?;
+        let found;
+        {
+            let mut t = w.open_table(PEOPLE)?;
+            let p: Option<Person> = t
+                .get(id)?
+                .and_then(|v| serde_json::from_slice(v.value()).ok());
+            found = p.is_some();
+            if let Some(mut p) = p {
+                p.hidden = hidden;
                 t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
             }
         }

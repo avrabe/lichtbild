@@ -2444,3 +2444,181 @@ async fn relations_between_people_are_seen_only_between_known_people() {
     assert!(r.status.is_redirection());
     assert!(e.idx.relations().unwrap().is_empty());
 }
+
+// Hiding: strangers' faces become one nameless hidden person and leave
+// "Who is this?" and the photo's faces; a named person can be hidden and
+// shown again; hidden people are out of suggestions and relations; only
+// someone who sees the person may hide them.
+// rivet: verifies REQ-FACE-005
+#[tokio::test]
+async fn strangers_and_people_can_be_hidden_and_shown_again() {
+    let e = env("https://photos.example").await;
+    let all = e.idx.all().unwrap();
+    let photos = |l: &str| -> Vec<(u64, String)> {
+        all.iter()
+            .filter(|(_, r)| r.label == l && r.video.is_none() && !r.missing)
+            .map(|(id, r)| (*id, r.hash.clone()))
+            .collect()
+    };
+    let (p1, p2) = (photos("p1"), photos("p2"));
+    // X and Y (p1): the same stranger; Z (p2): Opa.
+    let (x, y, z, w) = (&p1[0], &p1[1], &p2[0], &p1[2]);
+    for (h, v) in [
+        (&x.1, face_vec(0, 1)),
+        (&y.1, face_vec(0, 2)),
+        (&z.1, face_vec(5, 6)),
+        (&w.1, face_vec(9, 10)),
+    ] {
+        e.idx
+            .set_faces(h, lichtbild::faces::VERSION, &one_face(v))
+            .unwrap();
+    }
+    let data = e._fx.data.clone();
+    for h in [&x.1, &y.1, &z.1, &w.1] {
+        let p = lichtbild::faces::crop_path(&data, h, 0);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, common::jpeg(16, 16, 3)).unwrap();
+    }
+    e.people.rebuild(&e.idx).unwrap();
+    let opa = e.idx.create_person("Opa", "t", 0).unwrap();
+    let oma = e.idx.create_person("Oma", "t", 0).unwrap();
+    e.idx.name_faces(&[(z.1.clone(), 0)], opa).unwrap();
+    e.idx.name_faces(&[(w.1.clone(), 0)], oma).unwrap();
+    e.people.relabel(&e.idx).unwrap();
+
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "someone-else".into();
+        m.email = "two@example.test".into();
+    }
+    let Ok((s2, _)) = login(&e, "").await else {
+        panic!("p2 login failed");
+    };
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("p1 login failed");
+    };
+    let (c1, c2) = (
+        format!("lichtbild_session={s1}"),
+        format!("lichtbild_session={s2}"),
+    );
+    let get = |uri: String, c: String| {
+        let app = e.app.clone();
+        async move { req_with(&app, "GET", &uri, Some(&c), false, &[]).await }
+    };
+    let post = |uri: &str, body: String, c: String| {
+        let (app, uri) = (e.app.clone(), uri.to_string());
+        async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
+    };
+
+    // The stranger is offered for a name, with a way to hide them.
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(page.body.contains("Who is this?"), "{}", page.body);
+    let group = get(format!("/people/{}/0", x.0), c2.clone()).await;
+    assert!(
+        group.body.contains("Hide: no one we know"),
+        "{}",
+        group.body
+    );
+    let viewer = get(format!("/v/p1/{}", x.0), c2.clone()).await;
+    assert!(viewer.body.contains(&format!("face/{}/0", x.0)));
+
+    // Hidden: both faces go to one nameless hidden person.
+    let r = post("/people/hide", format!("item={}&face=0", x.0), c2.clone()).await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    let gone = e
+        .idx
+        .people()
+        .unwrap()
+        .into_iter()
+        .find(|(_, p)| p.hidden)
+        .expect("a hidden person");
+    assert!(gone.1.name.is_empty());
+    let named = e.idx.named_faces().unwrap();
+    assert_eq!(named.iter().filter(|(_, p)| *p == gone.0).count(), 2);
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(!page.body.contains("Who is this?"), "{}", page.body);
+    assert!(page.body.contains("Hidden (1)") && page.body.contains("Strangers"));
+    let viewer = get(format!("/v/p1/{}", x.0), c2.clone()).await;
+    assert!(
+        !viewer.body.contains(&format!("face/{}/0", x.0)),
+        "a hidden face is not listed with the photo"
+    );
+    assert_eq!(viewer.status, StatusCode::OK, "the photo stays");
+
+    // A named person: hidden, out of suggestions and relations, then back.
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=1".into(),
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    assert!(e.idx.person(opa).unwrap().unwrap().hidden);
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c2), true, &[]).await;
+    assert!(!r.body.contains("Opa"), "{}", r.body);
+    let page = get("/people".into(), c2.clone()).await;
+    assert!(page.body.contains("Hidden (2)"), "{}", page.body);
+    let page = get(format!("/person/{opa}"), c2.clone()).await;
+    assert!(page.body.contains("Show again"), "{}", page.body);
+    let r = post(
+        &format!("/person/{oma}/relate"),
+        "kind=friend&name=Opa".into(),
+        c2.clone(),
+    )
+    .await;
+    assert_eq!(
+        r.status,
+        StatusCode::BAD_REQUEST,
+        "no relation to a hidden person"
+    );
+    assert!(e.idx.relations().unwrap().is_empty());
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=0".into(),
+        c2.clone(),
+    )
+    .await;
+    assert!(r.status.is_redirection());
+    let r = req_with(&e.app, "GET", "/suggest?q=Op", Some(&c2), true, &[]).await;
+    assert!(r.body.contains("Opa"), "{}", r.body);
+
+    // p1 does not see Opa: cannot hide them; a bad value or a cross-site
+    // request changes nothing.
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=1".into(),
+        c1.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = post(
+        &format!("/person/{opa}/hide"),
+        "hidden=yes".into(),
+        c2.clone(),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{opa}/hide"),
+        Some(&c2),
+        "hidden=1",
+        &[
+            ("sec-fetch-site", "cross-site"),
+            ("content-type", "application/x-www-form-urlencoded"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+    assert!(!e.idx.person(opa).unwrap().unwrap().hidden);
+}

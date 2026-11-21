@@ -198,6 +198,8 @@ pub fn router(state: AppState) -> Router {
         .route("/person/{id}/rename", axum::routing::post(person_rename))
         .route("/person/{id}/delete", axum::routing::post(person_delete))
         .route("/person/{id}/relate", axum::routing::post(person_relate))
+        .route("/person/{id}/hide", axum::routing::post(person_hide))
+        .route("/people/hide", axum::routing::post(people_hide))
         .route(
             "/person/{id}/unrelate",
             axum::routing::post(person_unrelate),
@@ -2411,10 +2413,11 @@ async fn suggest(
             let hidden = idx.hidden(&me)?;
             let seen = seen_faces(&idx, &people, &labels, &hidden)?;
             for (id, p) in idx.people()? {
-                if !p
-                    .name
-                    .split_whitespace()
-                    .any(|w| w.to_lowercase().starts_with(&typed))
+                if p.hidden
+                    || !p
+                        .name
+                        .split_whitespace()
+                        .any(|w| w.to_lowercase().starts_with(&typed))
                 {
                     continue;
                 }
@@ -2554,9 +2557,11 @@ async fn search(
             let names: Vec<(u64, String)> = idx
                 .people()?
                 .into_iter()
-                .filter(|(id, _)| {
-                    seen.iter()
-                        .any(|f| f.face.who == crate::people::Who::Person(*id))
+                .filter(|(id, p)| {
+                    !p.hidden
+                        && seen
+                            .iter()
+                            .any(|f| f.face.who == crate::people::Who::Person(*id))
                 })
                 .map(|(id, p)| (id, p.name))
                 .collect();
@@ -5282,71 +5287,80 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     let me = person(&viewer);
     let labels = viewer.labels.clone();
     type Tile = (String, String, usize, Option<(u64, u32)>);
-    let res =
-        tokio::task::spawn_blocking(move || -> anyhow::Result<(Vec<Tile>, Vec<Tile>, usize)> {
-            let hidden = idx.hidden(&me)?;
-            let seen = seen_faces(&idx, &people, &labels, &hidden)?;
-            let names: HashMap<u64, String> = idx
-                .people()?
-                .into_iter()
-                .map(|(id, p)| (id, p.name))
-                .collect();
-            let known: std::collections::HashSet<u64> = seen
-                .iter()
-                .filter_map(|f| match f.face.who {
-                    crate::people::Who::Person(p) => Some(p),
-                    crate::people::Who::Group(_) => None,
-                })
-                .collect();
-            let close = crate::relations::closeness(&idx.relations()?, |p| known.contains(&p));
-            let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
-            for f in &seen {
-                by.entry(f.face.who).or_default().push(f);
-            }
-            let photos = |v: &[&SeenFace]| {
-                v.iter()
-                    .map(|f| f.face.key.0.as_str())
-                    .collect::<std::collections::HashSet<_>>()
-                    .len()
-            };
-            let (mut named, mut groups, mut singles) = (Vec::new(), Vec::new(), 0);
-            for (who, v) in &by {
-                match who {
-                    crate::people::Who::Person(p) => {
-                        let Some(name) = names.get(p) else { continue };
-                        let c = close.get(p).copied().unwrap_or(0);
-                        named.push((
-                            c,
-                            (format!("person/{p}"), name.clone(), photos(v), cover(v)),
-                        ));
+    // Named, groups to name, faces seen once, hidden.
+    type PeopleTiles = (Vec<Tile>, Vec<Tile>, usize, Vec<Tile>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<PeopleTiles> {
+        let hidden = idx.hidden(&me)?;
+        let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
+            .collect();
+        let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
+        let known: std::collections::HashSet<u64> = seen
+            .iter()
+            .filter_map(|f| match f.face.who {
+                crate::people::Who::Person(p) if !off.contains(&p) => Some(p),
+                _ => None,
+            })
+            .collect();
+        let mut put_away: Vec<Tile> = Vec::new();
+        let close = crate::relations::closeness(&idx.relations()?, |p| known.contains(&p));
+        let mut by: HashMap<crate::people::Who, Vec<&SeenFace>> = HashMap::new();
+        for f in &seen {
+            by.entry(f.face.who).or_default().push(f);
+        }
+        let photos = |v: &[&SeenFace]| {
+            v.iter()
+                .map(|f| f.face.key.0.as_str())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+        };
+        let (mut named, mut groups, mut singles) = (Vec::new(), Vec::new(), 0);
+        for (who, v) in &by {
+            match who {
+                crate::people::Who::Person(p) => {
+                    let Some(name) = names.get(p) else { continue };
+                    if off.contains(p) {
+                        put_away.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                        continue;
                     }
-                    crate::people::Who::Group(_) => {
-                        let n = photos(v);
-                        if n < GROUP_MIN {
-                            singles += 1;
-                            continue;
-                        }
-                        let c = cover(v);
-                        let href = c
-                            .map(|(i, k)| format!("people/{i}/{k}"))
-                            .unwrap_or_default();
-                        groups.push((href, String::new(), n, c));
+                    let c = close.get(p).copied().unwrap_or(0);
+                    named.push((
+                        c,
+                        (format!("person/{p}"), name.clone(), photos(v), cover(v)),
+                    ));
+                }
+                crate::people::Who::Group(_) => {
+                    let n = photos(v);
+                    if n < GROUP_MIN {
+                        singles += 1;
+                        continue;
                     }
+                    let c = cover(v);
+                    let href = c
+                        .map(|(i, k)| format!("people/{i}/{k}"))
+                        .unwrap_or_default();
+                    groups.push((href, String::new(), n, c));
                 }
             }
-            // The people who matter most first (REQ-FACE-004), then by photos.
-            named.sort_by(|(ca, a), (cb, b)| {
-                cb.cmp(ca)
-                    .then(b.2.cmp(&a.2))
-                    .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
-            });
-            let named: Vec<Tile> = named.into_iter().map(|(_, t)| t).collect();
-            groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
-            groups.truncate(GROUPS_MAX);
-            Ok((named, groups, singles))
-        })
-        .await;
-    let (named, groups, singles) = match res {
+        }
+        // The people who matter most first (REQ-FACE-004), then by photos.
+        named.sort_by(|(ca, a), (cb, b)| {
+            cb.cmp(ca)
+                .then(b.2.cmp(&a.2))
+                .then(a.1.to_lowercase().cmp(&b.1.to_lowercase()))
+        });
+        let named: Vec<Tile> = named.into_iter().map(|(_, t)| t).collect();
+        put_away.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+        groups.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
+        groups.truncate(GROUPS_MAX);
+        Ok((named, groups, singles, put_away))
+    })
+    .await;
+    let (named, groups, singles, put_away) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -5386,6 +5400,13 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     }
     if singles > 0 {
         body += &format!("<p class=\"dim\">{singles} more faces were seen in one photo each.</p>");
+    }
+    if !put_away.is_empty() {
+        body += &format!(
+            "<details class=\"hiddenpeople\"><summary>Hidden ({})</summary><p class=\"dim\">Strangers and people put away. Open one to show them again.</p>{}</details>",
+            put_away.len(),
+            tiles(&put_away, "Strangers")
+        );
     }
     page_for(&st, "lichtbild people", &body).into_response()
 }
@@ -5456,11 +5477,13 @@ async fn person_page(
             return Ok(None);
         }
         let seen = seen_people(&idx, &people, &v2)?;
-        let names: HashMap<u64, String> = idx
-            .people()?
-            .into_iter()
-            .map(|(id, p)| (id, p.name))
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
             .collect();
+        let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
         let mut with_name = None;
         if let Some(o) = q.with.filter(|o| *o != pid && seen.contains(o)) {
             let (theirs, _) =
@@ -5470,20 +5493,21 @@ async fn person_page(
             total = items.len();
             with_name = names.get(&o).cloned();
         }
-        let rels = crate::relations::of(&idx.relations()?, pid, |o| seen.contains(&o))
-            .into_iter()
-            .filter_map(|r| {
-                let name = names.get(&r.other)?.clone();
-                let key = crate::relations::key(pid, r.other, r.kind as u8).map(|k| {
-                    if r.kind == crate::relations::Kind::Parent && r.label == "child of" {
-                        (r.other, pid, k.2)
-                    } else {
-                        k
-                    }
-                })?;
-                Some((r.other, name, r.label, r.weight, key))
-            })
-            .collect();
+        let rels = crate::relations::of(&idx.relations()?, pid, |o| {
+            seen.contains(&o) && !off.contains(&o)
+        })
+        .into_iter()
+        .filter_map(|r| {
+            let name = names.get(&r.other)?.clone();
+            let (a, b) = if r.first {
+                (pid, r.other)
+            } else {
+                (r.other, pid)
+            };
+            let key = crate::relations::key(a, b, r.kind as u8)?;
+            Some((r.other, name, r.label, r.weight, key))
+        })
+        .collect();
         Ok(Some((
             p,
             items,
@@ -5502,8 +5526,27 @@ async fn person_page(
     };
     let ones = vec![1; items.len()];
     let name = esc(&p.name);
+    let title = if p.name.is_empty() {
+        "Strangers".to_string()
+    } else {
+        name.clone()
+    };
     let w = esc(&who);
-    let relations = relations_block(pid, &rels, &names);
+    // Hidden (REQ-FACE-005): a note and the way back instead of relations.
+    let relations = if p.hidden {
+        format!(
+            "<form class=\"hiddennote\" method=\"post\" action=\"person/{pid}/hide\"><input type=\"hidden\" name=\"hidden\" value=\"0\"><span class=\"dim\">Hidden: not on the People page, in a photo's faces, in names or search. The photos stay.</span> <button type=\"submit\">Show again</button></form>"
+        )
+    } else {
+        relations_block(pid, &rels, &names)
+    };
+    let hide = if p.hidden {
+        String::new()
+    } else {
+        format!(
+            "<form method=\"post\" action=\"person/{pid}/hide\"><input type=\"hidden\" name=\"hidden\" value=\"1\"><button type=\"submit\">Hide this person</button> <span class=\"dim\">For everyone in the house; the photos stay.</span></form>"
+        )
+    };
     let together = with_name
         .map(|o| {
             format!(
@@ -5513,12 +5556,12 @@ async fn person_page(
         })
         .unwrap_or_default();
     let manage = format!(
-        "<details class=\"albumtools\"><summary>Rename or take the name off</summary>\
+        "<details class=\"albumtools\"><summary>Rename, hide or take the name off</summary>{hide}\
          <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{name}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -5549,7 +5592,7 @@ fn names_list(idx: &index::Index, seen: &std::collections::HashSet<u64>) -> Stri
         .people()
         .unwrap_or_default()
         .into_iter()
-        .filter(|(id, _)| seen.contains(id))
+        .filter(|(id, p)| seen.contains(id) && !p.hidden && !p.name.is_empty())
         .map(|(_, p)| p.name)
         .collect();
     names.sort_by_key(|n| n.to_lowercase());
@@ -5601,6 +5644,7 @@ async fn group_page(
          <form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\">\
          <input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Name\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button>{names}</form>\
          <p class=\"dim\">The name goes to every photo here, and to this person in other photos as lichtbild finds them. Everyone in the house sees the name.</p>\
+         <form class=\"hidef\" method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><button type=\"submit\">Hide: no one we know</button> <span class=\"dim\">Strangers, such as people in a museum. The photos stay; the faces leave this list.</span></form>\
          <div class=\"timeline group\">\n{}</div>",
         render_items(&who, &items, &ones, None, false, ""),
         img = face_img(item, k),
@@ -5686,6 +5730,93 @@ async fn people_name(
             back_to(&st, Some(&back))
         }
         Ok(Ok(None)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// POST /people/hide: hide a group of faces (or one, with `one`) that is
+/// no one the house knows, such as strangers in a museum (REQ-FACE-005).
+/// They become one nameless hidden person, so lichtbild puts the same
+/// face in other photos away too.
+async fn people_hide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<NameForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let me = person(&viewer);
+    let labels = viewer.labels.clone();
+    let one = f.one.is_some();
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some((_, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(false);
+        };
+        if let (crate::people::Who::Person(p), false) = (face.who, one) {
+            return idx.set_person_hidden(p, true);
+        }
+        let keys: Vec<crate::people::Key> = if one {
+            vec![face.key.clone()]
+        } else {
+            let hidden = idx.hidden(&me)?;
+            seen_faces(&idx, &people, &labels, &hidden)?
+                .into_iter()
+                .filter(|s| s.face.who == face.who)
+                .map(|s| s.face.key)
+                .collect()
+        };
+        let pid = idx.create_person("", &me, now_secs())?;
+        idx.set_person_hidden(pid, true)?;
+        idx.name_faces(&keys, pid)?;
+        people.relabel(&idx)?;
+        Ok(true)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(f.back.as_deref().unwrap_or("people"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct HideForm {
+    hidden: String,
+}
+
+/// POST /person/{id}/hide: hide a person (hidden=1) or show them again
+/// (hidden=0), for everyone in the house (REQ-FACE-005).
+async fn person_hide(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<HideForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let hide = match f.hidden.as_str() {
+        "1" => true,
+        "0" => false,
+        _ => return StatusCode::BAD_REQUEST.into_response(),
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if idx.person(pid)?.is_none() || !sees_person(&idx, &people, &viewer, pid)? {
+            return Ok(false);
+        }
+        idx.set_person_hidden(pid, hide)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
         Ok(Err(e)) => internal(e),
         Err(e) => internal(e),
     }
@@ -5809,7 +5940,7 @@ fn relations_block(pid: u64, rels: &[RelRow], names: &str) -> String {
         }
         o += "</ul>";
     }
-    let kinds: String = crate::relations::CHOICES
+    let kinds: String = crate::relations::choices()
         .iter()
         .map(|(v, l)| format!("<option value=\"{v}\">{l}</option>"))
         .collect();
@@ -5869,7 +6000,7 @@ async fn person_relate(
         let Some((other, _)) = idx
             .people()?
             .into_iter()
-            .find(|(id, p)| seen.contains(id) && p.name.to_lowercase() == name)
+            .find(|(id, p)| seen.contains(id) && !p.hidden && p.name.to_lowercase() == name)
         else {
             return Ok(Err(StatusCode::BAD_REQUEST));
         };
@@ -5998,16 +6129,22 @@ fn render_faces(
     hash: &str,
     back: &str,
 ) -> String {
-    let faces = people.in_photo(hash);
+    let all = idx.people().unwrap_or_default();
+    // Hidden people's faces are not listed (REQ-FACE-005).
+    let off: std::collections::HashSet<u64> = all
+        .iter()
+        .filter(|(_, p)| p.hidden)
+        .map(|(i, _)| *i)
+        .collect();
+    let faces: Vec<_> = people
+        .in_photo(hash)
+        .into_iter()
+        .filter(|f| !matches!(f.who, crate::people::Who::Person(p) if off.contains(&p)))
+        .collect();
     if faces.is_empty() {
         return String::new();
     }
-    let names: HashMap<u64, String> = idx
-        .people()
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(i, p)| (i, p.name))
-        .collect();
+    let names: HashMap<u64, String> = all.into_iter().map(|(i, p)| (i, p.name)).collect();
     let b = esc(back);
     let mut o = format!(
         "<details class=\"faces\"><summary title=\"People in the picture\" aria-label=\"People in the picture\">☺ {}</summary><div class=\"kpanel\"><ul class=\"facelist\">",
@@ -6029,7 +6166,8 @@ fn render_faces(
                 )
             }
             _ => format!(
-                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>"
+                "<form class=\"namef\" method=\"post\" action=\"people/name\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><input type=\"text\" name=\"name\" list=\"names\" maxlength=\"80\" required autocomplete=\"off\" placeholder=\"Who is this?\" aria-label=\"Name of this person\"><button type=\"submit\">Name</button></form>\
+                 <form method=\"post\" action=\"people/hide\"><input type=\"hidden\" name=\"item\" value=\"{id}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><input type=\"hidden\" name=\"one\" value=\"1\"><input type=\"hidden\" name=\"back\" value=\"{b}\"><button type=\"submit\" class=\"not\" title=\"A stranger: hide this face\">Hide</button></form>"
             ),
         };
         o += &format!("<li>{img}<span>{row}</span></li>");

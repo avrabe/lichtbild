@@ -1748,3 +1748,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-FACE-004
+
+  - id: VER-124
+    type: verification
+    title: Strangers and people are hidden from lists, faces, suggestions and relations, and shown again
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "strangers_and_people_can_be_hidden_and_shown_again"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth strangers_and_people_can_be_hidden_and_shown_again"
+    links:
+      - type: verifies
+        target: REQ-FACE-005

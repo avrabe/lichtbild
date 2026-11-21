@@ -1,5 +1,5 @@
 //! How named people stand to each other (REQ-FACE-004): partner, parent,
-//! sibling, family, friend, schoolmate, colleague, neighbour, and how much
+//! grandparent, sibling, cousin, in-law, friend, schoolmate and more, and how much
 //! each relation matters (1 to 3). Like names, relations are the same for
 //! everyone in the house; a viewer sees one only between people they know.
 
@@ -8,9 +8,10 @@ use std::collections::HashMap;
 /// A stored relation: ((a, b, kind), how much it matters).
 pub type Row = ((u64, u64, u8), u8);
 
-/// A kind of relation. Partner, sibling and the others read the same from
-/// both sides and are stored with the smaller id first; Parent is stored
-/// parent first.
+/// A kind of relation, stored as its number (never renumber; new kinds go
+/// at the end). Directed kinds (parent, grandparent, aunt or uncle,
+/// godparent, teacher) are stored with the elder first; the others read
+/// the same from both sides and are stored with the smaller id first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
 pub enum Kind {
@@ -22,75 +23,137 @@ pub enum Kind {
     Schoolmate = 5,
     Colleague = 6,
     Neighbour = 7,
+    Grandparent = 8,
+    AuntUncle = 9,
+    Cousin = 10,
+    InLaw = 11,
+    Godparent = 12,
+    ExPartner = 13,
+    Teacher = 14,
+    Teammate = 15,
+    Acquaintance = 16,
 }
 
-pub const KINDS: [Kind; 8] = [
-    Kind::Partner,
-    Kind::Parent,
-    Kind::Sibling,
-    Kind::Family,
-    Kind::Friend,
-    Kind::Schoolmate,
-    Kind::Colleague,
-    Kind::Neighbour,
+/// Every kind: (kind, form value and label from the first side, from the
+/// second side for a directed kind, default weight). The order is the
+/// form's.
+/// One kind: (kind, (value, label), the other side, default weight).
+type Def = (
+    Kind,
+    (&'static str, &'static str),
+    Option<(&'static str, &'static str)>,
+    u8,
+);
+
+const DEFS: [Def; 17] = [
+    (Kind::Partner, ("partner", "partner of"), None, 3),
+    (
+        Kind::Parent,
+        ("parent", "parent of"),
+        Some(("child", "child of")),
+        3,
+    ),
+    (Kind::Sibling, ("sibling", "sibling of"), None, 3),
+    (
+        Kind::Grandparent,
+        ("grandparent", "grandparent of"),
+        Some(("grandchild", "grandchild of")),
+        3,
+    ),
+    (
+        Kind::AuntUncle,
+        ("auntuncle", "aunt or uncle of"),
+        Some(("niecenephew", "niece or nephew of")),
+        2,
+    ),
+    (Kind::Cousin, ("cousin", "cousin of"), None, 2),
+    (Kind::InLaw, ("inlaw", "in-law of"), None, 2),
+    (
+        Kind::Godparent,
+        ("godparent", "godparent of"),
+        Some(("godchild", "godchild of")),
+        2,
+    ),
+    (Kind::Family, ("family", "family of"), None, 2),
+    (Kind::Friend, ("friend", "friend of"), None, 2),
+    (Kind::ExPartner, ("expartner", "former partner of"), None, 1),
+    (Kind::Schoolmate, ("schoolmate", "schoolmate of"), None, 1),
+    (
+        Kind::Teacher,
+        ("teacher", "teacher of"),
+        Some(("student", "student of")),
+        1,
+    ),
+    (Kind::Colleague, ("colleague", "colleague of"), None, 1),
+    (
+        Kind::Teammate,
+        ("teammate", "teammate of (club, team)"),
+        None,
+        1,
+    ),
+    (Kind::Neighbour, ("neighbour", "neighbour of"), None, 1),
+    (
+        Kind::Acquaintance,
+        ("acquaintance", "acquaintance of"),
+        None,
+        1,
+    ),
 ];
 
 impl Kind {
     pub fn from_u8(v: u8) -> Option<Kind> {
-        KINDS.get(usize::from(v)).copied()
+        DEFS.iter().map(|d| d.0).find(|k| *k as u8 == v)
+    }
+
+    fn def(self) -> &'static Def {
+        DEFS.iter()
+            .find(|d| d.0 == self)
+            .expect("every kind has a definition")
+    }
+
+    /// Whether the kind reads differently from the two sides.
+    pub fn directed(self) -> bool {
+        self.def().2.is_some()
     }
 
     /// How much a new relation of this kind matters until someone says.
     pub fn weight(self) -> u8 {
-        match self {
-            Kind::Partner | Kind::Parent | Kind::Sibling => 3,
-            Kind::Family | Kind::Friend => 2,
-            Kind::Schoolmate | Kind::Colleague | Kind::Neighbour => 1,
-        }
+        self.def().3
     }
 
     /// The label read from the first person's side ("Anna, parent of Ben").
     pub fn label(self, first: bool) -> &'static str {
-        match (self, first) {
-            (Kind::Partner, _) => "partner of",
-            (Kind::Parent, true) => "parent of",
-            (Kind::Parent, false) => "child of",
-            (Kind::Sibling, _) => "sibling of",
-            (Kind::Family, _) => "family of",
-            (Kind::Friend, _) => "friend of",
-            (Kind::Schoolmate, _) => "schoolmate of",
-            (Kind::Colleague, _) => "colleague of",
-            (Kind::Neighbour, _) => "neighbour of",
+        let d = self.def();
+        match (first, d.2) {
+            (false, Some((_, l))) => l,
+            _ => d.1 .1,
         }
     }
 }
 
-/// The form's choices: (value, label). "child" is Parent read backwards.
-pub const CHOICES: [(&str, &str); 9] = [
-    ("partner", "partner of (married to)"),
-    ("parent", "parent of"),
-    ("child", "child of"),
-    ("sibling", "sibling of"),
-    ("family", "family of"),
-    ("friend", "friend of"),
-    ("schoolmate", "schoolmate of"),
-    ("colleague", "colleague of"),
-    ("neighbour", "neighbour of"),
-];
+/// The form's choices: (value, label), both sides of a directed kind.
+pub fn choices() -> Vec<(&'static str, &'static str)> {
+    let mut out = Vec::new();
+    for (k, first, second, _) in DEFS.iter() {
+        out.push(match k {
+            Kind::Partner => ("partner", "partner of (married to)"),
+            _ => *first,
+        });
+        out.extend(second.iter().copied());
+    }
+    out
+}
 
 /// A form value as (kind, whether the two people swap places).
 pub fn parse(v: &str) -> Option<(Kind, bool)> {
-    Some(match v {
-        "partner" => (Kind::Partner, false),
-        "parent" => (Kind::Parent, false),
-        "child" => (Kind::Parent, true),
-        "sibling" => (Kind::Sibling, false),
-        "family" => (Kind::Family, false),
-        "friend" => (Kind::Friend, false),
-        "schoolmate" => (Kind::Schoolmate, false),
-        "colleague" => (Kind::Colleague, false),
-        "neighbour" => (Kind::Neighbour, false),
-        _ => return None,
+    DEFS.iter().find_map(|(k, first, second, _)| {
+        if first.0 == v {
+            Some((*k, false))
+        } else if second.is_some_and(|s| s.0 == v) {
+            Some((*k, true))
+        } else {
+            None
+        }
     })
 }
 
@@ -101,9 +164,10 @@ pub fn key(a: u64, b: u64, kind: u8) -> Option<(u64, u64, u8)> {
     if a == b {
         return None;
     }
-    Some(match k {
-        Kind::Parent => (a, b, kind),
-        _ => (a.min(b), a.max(b), kind),
+    Some(if k.directed() {
+        (a, b, kind)
+    } else {
+        (a.min(b), a.max(b), kind)
     })
 }
 
@@ -115,6 +179,8 @@ pub struct Seen {
     pub kind: Kind,
     pub label: &'static str,
     pub weight: u8,
+    /// Whether this person is stored first (the elder of a directed kind).
+    pub first: bool,
 }
 
 /// The relations of `p` with people in `known`, the ones that matter most
@@ -136,6 +202,7 @@ pub fn of(rels: &[Row], p: u64, known: impl Fn(u64) -> bool) -> Vec<Seen> {
                 kind,
                 label: kind.label(first),
                 weight,
+                first,
             })
         })
         .collect();
@@ -176,6 +243,16 @@ mod tests {
         assert_eq!(key(1, 2, 99), None);
         assert_eq!(parse("child"), Some((Kind::Parent, true)));
         assert_eq!(parse("boss"), None);
+        assert_eq!(parse("grandchild"), Some((Kind::Grandparent, true)));
+        assert_eq!(key(5, 2, Kind::Godparent as u8), Some((5, 2, 12)));
+        assert_eq!(key(5, 2, Kind::Cousin as u8), Some((2, 5, 10)));
+        assert_eq!(Kind::Teacher.label(false), "student of");
+        // Every kind has a number of its own and a form value on each side.
+        let kinds: Vec<u8> = (0..=255).filter(|v| Kind::from_u8(*v).is_some()).collect();
+        assert_eq!(kinds, (0..=16).collect::<Vec<u8>>());
+        let values: Vec<&str> = choices().iter().map(|c| c.0).collect();
+        assert_eq!(values.len(), 22);
+        assert!(values.iter().all(|v| parse(v).is_some()));
     }
 
     #[test]

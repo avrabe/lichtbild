@@ -801,8 +801,11 @@ artifacts:
     release: v0.10.0
     description: >
       Owner request 2026-11-21: a person page says how this person stands
-      to another named person (partner, parent or child, sibling, family,
-      friend, schoolmate, colleague, neighbour) and how much it matters
+      to another named person (partner, parent or child, sibling,
+      grandparent or grandchild, aunt or uncle and niece or nephew, cousin,
+      in-law, godparent or godchild, family, friend, former partner,
+      schoolmate, teacher or student, colleague, teammate, neighbour,
+      acquaintance) and how much it matters
       (close, normal, loose; by default from the kind). Relations read
       from both sides (parent of / child of), are listed close ones
       first, link to the photos of both together, and order the People
@@ -811,6 +814,28 @@ artifacts:
       knows (as with names), with a same-site request; a relation never
       creates a name, refuses oneself, and goes with a name taken off or
       merged into another.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FACE-005
+    type: requirement
+    title: Strangers' faces and people can be hidden, and shown again
+    status: implemented
+    release: v0.10.0
+    description: >
+      Owner request 2026-11-21: faces of no one the house knows (people in
+      a museum) are hidden from "Who is this?" or from a photo's faces in
+      one step; they become one nameless hidden person, so the same face
+      in other photos is put away too. A named person can be hidden as
+      well. A hidden person is not on the People page (only in its
+      "Hidden" list, from which they are shown again), not in a photo's
+      faces, name suggestions, search by name or relations; the photos
+      stay. Hiding is for everyone in the house, needs a same-site
+      request, and only someone who sees the person may hide them.
     fields:
       priority: should
       category: functional
