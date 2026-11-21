@@ -1,0 +1,24 @@
+# Spike for story mode (REQ-STORY-001, DD-028): can a small instruction
+# model write a short German story from a picture's facts on the Raspberry
+# Pi, fast enough and without inventing people? Not part of the lichtbild
+# binary or its release. See README.md.
+[package]
+name = "story-bench"
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+
+[workspace]
+
+[dependencies]
+anyhow = "1"
+candle = { package = "candle-core", version = "=0.11.1" }
+candle-transformers = "=0.11.1"
+libc = "0.2"
+tokenizers = { version = "0.23", default-features = false, features = ["fancy-regex"] }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
