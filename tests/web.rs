@@ -884,7 +884,7 @@ async fn nav_switcher_is_in_every_page_header() {
     assert!(e.contains("self"), "{e}");
     std::fs::write(
         &nav,
-        r#"{"version": 2, "home": {"name": "h", "url": "/"}, "apps": []}"#,
+        r#"{"version": 3, "home": {"name": "h", "url": "/"}, "apps": []}"#,
     )
     .unwrap();
     let e = lichtbild::config::nav_html(Some(&nav), Some("lichtbild"))

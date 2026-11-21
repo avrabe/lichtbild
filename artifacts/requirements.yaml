@@ -614,8 +614,11 @@ artifacts:
       name and its description, this app marked as current. The nav file
       and its contract are unchanged (the same 1 + apps links); a tap
       outside or Escape closes the panel, and it scrolls when taller than
-      the screen, as the app menu does. The same look is proposed to the
-      other house apps through the nav contract's owner.
+      the screen, as the app menu does. The owner made this the nav
+      contract's rendering for every house app (2026-11-21, through warte,
+      the contract's owner), and nav v2 adds an optional mark per app (1 to
+      8 code points; the first letter of the name otherwise). lichtbild
+      accepts version 1 and 2; a mark in a version 1 file is refused.
     fields:
       priority: should
       category: interface
