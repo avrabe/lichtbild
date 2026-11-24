@@ -107,6 +107,12 @@ pub fn rel_bytes(rel: &Path) -> &[u8] {
     rel.as_os_str().as_bytes()
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 pub fn rel_from_bytes(b: &[u8]) -> PathBuf {
     PathBuf::from(std::ffi::OsStr::from_bytes(b))
 }
@@ -141,6 +147,10 @@ pub struct Record {
     /// item of its own: no timeline, search, map or pass lists it.
     #[serde(default)]
     pub live_of: Option<u64>,
+    /// When lichtbild first indexed this file, in seconds since 1970; 0 for
+    /// files indexed before v0.12.0 (REQ-WEB-029).
+    #[serde(default)]
+    pub added: u64,
 }
 
 impl Record {
@@ -819,6 +829,33 @@ impl Index {
             }
         }
         out.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        Ok(out)
+    }
+
+    /// The most recently indexed items in `labels` that `keep` accepts,
+    /// newest first by when they were indexed (ids grow with every new
+    /// file), at most `limit` (REQ-WEB-029).
+    pub fn recent(
+        &self,
+        labels: &[String],
+        limit: usize,
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<Vec<(Item, u64)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let mut out = Vec::new();
+        for e in items.iter()?.rev() {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            let id = k.value();
+            if rec.shown() && labels.contains(&rec.label) && keep(id, &rec) {
+                let added = rec.added;
+                out.push((Item::of(id, rec), added));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -1914,6 +1951,7 @@ impl Batch {
         let existing = self.w.open_table(PATHS)?.get(key)?.map(|g| g.value());
         // A Live Photo's pairing stays until the next pairing looks again.
         let mut paired = (None, None);
+        let mut added = now_secs();
         let id = match existing {
             Some(id) => {
                 if let Some(old) = self.load(id)? {
@@ -1921,6 +1959,7 @@ impl Batch {
                         self.unlink(id, &old)?;
                     }
                     paired = (old.live, old.live_of);
+                    added = old.added;
                 }
                 id
             }
@@ -1951,6 +1990,7 @@ impl Batch {
             video: info.video.clone(),
             live: paired.0,
             live_of: paired.1,
+            added,
         };
         self.store(id, &rec)?;
         if rec.live_of.is_some() {

@@ -119,6 +119,7 @@ async fn every_page_has_the_app_menu() {
         "/map",
         "/hidden",
         "/duplicates",
+        "/recent",
     ] {
         let (s, page) = get(&app, uri, false).await;
         assert_eq!(s, StatusCode::OK, "{uri}");
@@ -882,4 +883,47 @@ async fn refusals_and_empty_answers_say_what_to_do_next() {
     // On a phone the info sheet scrolls.
     let (_, css) = get(&app, "/static/lichtbild.css", false).await;
     assert!(css.contains("max-height: 60vh; max-height: calc(58dvh - 20px); overflow-y: auto; overscroll-behavior: contain;"));
+}
+
+// Recently added lists what the scans brought in under the day it was
+// indexed, the newest day first; the menu and the home page lead there.
+// rivet: verifies REQ-WEB-029
+#[tokio::test]
+async fn recently_added_shows_the_newest_files_first() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/recent", false).await;
+    assert_eq!(s, StatusCode::OK);
+    let today = chrono::Utc::now();
+    let added = format!("Added {} ", today.format("%-d"));
+    assert!(page.contains(&added), "{page}");
+    assert!(page.contains(&today.format("%Y").to_string()));
+    let (_, home) = get(&app, "/", false).await;
+    assert!(home.contains("href=\"recent\""));
+
+    // A file found by a later scan comes first, though taken long ago.
+    let fx_root = e.state.roots.get("p1").unwrap().clone();
+    std::fs::write(fx_root.join("a/IMG_19990101_101010.jpg"), jpeg(24, 16, 42)).unwrap();
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    let new = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.rel == b"a/IMG_19990101_101010.jpg")
+        .map(|(id, r)| {
+            assert!(r.added > 0);
+            id
+        })
+        .unwrap();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, "/recent", false).await;
+    let labels = vec!["p1".to_string(), "p2".to_string()];
+    let newest = e.idx.recent(&labels, 1, |_, _| true).unwrap();
+    assert_eq!(newest[0].0.id, new, "the newest file first");
+    // Indexed today like the rest, it sits in today's group, by date taken.
+    let group = page.split("<section class=\"added\">").nth(1).unwrap();
+    assert!(group.contains(&format!("id=\"i{new}\"")), "{group}");
+    assert!(group.contains("1999"));
 }

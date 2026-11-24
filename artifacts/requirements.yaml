@@ -1559,3 +1559,22 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-WEB-029
+    type: requirement
+    title: Recently added shows what the scans brought in
+    status: implemented
+    release: v0.12.0
+    description: >
+      Every file notes when it was first indexed. A Recently added page,
+      linked from the menu and the home page, shows the 500 most recently
+      indexed items the viewer may see, without hidden items or second
+      copies, in groups by the day they were indexed, the newest day
+      first, and within a day by date taken. Files indexed before this
+      release form one group of their own.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

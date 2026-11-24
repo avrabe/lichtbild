@@ -1933,3 +1933,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-FACE-006
+
+  - id: VER-137
+    type: verification
+    title: Recently added lists the newest file first and is in every menu
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "recently_added_shows_the_newest_files_first, every_page_has_the_app_menu"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui recently_added_shows_the_newest_files_first"
+    links:
+      - type: verifies
+        target: REQ-WEB-029

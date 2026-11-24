@@ -182,6 +182,7 @@ pub fn router(state: AppState) -> Router {
         .route("/fav-many", axum::routing::post(fav_many))
         .route("/unfav-many", axum::routing::post(unfav_many))
         .route("/favourites", get(favourites_page))
+        .route("/recent", get(recent_page))
         .route("/albums", get(albums_page).post(album_create))
         .route("/album/{id}", get(album_page))
         .route("/album-add", axum::routing::post(album_add))
@@ -689,6 +690,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
+         <li><a href=\"recent\"><b>Recently added</b><span>What the last scans brought in</span></a></li>\
          <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
          <li><a href=\"albums\"><b>Albums</b><span>Your own collections</span></a></li>\
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
@@ -978,6 +980,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
+             <a href=\"recent\"><b>Recently added</b><span>What the last scans brought in</span></a>\
              <a href=\"albums\"><b>Albums</b><span>Your own collections</span></a>\
              <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
@@ -3702,6 +3705,78 @@ async fn favourites_page(
         )
     };
     page_for(&st, "lichtbild favourites", &body).into_response()
+}
+
+/// How many items Recently added shows.
+const RECENT_MAX: usize = 500;
+
+/// The day a file was first indexed, from seconds since 1970 (UTC).
+fn added_day(secs: u64) -> Option<String> {
+    let t = chrono::DateTime::from_timestamp(i64::try_from(secs).ok()?, 0)?;
+    (secs > 0).then(|| t.format("%Y-%m-%dT00:00").to_string())
+}
+
+/// GET /recent: what the last scans brought in, newest first, in groups
+/// by the day they were indexed (REQ-WEB-029); nothing hidden, one copy.
+async fn recent_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(index::Item, u64)>> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let mut items = idx.recent(&labels, RECENT_MAX, |id, _| {
+            !hidden.contains(&id) && dups.shown(id, &labels, &hidden).shown
+        })?;
+        for (it, _) in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
+        }
+        Ok(items)
+    })
+    .await;
+    let items = match res {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from("<div class=\"thead\"><h1>Recently added</h1></div>");
+    if items.is_empty() {
+        body += "<p class=\"dim\">Nothing yet: the first scan is still running, or the libraries are empty.</p>";
+        return page_for(&st, "lichtbild recently added", &body).into_response();
+    }
+    // Groups of one indexing day, newest first; within one, by date taken.
+    let mut groups: Vec<(Option<String>, Vec<index::Item>)> = Vec::new();
+    for (it, added) in items {
+        let day = added_day(added);
+        match groups.last_mut() {
+            Some((d, g)) if *d == day => g.push(it),
+            _ => groups.push((day, vec![it])),
+        }
+    }
+    for (day, mut g) in groups {
+        g.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        let title = match &day {
+            Some(d) => format!("Added {}", long_date(d).trim_end_matches(", 00:00")),
+            None => "Indexed before lichtbild noted the day".to_string(),
+        };
+        let ones = vec![1; g.len()];
+        body += &format!(
+            "<section class=\"added\"><h2>{} <span class=\"dim\">{}</span></h2><div class=\"timeline\">\n{}</div></section>\n",
+            esc(&title),
+            g.len(),
+            render_items(&who, &g, &ones, None, false, ""),
+        );
+    }
+    page_for(&st, "lichtbild recently added", &body).into_response()
 }
 
 /// POST /unhide/{id}: show the item again.

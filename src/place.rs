@@ -291,6 +291,7 @@ mod tests {
             video: None,
             live: None,
             live_of: None,
+            added: 0,
         }
     }
 

@@ -129,6 +129,7 @@ mod tests {
             }),
             live: None,
             live_of: None,
+            added: 0,
         }
     }
 
