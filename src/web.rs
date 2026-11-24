@@ -1240,6 +1240,11 @@ pub fn render_items(
             .video_ms
             .map(|ms| format!("<span class=\"dur\">{}</span>", duration(ms)))
             .unwrap_or_default();
+        let dur = if it.live {
+            format!("{dur}<span class=\"livetag\" title=\"Live Photo\">LIVE</span>")
+        } else {
+            dur
+        };
         let dur = if it.copies > 1 {
             format!(
                 "{dur}<span class=\"copies\" title=\"{n} copies\">×{n}</span>",
@@ -1948,10 +1953,19 @@ pub fn photo_html(id: u64, rec: &index::Record) -> String {
              <p><a href=\"original/{id}\" download>Download the original</a></p></div>"
         );
     }
-    format!(
+    let img = format!(
         "<img class=\"photo\" src=\"{}\" alt=\"\">",
         esc(&photo_src(id, rec))
-    )
+    );
+    match rec.live {
+        // A Live Photo (REQ-MEDIA-005): its clip plays over the photo while
+        // the LIVE button is held or hovered (assets/lichtbild.js).
+        Some(clip) => format!(
+            "{img}<video class=\"liveclip\" muted playsinline preload=\"none\" src=\"original/{clip}\" hidden></video>\
+             <button type=\"button\" class=\"livebtn\" title=\"Live Photo: hold to play\" aria-label=\"Play the Live Photo\">LIVE</button>"
+        ),
+        None => img,
+    }
 }
 
 /// What the viewer shows for an item: the JPEG preview when the original is
@@ -4551,7 +4565,7 @@ pub(crate) fn trips_of(
         .all()?
         .into_iter()
         .filter(|(id, r)| {
-            !r.missing && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
+            r.shown() && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
         })
         .collect();
     let pos = positions.get(idx)?;
@@ -4665,7 +4679,7 @@ async fn countries_page(
         let pos = pc.get(&idx)?;
         let mut by: HashMap<String, Country> = HashMap::new();
         for (id, r) in idx.all()? {
-            if r.missing || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
+            if !r.shown() || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
                 continue;
             }
             let Some(p) = pos.get(&id) else { continue };

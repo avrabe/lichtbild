@@ -11,6 +11,7 @@ pub mod embed;
 pub mod faces;
 pub mod fixes;
 pub mod index;
+pub mod live;
 pub mod map;
 pub mod media;
 pub mod nav;

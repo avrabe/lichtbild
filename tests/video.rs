@@ -389,3 +389,57 @@ fn a_failing_decoder_costs_only_the_poster() {
         );
     }
 }
+
+// A photo and the short clip under its name are one Live Photo: the clip
+// leaves the timeline and plays from the photo's viewer; without its
+// photo it is a video of its own again.
+// rivet: verifies REQ-MEDIA-005
+#[tokio::test]
+async fn a_live_photo_is_one_item_with_its_clip() {
+    let e = env();
+    let root = e.cfg.roots[0].path.clone();
+    let photo = root.join("v/IMG_0001.JPG");
+    image::RgbImage::from_pixel(64, 48, image::Rgb([200, 120, 40]))
+        .save(&photo)
+        .unwrap();
+    let idx = Arc::new(Index::open(&e.cfg.data_dir).unwrap());
+    let report = scan::run(&e.cfg, &idx, &opts()).unwrap();
+    assert!(report.reconciled, "{:?}", report.problems);
+    assert_eq!(report.live_photos, 1);
+    assert!(report.to_text().contains("live photos: 1"));
+    let (p, c) = (id_of(&idx, "v/IMG_0001.JPG"), id_of(&idx, "v/IMG_0001.MOV"));
+    assert_eq!(record(&idx, "v/IMG_0001.JPG").live, Some(c));
+    assert_eq!(record(&idx, "v/IMG_0001.MOV").live_of, Some(p));
+    // The longer clips stay videos of their own.
+    assert_eq!(record(&idx, "v/clip-h264.mp4").live_of, None);
+
+    let app = web::router(AppState::new(&e.cfg, idx.clone()));
+    let (_, _, body) = get(&app, "/t/p1", None).await;
+    let page = String::from_utf8(body).unwrap();
+    assert!(page.contains(&format!("id=\"i{p}\"")), "{page}");
+    assert!(
+        !page.contains(&format!("id=\"i{c}\"")),
+        "the clip is no item of its own"
+    );
+    assert!(page.contains("class=\"livetag\""));
+    let (_, _, body) = get(&app, &format!("/v/p1/{p}"), None).await;
+    let viewer = String::from_utf8(body).unwrap();
+    assert!(
+        viewer.contains(&format!("src=\"original/{c}\"")),
+        "{viewer}"
+    );
+    assert!(viewer.contains("class=\"livebtn\""));
+    let (st, _, _) = get(&app, &format!("/original/{c}"), Some("bytes=0-99")).await;
+    assert_eq!(st, StatusCode::PARTIAL_CONTENT);
+
+    // A rescan keeps the pair; the photo gone, the clip is a video again.
+    assert_eq!(scan::run(&e.cfg, &idx, &opts()).unwrap().live_photos, 1);
+    std::fs::remove_file(&photo).unwrap();
+    assert_eq!(scan::run(&e.cfg, &idx, &opts()).unwrap().live_photos, 0);
+    assert_eq!(record(&idx, "v/IMG_0001.MOV").live_of, None);
+    let app = web::router(AppState::new(&e.cfg, idx.clone()));
+    let (_, _, body) = get(&app, "/t/p1", None).await;
+    assert!(String::from_utf8(body)
+        .unwrap()
+        .contains(&format!("id=\"i{c}\"")));
+}

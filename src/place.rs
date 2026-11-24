@@ -112,7 +112,7 @@ pub fn positions(items: &[(u64, Record)], placed: &HashMap<u64, Placed>) -> Hash
     // Per library: (time, id, anchor position).
     let mut libs: HashMap<&str, Vec<Entry>> = HashMap::new();
     for (id, rec) in items {
-        if rec.missing {
+        if !rec.shown() {
             continue;
         }
         let anchor = match (rec.lat, rec.lon) {
@@ -232,7 +232,7 @@ fn estimate(
 pub fn counts(items: &[(u64, Record)], pos: &HashMap<u64, Position>, labels: &[String]) -> Counts {
     let mut c = Counts::default();
     for (id, rec) in items {
-        if rec.missing || !labels.contains(&rec.label) {
+        if !rec.shown() || !labels.contains(&rec.label) {
             continue;
         }
         match pos.get(id).map(|p| p.how) {
@@ -289,6 +289,8 @@ mod tests {
             missing: false,
             preview: false,
             video: None,
+            live: None,
+            live_of: None,
         }
     }
 

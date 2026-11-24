@@ -171,7 +171,7 @@ pub fn points_with(
     let mut labels: HashMap<String, Arc<str>> = HashMap::new();
     let mut out = Vec::new();
     for (id, rec) in items {
-        if rec.missing {
+        if !rec.shown() {
             continue;
         }
         let Some(p) = pos.get(&id) else { continue };

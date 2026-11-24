@@ -196,7 +196,7 @@ impl Dups {
         let cands: Vec<Candidate> = idx
             .all()?
             .into_iter()
-            .filter(|(_, r)| !r.missing)
+            .filter(|(_, r)| r.shown())
             .map(|(id, rec)| Candidate {
                 id,
                 fp: fps.get(&rec.hash).copied().flatten(),
@@ -394,6 +394,8 @@ mod tests {
             missing: false,
             preview: false,
             video: None,
+            live: None,
+            live_of: None,
         }
     }
 

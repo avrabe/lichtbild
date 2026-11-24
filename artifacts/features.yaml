@@ -454,3 +454,22 @@ artifacts:
         target: REQ-FACE-005
       - type: satisfies
         target: REQ-NAV-002
+
+  - id: FEAT-019
+    type: feature
+    title: Live Photos, what came in, better shots, birthdays and events
+    status: implemented
+    release: v0.12.0
+    description: >
+      Owner choice 2026-11-24 after comparing lichtbild with Immich and
+      others: Live Photos as one item, a Recently added page, a sharpness
+      and exposure check, birthday memories, events within trips, and a
+      People page that says when faces are still loading. Nothing is
+      shared outside the house.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - An iPhone Live Photo shows once in the timeline and plays its clip from the viewer
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-005

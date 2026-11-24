@@ -134,6 +134,20 @@ pub struct Record {
     /// Length and codec, for a video (REQ-MEDIA-001).
     #[serde(default)]
     pub video: Option<crate::video::VideoMeta>,
+    /// A Live Photo: the id of its short clip, shown with it (REQ-MEDIA-005).
+    #[serde(default)]
+    pub live: Option<u64>,
+    /// The clip of a Live Photo: the photo's id. Such a clip is not an
+    /// item of its own: no timeline, search, map or pass lists it.
+    #[serde(default)]
+    pub live_of: Option<u64>,
+}
+
+impl Record {
+    /// Listed as an item of its own: live and not a Live Photo's clip.
+    pub fn shown(&self) -> bool {
+        !self.missing && self.live_of.is_none()
+    }
 }
 
 /// What the index knows about one file, for change detection.
@@ -168,6 +182,8 @@ pub struct Item {
     pub copies: usize,
     /// The viewer's favourite.
     pub fav: bool,
+    /// A Live Photo, with a clip (REQ-MEDIA-005).
+    pub live: bool,
 }
 
 /// A name given to faces (REQ-FACE-003), shared in the household.
@@ -210,6 +226,7 @@ impl Item {
             video_ms: rec.video.map(|v| v.duration_ms),
             copies: 1,
             fav: false,
+            live: rec.live.is_some(),
         }
     }
 }
@@ -442,7 +459,7 @@ impl Index {
             Ok(match items.get(n)? {
                 Some(raw) => {
                     let rec = decode(raw.value())?;
-                    !rec.missing && keep(n, &rec)
+                    rec.shown() && keep(n, &rec)
                 }
                 None => false,
             })
@@ -951,7 +968,7 @@ impl Index {
         let (mut videos, mut done, mut speech) = (0, 0, 0);
         for e in items.iter()? {
             let rec = decode(e?.1.value())?;
-            if rec.missing
+            if !rec.shown()
                 || rec.video.is_none()
                 || !labels.contains(&rec.label)
                 || !seen.insert(rec.hash.clone())
@@ -1770,6 +1787,38 @@ impl Index {
 
     /// Live videos whose content has no transcript from `model` yet,
     /// oldest id first: (id, record).
+    /// Join every Live Photo with its clip and free clips whose photo is
+    /// gone (REQ-MEDIA-005). A clip leaves the timeline; it comes back as a
+    /// video of its own when it is no longer paired. Returns the pairs.
+    pub fn pair_live(&self) -> Result<usize> {
+        let all = self.all()?;
+        let pairs = crate::live::pairs(all.iter().map(|(id, r)| (*id, r)));
+        let clip_of: HashMap<u64, u64> = pairs.iter().map(|(p, c)| (*c, *p)).collect();
+        {
+            let b = self.batch()?;
+            for (id, rec) in &all {
+                let live = pairs.get(id).copied();
+                let live_of = clip_of.get(id).copied();
+                if rec.live == live && rec.live_of == live_of {
+                    continue;
+                }
+                let mut new = rec.clone();
+                new.live = live;
+                new.live_of = live_of;
+                b.store(*id, &new)?;
+                if !rec.missing {
+                    match (rec.live_of.is_some(), live_of.is_some()) {
+                        (false, true) => b.unlink(*id, rec)?,
+                        (true, false) => b.link(*id, &new)?,
+                        _ => {}
+                    }
+                }
+            }
+            b.commit()?;
+        }
+        Ok(pairs.len())
+    }
+
     pub fn videos_to_transcribe(&self, model: &str) -> Result<Vec<(u64, Record)>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
@@ -1779,7 +1828,7 @@ impl Index {
         for e in items.iter()? {
             let (k, v) = e?;
             let rec = decode(v.value())?;
-            if rec.missing || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
+            if !rec.shown() || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
                 continue;
             }
             let done = match t.get(rec.hash.as_str())? {
@@ -1863,12 +1912,15 @@ impl Batch {
     ) -> Result<()> {
         let key = (label, rel_bytes(rel));
         let existing = self.w.open_table(PATHS)?.get(key)?.map(|g| g.value());
+        // A Live Photo's pairing stays until the next pairing looks again.
+        let mut paired = (None, None);
         let id = match existing {
             Some(id) => {
                 if let Some(old) = self.load(id)? {
                     if !old.missing {
                         self.unlink(id, &old)?;
                     }
+                    paired = (old.live, old.live_of);
                 }
                 id
             }
@@ -1897,8 +1949,13 @@ impl Batch {
             missing: false,
             preview,
             video: info.video.clone(),
+            live: paired.0,
+            live_of: paired.1,
         };
         self.store(id, &rec)?;
+        if rec.live_of.is_some() {
+            return Ok(());
+        }
         self.link(id, &rec)
     }
 
@@ -1914,6 +1971,8 @@ impl Batch {
         self.store(id, &rec)?;
         if missing {
             self.unlink(id, &rec)
+        } else if rec.live_of.is_some() {
+            Ok(())
         } else {
             self.link(id, &rec)
         }

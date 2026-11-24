@@ -1134,3 +1134,14 @@ article.story p.ending { font-style: italic; margin-top: 32px; text-align: cente
 article.story.poem figcaption, article.story.poem p.opening, article.story.poem p.ending { text-align: center; font-style: italic; }
 article.story.poem p.opening::first-letter { font-size: inherit; float: none; padding: 0; color: inherit; }
 article.story p.haiku { text-align: center; font-size: 20px; letter-spacing: .04em; color: var(--ink-soft); margin: 18px 0 30px; }
+
+/* Live Photos (REQ-MEDIA-005): the clip takes the photo's place while it plays. */
+.viewer video.liveclip { max-width: 100%; max-height: 100%; object-fit: contain; border-radius: 2px; background: #000; }
+.viewer button.livebtn { position: absolute; top: 10px; left: 34px; z-index: 3; font: 600 11px/1 system-ui, sans-serif; letter-spacing: .08em; padding: 5px 8px; border-radius: 4px; border: 1px solid rgba(255, 255, 255, .6); background: rgba(0, 0, 0, .45); color: #fff; cursor: pointer; }
+.viewer button.livebtn.on { background: rgba(255, 255, 255, .85); color: #000; }
+.viewer .stage img.photo[hidden], .viewer video.liveclip[hidden] { display: none; }
+.item .livetag {
+  position: absolute; left: 6px; bottom: 6px; padding: 2px 6px;
+  font: 600 10px/1.3 var(--sans); letter-spacing: .08em;
+  color: #fff; background: rgba(20, 18, 16, .62); border-radius: 9px;
+}

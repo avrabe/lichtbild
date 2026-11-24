@@ -100,6 +100,9 @@ pub struct Report {
     pub total_found: u64,
     pub total_indexed: u64,
     pub total_skipped: u64,
+    /// Live Photos shown with their clip (REQ-MEDIA-005); the clips are
+    /// indexed but not items of their own.
+    pub live_photos: usize,
     pub roots: Vec<RootReport>,
     pub problems: Vec<String>,
 }
@@ -138,6 +141,12 @@ impl Report {
             "total: found {}, indexed {}, skipped {}\n",
             self.total_found, self.total_indexed, self.total_skipped
         );
+        if self.live_photos > 0 {
+            s += &format!(
+                "live photos: {} (each clip shown with its photo)\n",
+                self.live_photos
+            );
+        }
         for p in &self.problems {
             s += &format!("problem: {p}\n");
         }
@@ -589,6 +598,7 @@ pub fn run(cfg: &Config, idx: &Index, opts: &Options) -> Result<Report> {
         report.total_indexed += r.indexed;
         report.total_skipped += r.skipped;
     }
+    report.live_photos = idx.pair_live()?;
     if !report.complete {
         report.reconciled = false;
         report

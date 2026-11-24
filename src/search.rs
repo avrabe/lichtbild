@@ -481,7 +481,7 @@ impl Search {
         let mut seen: HashSet<(String, String)> = HashSet::new();
         let fixes = idx.fixes()?;
         for (id, rec) in items {
-            if rec.missing {
+            if !rec.shown() {
                 continue;
             }
             let at = pos.get(&id).map(|p| (p.lat, p.lon));

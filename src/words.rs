@@ -367,7 +367,7 @@ pub fn cloud(idx: &Index, labels: &[String], limit: usize) -> Result<Vec<Word>> 
     let mut times: HashMap<String, u64> = HashMap::new();
     let mut seen_hash = HashSet::new();
     for (_, rec) in idx.all()? {
-        if rec.missing || !labels.contains(&rec.label) {
+        if !rec.shown() || !labels.contains(&rec.label) {
             continue;
         }
         // The same content in two libraries (or twice) counts once.

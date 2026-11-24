@@ -1904,3 +1904,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-028
+
+  - id: VER-135
+    type: verification
+    title: A photo and its short clip are one Live Photo, and the clip is freed when the photo goes
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_live_photo_is_one_item_with_its_clip (tests/video.rs) and live::tests (src/live.rs)"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video a_live_photo_is_one_item_with_its_clip"
+        - run: "cargo test --lib live::"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-005
