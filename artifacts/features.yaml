@@ -470,6 +470,9 @@ artifacts:
       phase: phase-1
       acceptance-criteria:
         - An iPhone Live Photo shows once in the timeline and plays its clip from the viewer
+        - Right after a start, People says faces are still loading rather than that there are none
     links:
       - type: satisfies
         target: REQ-MEDIA-005
+      - type: satisfies
+        target: REQ-FACE-006

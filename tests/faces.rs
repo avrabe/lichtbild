@@ -112,6 +112,7 @@ fn one_persons_faces_match_and_others_do_not() {
 // the faces of a photo.
 // rivet: verifies REQ-FACE-002
 // rivet: verifies REQ-FACE-003
+// rivet: verifies REQ-FACE-006
 #[tokio::test]
 async fn the_pass_groups_people_and_a_name_finds_them() {
     let Some(m) = model() else { return };
@@ -147,6 +148,22 @@ async fn the_pass_groups_people_and_a_name_finds_them() {
 
     let state = AppState::new(&cfg, idx.clone());
     state.search.rebuild(&idx, None).unwrap();
+    // Before the faces are read after a start, People says they are on
+    // their way instead of "No faces yet" (REQ-FACE-006).
+    let early = web::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/people")
+                .header("host", "localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let early = early.into_body().collect().await.unwrap().to_bytes();
+    let early = String::from_utf8_lossy(&early);
+    assert!(early.contains("Faces are still loading"), "{early}");
+    assert!(!early.contains("No faces yet"));
     assert_eq!(state.people.rebuild(&idx).unwrap(), 11);
     let id = |n: &str| {
         idx.all()

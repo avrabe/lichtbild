@@ -1919,3 +1919,17 @@ artifacts:
     links:
       - type: verifies
         target: REQ-MEDIA-005
+
+  - id: VER-136
+    type: verification
+    title: People says faces are still loading before the first read, and lists them after
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_groups_people_and_a_name_finds_them"
+      test-location: tests/faces.rs
+      steps:
+        - run: "LICHTBILD_TEST_VISION_DIR=<models> cargo test --test faces the_pass_groups_people_and_a_name_finds_them"
+    links:
+      - type: verifies
+        target: REQ-FACE-006

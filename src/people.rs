@@ -56,6 +56,8 @@ struct State {
 #[derive(Default)]
 pub struct People {
     state: RwLock<State>,
+    /// The faces were read from the index at least once since the start.
+    loaded: std::sync::atomic::AtomicBool,
 }
 
 /// One face as callers see it.
@@ -247,6 +249,8 @@ impl People {
             };
         }
         self.relabel(idx)?;
+        self.loaded
+            .store(true, std::sync::atomic::Ordering::Release);
         Ok(n)
     }
 
@@ -306,6 +310,12 @@ impl People {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// False until the faces were first read from the index after a start,
+    /// which takes about a minute on a Pi with tens of thousands of faces.
+    pub fn loaded(&self) -> bool {
+        self.loaded.load(std::sync::atomic::Ordering::Acquire)
     }
 }
 

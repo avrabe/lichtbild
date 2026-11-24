@@ -5686,6 +5686,8 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     if named.is_empty() && groups.is_empty() {
         body += if !st.faces_on {
             "<p class=\"dim\">No faces: the face models are not in the vision directory.</p>"
+        } else if !st.people.loaded() {
+            "<p class=\"dim\">Faces are still loading after the start; this takes about a minute. <a href=\"people\">Look again</a>.</p>"
         } else if st.people.is_empty() {
             "<p class=\"dim\">No faces yet.</p>"
         } else {
