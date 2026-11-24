@@ -473,6 +473,7 @@ artifacts:
         - Right after a start, People says faces are still loading rather than that there are none
         - A page shows what the last sync brought in, newest first
         - On someone's birthday the home page shows their photos
+        - Blurry and nearly black or white photos are listed to put away, and on the house library at most 5% of photos are listed as blurry
     links:
       - type: satisfies
         target: REQ-MEDIA-005
@@ -482,3 +483,5 @@ artifacts:
         target: REQ-WEB-029
       - type: satisfies
         target: REQ-FACE-007
+      - type: satisfies
+        target: REQ-WEB-030

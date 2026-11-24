@@ -46,6 +46,9 @@ const LOOKED: TableDefinition<&str, &str> = TableDefinition::new("looked");
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
 const FINGERPRINTS: TableDefinition<&str, (u64, bool)> = TableDefinition::new("fingerprints");
+/// Content hash -> (sharpness, mean grey, clipped share) of its thumbnail
+/// (REQ-WEB-030).
+const QUALITY: TableDefinition<&str, (f32, f32, f32)> = TableDefinition::new("quality");
 /// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
 /// restart does not sign anyone out (crate::auth::SessionStore).
 const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
@@ -287,6 +290,7 @@ impl Index {
             w.open_table(BY_TIME)?;
             w.open_table(TRANSCRIPTS)?;
             w.open_table(FINGERPRINTS)?;
+            w.open_table(QUALITY)?;
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
             w.open_table(FAVS)?;
@@ -719,6 +723,63 @@ impl Index {
             let (k, v) = e?;
             let (h, some) = v.value();
             out.insert(k.value().to_string(), some.then_some(h));
+        }
+        Ok(out)
+    }
+
+    /// Photos with a thumbnail and no quality measure yet: their content
+    /// hashes, one per hash.
+    pub fn missing_quality(&self) -> Result<Vec<String>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let q = r.open_table(QUALITY)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if !rec.shown()
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            if q.get(rec.hash.as_str())?.is_none() {
+                out.push(rec.hash);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Store quality measures, in one write.
+    pub fn set_qualities(&self, qs: &[(String, crate::best::Quality)]) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(QUALITY)?;
+            for (hash, q) in qs {
+                t.insert(hash.as_str(), (q.sharp, q.mean, q.clipped))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Every stored quality measure by content hash.
+    pub fn qualities(&self) -> Result<HashMap<String, crate::best::Quality>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(QUALITY)?;
+        let mut out = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            let (sharp, mean, clipped) = v.value();
+            out.insert(
+                k.value().to_string(),
+                crate::best::Quality {
+                    sharp,
+                    mean,
+                    clipped,
+                },
+            );
         }
         Ok(out)
     }

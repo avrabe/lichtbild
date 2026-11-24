@@ -217,6 +217,11 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
                 Ok(_) => {}
                 Err(e) => tracing::error!("fingerprints {when} failed: {e:#}"),
             }
+            match lichtbild::best::quality_pass(&cfg.data_dir, &idx) {
+                Ok(n) if n > 0 => tracing::info!("sharpness and light {when}: {n} new"),
+                Ok(_) => {}
+                Err(e) => tracing::error!("sharpness and light {when} failed: {e:#}"),
+            }
             match dups.rebuild(&idx) {
                 Ok(r) => {
                     status.set_duplicates(r.groups, r.items);

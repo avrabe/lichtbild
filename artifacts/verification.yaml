@@ -1962,3 +1962,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-FACE-007
+
+  - id: VER-139
+    type: verification
+    title: Flat and black photos are listed for review, sharp and hidden ones are not, each measured once
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "blurry_and_dark_photos_are_offered_for_review (tests/ui.rs), best::tests (src/best.rs)"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui blurry_and_dark_photos_are_offered_for_review"
+        - run: "cargo test --lib best::"
+    links:
+      - type: verifies
+        target: REQ-WEB-030

@@ -950,3 +950,74 @@ fn birthdays_are_real_dates() {
         assert_eq!(b(bad), None, "{bad}");
     }
 }
+
+// Photos that look blurry or nearly black are offered to put away, worst
+// first; sharp ones and hidden ones are not; nothing hides by itself.
+// rivet: verifies REQ-WEB-030
+#[tokio::test]
+async fn blurry_and_dark_photos_are_offered_for_review() {
+    let e = env();
+    let root = e.state.roots.get("p1").unwrap().clone();
+    let save = |name: &str, f: &dyn Fn(u32, u32) -> u8| {
+        image::GrayImage::from_fn(200, 150, |x, y| image::Luma([f(x, y)]))
+            .save(root.join(name))
+            .unwrap();
+    };
+    save("a/IMG_20230101_100000.jpg", &|_, _| 128);
+    save("a/IMG_20230102_100000.jpg", &|x, y| ((x + y) % 3) as u8);
+    save("a/IMG_20230103_100000.jpg", &|x, y| {
+        if (x / 6 + y / 6) % 2 == 0 {
+            40
+        } else {
+            210
+        }
+    });
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    let n = lichtbild::best::quality_pass(&cfg.data_dir, &e.idx).unwrap();
+    assert!(n >= 3, "{n}");
+    assert_eq!(
+        lichtbild::best::quality_pass(&cfg.data_dir, &e.idx).unwrap(),
+        0,
+        "once"
+    );
+    let id = |rel: &str| {
+        e.idx
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|(_, r)| r.rel == rel.as_bytes())
+            .unwrap()
+            .0
+    };
+    let (flat, dark, sharp) = (
+        id("a/IMG_20230101_100000.jpg"),
+        id("a/IMG_20230102_100000.jpg"),
+        id("a/IMG_20230103_100000.jpg"),
+    );
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/review", false).await;
+    assert_eq!(s, StatusCode::OK);
+    let section = |title: &str| {
+        page.split("<section class=\"added\">")
+            .find(|p| p.starts_with(&format!("<h2>{title} ")))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        section("Blurry").contains(&format!("id=\"i{flat}\"")),
+        "{page}"
+    );
+    assert!(
+        section("Too dark").contains(&format!("id=\"i{dark}\"")),
+        "{page}"
+    );
+    assert!(!page.contains(&format!("id=\"i{sharp}\"")));
+    let (_, menu) = get(&app, "/", false).await;
+    assert!(menu.contains("href=\"review\""));
+
+    // Hidden for this person (the operator, without login): off the list.
+    e.idx.set_hidden("operator", flat, true).unwrap();
+    let (_, page) = get(&app, "/review", false).await;
+    assert!(!page.contains(&format!("id=\"i{flat}\"")));
+}

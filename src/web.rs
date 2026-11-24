@@ -183,6 +183,7 @@ pub fn router(state: AppState) -> Router {
         .route("/unfav-many", axum::routing::post(unfav_many))
         .route("/favourites", get(favourites_page))
         .route("/recent", get(recent_page))
+        .route("/review", get(review_page))
         .route("/albums", get(albums_page).post(album_create))
         .route("/album/{id}", get(album_page))
         .route("/album-add", axum::routing::post(album_add))
@@ -699,6 +700,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"albums\"><b>Albums</b><span>Your own collections</span></a></li>\
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
+         <li><a href=\"review\"><b>Blurry or badly lit</b><span>Shots you may want to put away</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
          <li><button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b><span>Auto follows this device</span></button></li>\
          <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
@@ -3850,6 +3852,100 @@ async fn recent_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
         );
     }
     page_for(&st, "lichtbild recently added", &body).into_response()
+}
+
+/// How many photos each group of the review page shows.
+const REVIEW_MAX: usize = 300;
+
+/// GET /review: photos that look blurry, too dark or too bright, worst
+/// first, to hide with Select (REQ-WEB-030). Nothing is hidden by itself.
+async fn review_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let who = default_who(&viewer);
+    let labels = viewer.labels.clone();
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    type Groups = Vec<(&'static str, Vec<index::Item>, usize)>;
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<(Groups, usize)> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let qs = idx.qualities()?;
+        let mut by: HashMap<&'static str, Vec<(f32, u64, index::Record)>> = HashMap::new();
+        let mut measured = 0;
+        for (id, r) in idx.all()? {
+            if !r.shown()
+                || r.video.is_some()
+                || !labels.contains(&r.label)
+                || hidden.contains(&id)
+                || favs.contains(&id)
+                || !dups.shown(id, &labels, &hidden).shown
+            {
+                continue;
+            }
+            let Some(q) = qs.get(&r.hash) else { continue };
+            measured += 1;
+            if let Some(f) = q.flaw() {
+                by.entry(f).or_default().push((q.score(), id, r));
+            }
+        }
+        let mut out = Vec::new();
+        for f in ["blurry", "too dark", "too bright"] {
+            let Some(mut v) = by.remove(f) else { continue };
+            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let total = v.len();
+            let items = v
+                .into_iter()
+                .take(REVIEW_MAX)
+                .map(|(_, id, r)| index::Item {
+                    id,
+                    label: r.label,
+                    taken_local: r.taken_local,
+                    date_source: r.date_source,
+                    thumb_ok: r.thumb == "ok",
+                    hash: r.hash,
+                    width: r.width,
+                    height: r.height,
+                    live: r.live.is_some(),
+                    ..index::Item::default()
+                })
+                .collect();
+            out.push((f, items, total));
+        }
+        Ok((out, measured))
+    })
+    .await;
+    let (groups, measured) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<div class=\"thead\"><h1>Blurry or badly lit</h1><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\
+         <p class=\"dim\">Photos that look shaken or out of focus, or nearly black or white, the worst first. Nothing is hidden by itself: choose with Select and hide them for you. Favourites are never listed.</p>",
+    );
+    if groups.is_empty() {
+        body += &format!(
+            "<p class=\"dim\">None found among {measured} measured photos. Photos are measured after each scan.</p>"
+        );
+    }
+    for (f, items, total) in &groups {
+        let ones = vec![1; items.len()];
+        let n = if *total > items.len() {
+            format!("worst {} of {total}", items.len())
+        } else {
+            total.to_string()
+        };
+        body += &format!(
+            "<section class=\"added\"><h2>{} <span class=\"dim\">{n}</span></h2><div class=\"timeline\">\n{}</div></section>\n",
+            match *f {
+                "blurry" => "Blurry",
+                "too dark" => "Too dark",
+                _ => "Too bright",
+            },
+            render_items(&who, items, &ones, None, false, ""),
+        );
+    }
+    page_for(&st, "lichtbild review", &body).into_response()
 }
 
 /// POST /unhide/{id}: show the item again.

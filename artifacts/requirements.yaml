@@ -1598,3 +1598,23 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-WEB-030
+    type: requirement
+    title: Blurry and badly lit photos are offered to put away
+    status: implemented
+    release: v0.12.0
+    description: >
+      After each scan every photo's thumbnail is measured once (edge
+      energy, mean brightness, clipped share) and the measure is stored by
+      content hash. A review page lists the photos the viewer may see that
+      look blurry, too dark or too bright, worst first, without favourites,
+      hidden items or second copies, to hide with Select. Nothing is hidden
+      by itself. On open photos the sharp ones measure 5.7 to 7.7 and the
+      same photos blurred 1.4 to 1.6; the blurry line is 3.0.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
