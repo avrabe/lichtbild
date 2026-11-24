@@ -2960,3 +2960,147 @@ async fn a_story_of_some_days_tells_what_was_seen_and_who_was_there() {
     e.idx.set_person_hidden(oma, true).unwrap();
     assert!(!get(uri).await.body.contains("Oma"));
 }
+
+// From a partner's parent and his partner, the tree and the suggestions
+// follow: she is offered as mother or step-mother of the daughter, the
+// choice is one tap, and the family tree shows everyone by generation.
+// A face of the person stands for them once chosen; someone else's face
+// cannot.
+// rivet: verifies REQ-FACE-008
+#[tokio::test]
+async fn the_family_tree_follows_from_relations_and_offers_the_rest() {
+    let e = env("https://photos.example").await;
+    let photos: Vec<(u64, String)> = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .filter(|(_, r)| r.label == "p1" && r.video.is_none() && !r.missing && r.thumb == "ok")
+        .map(|(id, r)| (id, r.hash))
+        .collect();
+    // One photo per content: a link to a file is the same photo.
+    let mut one = std::collections::HashSet::new();
+    let photos: Vec<(u64, String)> = photos
+        .into_iter()
+        .filter(|p| one.insert(p.1.clone()))
+        .collect();
+    assert!(photos.len() >= 4, "{photos:?}");
+    let names = ["Me", "Wife", "Dad", "Gisela"];
+    let mut ids = Vec::new();
+    for (i, n) in names.iter().enumerate() {
+        e.idx
+            .set_faces(
+                &photos[i].1,
+                lichtbild::faces::VERSION,
+                &one_face(face_vec(i * 7, i * 7 + 3)),
+            )
+            .unwrap();
+        ids.push(e.idx.create_person(n, "t", 0).unwrap());
+    }
+    e.people.rebuild(&e.idx).unwrap();
+    for i in 0..4 {
+        e.idx
+            .name_faces(&[(photos[i].1.clone(), 0)], ids[i])
+            .unwrap();
+    }
+    e.people.relabel(&e.idx).unwrap();
+    let (me, wife, dad, gisela) = (ids[0], ids[1], ids[2], ids[3]);
+    use lichtbild::relations::Kind;
+    e.idx
+        .set_relation(me.min(wife), me.max(wife), Kind::Partner as u8, 3)
+        .unwrap();
+    e.idx
+        .set_relation(dad, wife, Kind::Parent as u8, 3)
+        .unwrap();
+    e.idx
+        .set_relation(dad.min(gisela), dad.max(gisela), Kind::Partner as u8, 3)
+        .unwrap();
+
+    {
+        let mut m = e.mock.lock().unwrap();
+        m.sub = "user-1".into();
+        m.email = "one@example.test".into();
+    }
+    let Ok((s1, _)) = login(&e, "").await else {
+        panic!("login failed");
+    };
+    let c1 = format!("lichtbild_session={s1}");
+    let form = [
+        ("sec-fetch-site", "same-origin"),
+        ("content-type", "application/x-www-form-urlencoded"),
+    ];
+    let get = |uri: String| {
+        let (app, c) = (e.app.clone(), c1.clone());
+        async move { req_with(&app, "GET", &uri, Some(&c), false, &[]).await.body }
+    };
+    let post = |uri: String, body: String| {
+        let (app, c) = (e.app.clone(), c1.clone());
+        async move { req_with_body(&app, "POST", &uri, Some(&c), &body, &form).await }
+    };
+
+    let page = get(format!("/person/{wife}")).await;
+    assert!(page.contains("Maybe related"), "{page}");
+    assert!(page.contains("partner of the parent Dad"), "{page}");
+    assert!(page.contains("value=\"stepchild\"") && page.contains("Wife is step-child of Gisela"));
+    assert!(page.contains(&format!("person/{wife}/family")));
+    let r = post(
+        format!("/person/{wife}/relate"),
+        "kind=stepchild&name=Gisela".into(),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{} {}", r.status, r.body);
+    assert!(e
+        .idx
+        .relations()
+        .unwrap()
+        .contains(&((gisela, wife, Kind::StepParent as u8), 3)));
+    let page = get(format!("/person/{wife}")).await;
+    assert!(
+        !page.contains("partner of the parent"),
+        "said once, no longer offered"
+    );
+
+    let tree = get(format!("/person/{me}/family")).await;
+    assert!(tree.contains("Family of Me"), "{tree}");
+    let parents = tree.find("<h2>Parents</h2>").expect("parents row");
+    let same = tree.find("<h2>Same generation</h2>").expect("own row");
+    assert!(parents < same, "the elders on top");
+    let row = &tree[parents..same];
+    assert!(
+        row.contains("<b>Dad</b><small>partner’s parent</small>"),
+        "{row}"
+    );
+    assert!(row.contains("<b>Gisela</b>"), "{row}");
+    assert!(tree[same..].contains("<b>Wife</b><small>partner</small>"));
+
+    // The portrait: her own face, yes; Dad's face for her, no.
+    let r = post(
+        format!("/person/{wife}/portrait"),
+        format!("item={}&face=0", photos[1].0),
+    )
+    .await;
+    assert!(r.status.is_redirection(), "{}", r.status);
+    assert_eq!(
+        e.idx.person(wife).unwrap().unwrap().portrait,
+        Some((photos[1].1.clone(), 0))
+    );
+    let r = post(
+        format!("/person/{wife}/portrait"),
+        format!("item={}&face=0", photos[2].0),
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    let r = req_with_body(
+        &e.app,
+        "POST",
+        &format!("/person/{wife}/portrait"),
+        Some(&c1),
+        &format!("item={}&face=0", photos[1].0),
+        &[
+            ("content-type", "application/x-www-form-urlencoded"),
+            ("sec-fetch-site", "cross-site"),
+        ],
+    )
+    .await;
+    assert_eq!(r.status, StatusCode::FORBIDDEN);
+}

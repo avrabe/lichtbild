@@ -464,7 +464,9 @@ artifacts:
       Owner choice 2026-11-24 after comparing lichtbild with Immich and
       others: Live Photos as one item, a Recently added page, a sharpness
       and exposure check, birthday memories, events within trips, and a
-      People page that says when faces are still loading. Nothing is
+      People page that says when faces are still loading. Later the same
+      day: a family tree with the relations that follow, and a chosen face
+      per person. Nothing is
       shared outside the house.
     fields:
       phase: phase-1
@@ -475,6 +477,7 @@ artifacts:
         - On someone's birthday the home page shows their photos
         - Blurry and nearly black or white photos are listed to put away, and on the house library at most 5% of photos are listed as blurry
         - Parties and days out are found as events, and a trip shows its events
+        - A family tree shows the generations, and a wife whose father has a partner is offered her as mother or step-mother
     links:
       - type: satisfies
         target: REQ-MEDIA-005
@@ -488,3 +491,5 @@ artifacts:
         target: REQ-WEB-030
       - type: satisfies
         target: REQ-TRIP-002
+      - type: satisfies
+        target: REQ-FACE-008

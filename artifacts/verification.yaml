@@ -1992,3 +1992,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-TRIP-002
+
+  - id: VER-141
+    type: verification
+    title: The tree and the offered relations follow from the said ones, and only a person's own face becomes their portrait
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_family_tree_follows_from_relations_and_offers_the_rest (tests/auth.rs), relations::tests (src/relations.rs)"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth the_family_tree_follows_from_relations_and_offers_the_rest"
+        - run: "cargo test --lib relations::"
+    links:
+      - type: verifies
+        target: REQ-FACE-008

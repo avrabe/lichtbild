@@ -214,6 +214,10 @@ pub struct Person {
     /// "MM-DD", or "YYYY-MM-DD" when the year is known (REQ-FACE-007).
     #[serde(default)]
     pub birthday: Option<String>,
+    /// The face chosen to stand for this person: (content hash, face
+    /// number), shown on People and in the family tree (REQ-FACE-008).
+    #[serde(default)]
+    pub portrait: Option<(String, u32)>,
 }
 
 /// An album (REQ-WEB-017): whose it is, its name, when it was made.
@@ -1295,6 +1299,7 @@ impl Index {
                 created: now,
                 hidden: false,
                 birthday: None,
+                portrait: None,
             };
             t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
         }
@@ -1364,6 +1369,15 @@ impl Index {
 
     /// Set or clear a person's birthday; false when there is no such person.
     pub fn set_birthday(&self, id: u64, birthday: Option<&str>) -> Result<bool> {
+        self.change_person(id, |p| p.birthday = birthday.map(str::to_string))
+    }
+
+    /// Choose the face that stands for a person (REQ-FACE-008).
+    pub fn set_portrait(&self, id: u64, hash: &str, face: u32) -> Result<bool> {
+        self.change_person(id, |p| p.portrait = Some((hash.to_string(), face)))
+    }
+
+    fn change_person(&self, id: u64, f: impl FnOnce(&mut Person)) -> Result<bool> {
         let w = self.db.begin_write()?;
         let found;
         {
@@ -1373,7 +1387,7 @@ impl Index {
                 .and_then(|v| serde_json::from_slice(v.value()).ok());
             found = p.is_some();
             if let Some(mut p) = p {
-                p.birthday = birthday.map(str::to_string);
+                f(&mut p);
                 t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
             }
         }

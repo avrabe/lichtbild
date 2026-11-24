@@ -1639,3 +1639,29 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-FACE-008
+    type: requirement
+    title: A family tree from the relations, with the ones that follow offered in one tap
+    status: implemented
+    release: v0.12.0
+    description: >
+      Owner request 2026-11-24. Step-parent and half-sibling are kinds of
+      relation too. A person's family tree shows everyone reached through
+      parent, step-parent, grandparent, partner, sibling and half-sibling
+      relations, one row per generation with the elders on top, each with
+      their face and how they are related ("partner's parent"); only people
+      the viewer knows, and a name opens their own tree. A person page
+      offers the relations that follow from the ones said, for people not
+      yet related: a parent's partner as parent or step-parent, a parent's
+      parent as grandparent, a parent's child as sibling or half-sibling, a
+      partner's parent as in-law, a partner's child as child or step-child;
+      one tap says it, and it is not offered again. A face of the person,
+      in a photo the viewer sees and has not hidden, can be chosen to stand
+      for them on People and in the tree, with a same-site request.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

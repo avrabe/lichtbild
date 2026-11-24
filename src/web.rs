@@ -206,6 +206,11 @@ pub fn router(state: AppState) -> Router {
             "/person/{id}/birthday",
             axum::routing::post(person_birthday),
         )
+        .route(
+            "/person/{id}/portrait",
+            axum::routing::post(person_portrait),
+        )
+        .route("/person/{id}/family", get(family_page))
         .route("/people/hide", axum::routing::post(people_hide))
         .route(
             "/person/{id}/unrelate",
@@ -5985,6 +5990,18 @@ fn face_at(
 /// A person's or group's tile: the best face to show (one someone named,
 /// then the largest).
 fn cover(faces: &[&SeenFace]) -> Option<(u64, u32)> {
+    cover_with(faces, None)
+}
+
+/// As `cover`, but the chosen portrait first when the viewer sees it.
+fn cover_with(faces: &[&SeenFace], portrait: Option<&(String, u32)>) -> Option<(u64, u32)> {
+    if let Some(f) = portrait.and_then(|(h, k)| {
+        faces
+            .iter()
+            .find(|f| f.face.key.0 == *h && f.face.key.1 == *k)
+    }) {
+        return Some((f.item, f.face.key.1));
+    }
     faces
         .iter()
         .max_by(|a, b| {
@@ -6044,6 +6061,10 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
             .filter(|(_, p)| p.hidden)
             .map(|(id, _)| *id)
             .collect();
+        let portraits: HashMap<u64, (String, u32)> = all
+            .iter()
+            .filter_map(|(id, p)| Some((*id, p.portrait.clone()?)))
+            .collect();
         let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
         let known: std::collections::HashSet<u64> = seen
             .iter()
@@ -6070,13 +6091,23 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 crate::people::Who::Person(p) => {
                     let Some(name) = names.get(p) else { continue };
                     if off.contains(p) {
-                        put_away.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                        put_away.push((
+                            format!("person/{p}"),
+                            name.clone(),
+                            photos(v),
+                            cover_with(v, portraits.get(p)),
+                        ));
                         continue;
                     }
                     let c = close.get(p).copied().unwrap_or(0);
                     named.push((
                         c,
-                        (format!("person/{p}"), name.clone(), photos(v), cover(v)),
+                        (
+                            format!("person/{p}"),
+                            name.clone(),
+                            photos(v),
+                            cover_with(v, portraits.get(p)),
+                        ),
                     ));
                 }
                 crate::people::Who::Group(_) => {
@@ -6213,6 +6244,8 @@ async fn person_page(
         Vec<RelRow>,
         String,
         Option<String>,
+        Vec<(u64, u32)>,
+        Vec<(crate::relations::Suggestion, String, String)>,
     );
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Page>> {
         let Some(p) = idx.person(pid)? else {
@@ -6241,21 +6274,44 @@ async fn person_page(
             total = items.len();
             with_name = names.get(&o).cloned();
         }
-        let rels = crate::relations::of(&idx.relations()?, pid, |o| {
-            seen.contains(&o) && !off.contains(&o)
-        })
-        .into_iter()
-        .filter_map(|r| {
-            let name = names.get(&r.other)?.clone();
-            let (a, b) = if r.first {
-                (pid, r.other)
-            } else {
-                (r.other, pid)
-            };
-            let key = crate::relations::key(a, b, r.kind as u8)?;
-            Some((r.other, name, r.label, r.weight, key))
-        })
-        .collect();
+        let all_rels = idx.relations()?;
+        let maybe: Vec<(crate::relations::Suggestion, String, String)> =
+            crate::relations::suggest(&all_rels, pid, |o| seen.contains(&o) && !off.contains(&o))
+                .into_iter()
+                .filter_map(|sg| {
+                    let o = names.get(&sg.other)?.clone();
+                    let v = names.get(&sg.via)?.clone();
+                    Some((sg, o, v))
+                })
+                .collect();
+        // Faces to choose the portrait from: one per photo, largest first.
+        let hidden = idx.hidden(&me)?;
+        let mut mine: Vec<(f32, u64, u32)> = seen_faces(&idx, &people, &labels, &hidden)?
+            .into_iter()
+            .filter(|f| f.face.who == crate::people::Who::Person(pid))
+            .map(|f| (f.face.b[2] * f.face.b[3], f.item, f.face.key.1))
+            .collect();
+        mine.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut one = std::collections::HashSet::new();
+        let faces: Vec<(u64, u32)> = mine
+            .into_iter()
+            .filter(|(_, item, _)| one.insert(*item))
+            .take(30)
+            .map(|(_, item, k)| (item, k))
+            .collect();
+        let rels = crate::relations::of(&all_rels, pid, |o| seen.contains(&o) && !off.contains(&o))
+            .into_iter()
+            .filter_map(|r| {
+                let name = names.get(&r.other)?.clone();
+                let (a, b) = if r.first {
+                    (pid, r.other)
+                } else {
+                    (r.other, pid)
+                };
+                let key = crate::relations::key(a, b, r.kind as u8)?;
+                Some((r.other, name, r.label, r.weight, key))
+            })
+            .collect();
         Ok(Some((
             p,
             items,
@@ -6263,10 +6319,12 @@ async fn person_page(
             rels,
             names_list(&idx, &seen),
             with_name,
+            faces,
+            maybe,
         )))
     })
     .await;
-    let (p, items, total, rels, names, with_name) = match res {
+    let (p, items, total, rels, names, with_name, faces, maybe) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -6306,6 +6364,50 @@ async fn person_page(
             )
         })
         .unwrap_or_default();
+    // Relations that follow from the ones said (REQ-FACE-008): one tap.
+    let maybe_html = if maybe.is_empty() || p.hidden {
+        String::new()
+    } else {
+        let mut o = String::from("<section class=\"maybe\"><h2>Maybe related</h2><ul>");
+        for (sg, other, via) in &maybe {
+            let buttons: String = sg
+                .choices
+                .iter()
+                .map(|(v, l)| {
+                    format!(
+                        "<form method=\"post\" action=\"person/{pid}/relate\" class=\"inline\"><input type=\"hidden\" name=\"kind\" value=\"{v}\"><input type=\"hidden\" name=\"name\" value=\"{n}\"><button type=\"submit\" class=\"tbtn\">{name} is {l} {n}</button></form>",
+                        n = esc(other),
+                    )
+                })
+                .collect();
+            o += &format!(
+                "<li><a href=\"person/{}\">{}</a> <span class=\"dim\">({} {})</span> {buttons}</li>",
+                sg.other,
+                esc(other),
+                esc(sg.why),
+                esc(via),
+            );
+        }
+        o + "</ul><p class=\"dim\">Follows from the relations already said. Anything else: the form above.</p></section>"
+    };
+    let portrait = if faces.len() < 2 || p.name.is_empty() {
+        String::new()
+    } else {
+        let current = p.portrait.as_ref();
+        let picks: String = faces
+            .iter()
+            .map(|(item, k)| {
+                format!(
+                    "<form method=\"post\" action=\"person/{pid}/portrait\" class=\"inline\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><button type=\"submit\" class=\"pick\" aria-label=\"Use this face\">{}</button></form>",
+                    face_img(*item, *k)
+                )
+            })
+            .collect();
+        format!(
+            "<details class=\"albumtools portraits\"><summary>Choose the face for {name}{}</summary><div class=\"facepick\">{picks}</div><p class=\"dim\">Shown on People and in the family tree, for everyone who sees it.</p></details>",
+            if current.is_some() { " (chosen)" } else { "" },
+        )
+    };
     let born = p
         .birthday
         .as_deref()
@@ -6331,7 +6433,7 @@ async fn person_page(
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{born}{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><a class=\"tbtn\" href=\"person/{pid}/family\" title=\"Family tree\">🌳 Family tree</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{born}{relations}{maybe_html}{manage}{portrait}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -6637,8 +6739,6 @@ fn sees_person(
         .any(|f| f.face.who == crate::people::Who::Person(pid)))
 }
 
-/// POST /person/{id}/rename: a new name; someone else's name puts both
-/// together.
 /// A birthday as typed: "" clears it; "YYYY-MM-DD" (a date input) or
 /// "MM-DD" sets it. None for anything else.
 pub fn parse_birthday(s: &str) -> Option<Option<String>> {
@@ -6715,6 +6815,142 @@ async fn person_birthday(
     }
 }
 
+#[derive(Deserialize)]
+pub struct PortraitForm {
+    item: u64,
+    face: u32,
+}
+
+/// POST /person/{id}/portrait: this face, in a photo the viewer sees,
+/// stands for the person (REQ-FACE-008).
+async fn person_portrait(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<PortraitForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some((rec, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(false);
+        };
+        if face.who != crate::people::Who::Person(pid)
+            || idx.hidden(&person(&viewer))?.contains(&f.item)
+        {
+            return Ok(false);
+        }
+        idx.set_portrait(pid, &rec.hash, f.face)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /person/{id}/family: the family tree around a person (REQ-FACE-008):
+/// generations as rows, the oldest at the top, each person with their
+/// face and how they are related; only people the viewer knows.
+async fn family_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+) -> Response {
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let labels = viewer.labels.clone();
+    let me = person(&viewer);
+    type Node = (u64, i32, String, String, Option<(u64, u32)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<Node>>> {
+        let hidden = idx.hidden(&me)?;
+        let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut by: HashMap<u64, Vec<&SeenFace>> = HashMap::new();
+        for f in &seen {
+            if let crate::people::Who::Person(p) = f.face.who {
+                if !off.contains(&p) {
+                    by.entry(p).or_default().push(f);
+                }
+            }
+        }
+        if !by.contains_key(&pid) {
+            return Ok(None);
+        }
+        let info: HashMap<u64, index::Person> = all.into_iter().collect();
+        let tree = crate::relations::family(&idx.relations()?, pid, 6, |o| by.contains_key(&o));
+        Ok(Some(
+            tree.into_iter()
+                .filter_map(|(id, g, how)| {
+                    let p = info.get(&id)?;
+                    let c = cover_with(by.get(&id)?, p.portrait.as_ref());
+                    Some((id, g, how, p.name.clone(), c))
+                })
+                .collect(),
+        ))
+    })
+    .await;
+    let nodes = match res {
+        Ok(Ok(Some(n))) => n,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let center = nodes.first().map(|n| n.3.clone()).unwrap_or_default();
+    let mut body = format!(
+        "<div class=\"thead\"><h1>Family of {}</h1><a class=\"tbtn\" href=\"person/{pid}\">← {}</a></div>",
+        esc(&center),
+        esc(&center)
+    );
+    if nodes.len() < 2 {
+        body += "<p class=\"dim\">No family yet. On a person's page, say who is whose parent, partner or sibling; the tree grows from those relations.</p>";
+        return page_for(&st, "lichtbild family", &body).into_response();
+    }
+    let (lo, hi) = nodes
+        .iter()
+        .fold((0, 0), |(l, h), n| (l.min(n.1), h.max(n.1)));
+    body += "<div class=\"tree\">";
+    for g in lo..=hi {
+        let row: Vec<&Node> = nodes.iter().filter(|n| n.1 == g).collect();
+        if row.is_empty() {
+            continue;
+        }
+        let gen = match g {
+            -2 => "Grandparents".to_string(),
+            -1 => "Parents".to_string(),
+            0 => "Same generation".to_string(),
+            1 => "Children".to_string(),
+            2 => "Grandchildren".to_string(),
+            g if g < 0 => format!("{} generations up", -g),
+            g => format!("{g} generations down"),
+        };
+        body += &format!("<section class=\"gen\"><h2>{gen}</h2><div class=\"genrow\">");
+        for (id, _, how, name, c) in row {
+            let img = c.map(|(i, k)| face_img(i, k)).unwrap_or_default();
+            body += &format!(
+                "<a class=\"node{me}\" href=\"person/{id}/family\">{img}<b>{}</b><small>{}</small></a>",
+                esc(name),
+                esc(how),
+                me = if *id == pid { " center" } else { "" },
+            );
+        }
+        body += "</div></section>";
+    }
+    body += "</div><p class=\"dim\">From the relations said on people's pages: parent, step-parent, grandparent, partner, sibling and half-sibling. A name opens their own tree.</p>";
+    page_for(&st, "lichtbild family", &body).into_response()
+}
+
+/// POST /person/{id}/rename: a new name; someone else's name puts both
+/// together.
 async fn person_rename(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,
