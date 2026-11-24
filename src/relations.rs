@@ -281,14 +281,16 @@ pub fn suggest(rels: &[Row], p: u64, known: impl Fn(u64) -> bool) -> Vec<Suggest
     let mine = steps(rels, p);
     let related: std::collections::HashSet<u64> = mine.iter().map(|s| s.0).collect();
     // `x` is the parent of `p`: stored (x, p, Parent) or (x, p, StepParent).
+    // Only through people in `known`: a suggestion names the one it goes
+    // through, and a viewer sees no one they do not know.
     let parents: Vec<u64> = mine
         .iter()
-        .filter(|(_, k, first)| matches!(k, Kind::Parent | Kind::StepParent) && !first)
+        .filter(|(o, k, first)| matches!(k, Kind::Parent | Kind::StepParent) && !first && known(*o))
         .map(|s| s.0)
         .collect();
     let partners: Vec<u64> = mine
         .iter()
-        .filter(|(_, k, _)| *k == Kind::Partner)
+        .filter(|(o, k, _)| *k == Kind::Partner && known(*o))
         .map(|s| s.0)
         .collect();
     let mut out: Vec<Suggestion> = Vec::new();
@@ -482,6 +484,9 @@ mod tests {
         said.push(((4, 2, Kind::StepParent as u8), 3));
         assert!(suggest(&said, 2, |_| true).iter().all(|x| x.other != 4));
         assert!(suggest(&rels, 2, |o| o != 4).iter().all(|x| x.other != 4));
+        // Nothing goes through someone unknown: without her dad, nothing
+        // that only he links is offered.
+        assert!(suggest(&rels, 2, |o| o != 3).is_empty());
         // The tree from me: wife beside me, her dad above, his wife beside him.
         let tree = family(&said, 1, 4, |_| true);
         let at = |id: u64| tree.iter().find(|t| t.0 == id).map(|t| (t.1, t.2.as_str()));

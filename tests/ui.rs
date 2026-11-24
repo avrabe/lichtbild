@@ -1016,7 +1016,14 @@ async fn blurry_and_dark_photos_are_offered_for_review() {
     let (_, menu) = get(&app, "/", false).await;
     assert!(menu.contains("href=\"review\""));
 
-    // Hidden for this person (the operator, without login): off the list.
+    // A favourite is never offered; hidden for this person (the operator,
+    // without login): off the list.
+    e.idx.set_fav("operator", dark, true).unwrap();
+    let (_, page) = get(&app, "/review", false).await;
+    assert!(
+        !page.contains(&format!("id=\"i{dark}\"")),
+        "a favourite is kept"
+    );
     e.idx.set_hidden("operator", flat, true).unwrap();
     let (_, page) = get(&app, "/review", false).await;
     assert!(!page.contains(&format!("id=\"i{flat}\"")));

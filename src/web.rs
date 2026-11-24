@@ -6278,6 +6278,11 @@ async fn person_page(
         let maybe: Vec<(crate::relations::Suggestion, String, String)> =
             crate::relations::suggest(&all_rels, pid, |o| seen.contains(&o) && !off.contains(&o))
                 .into_iter()
+                .filter(|sg| {
+                    [sg.other, sg.via]
+                        .iter()
+                        .all(|o| seen.contains(o) && !off.contains(o))
+                })
                 .filter_map(|sg| {
                     let o = names.get(&sg.other)?.clone();
                     let v = names.get(&sg.via)?.clone();
