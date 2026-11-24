@@ -1977,3 +1977,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-030
+
+  - id: VER-140
+    type: verification
+    title: Fourteen pictures in an hour are one event on Events and on the days around it; few or guessed ones are none
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "many_pictures_close_together_are_an_event (tests/ui.rs), events::tests (src/events.rs)"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui many_pictures_close_together_are_an_event"
+        - run: "cargo test --lib events::"
+    links:
+      - type: verifies
+        target: REQ-TRIP-002

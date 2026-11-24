@@ -1021,3 +1021,44 @@ async fn blurry_and_dark_photos_are_offered_for_review() {
     let (_, page) = get(&app, "/review", false).await;
     assert!(!page.contains(&format!("id=\"i{flat}\"")));
 }
+
+// Many pictures close together in time are an event: listed on Events
+// and at the top of the days they fall on; a few pictures are not.
+// rivet: verifies REQ-TRIP-002
+#[tokio::test]
+async fn many_pictures_close_together_are_an_event() {
+    let e = env();
+    let root = e.state.roots.get("p1").unwrap().clone();
+    std::fs::create_dir_all(root.join("party")).unwrap();
+    for i in 0..14u8 {
+        let date = format!("2023:08:12 19:{:02}:00", i * 4);
+        std::fs::write(
+            root.join(format!("party/IMG_{i:02}.jpg")),
+            common::jpeg_with_exif(&date, "+02:00", None, 100 + i),
+        )
+        .unwrap();
+    }
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    e.state.dups.rebuild(&e.idx).unwrap();
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/events", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(page.contains("<i>14</i>"), "{page}");
+    assert!(
+        page.contains("days/all?from=2023-08-12&amp;to=2023-08-12"),
+        "{page}"
+    );
+    assert!(page.contains("19:00–19:52"), "{page}");
+    // The fixture's few other pictures make no event.
+    assert_eq!(page.matches("class=\"thing\"").count(), 1, "{page}");
+    let (_, days) = get(&app, "/days/all?from=2023-08-11&to=2023-08-13", false).await;
+    assert!(days.contains("Events on these days"), "{days}");
+    let (_, one) = get(&app, "/days/all?from=2023-08-12&to=2023-08-12", false).await;
+    assert!(
+        !one.contains("Events on these days"),
+        "a single day is its own event"
+    );
+    let (_, home) = get(&app, "/", false).await;
+    assert!(home.contains("href=\"events\""));
+}

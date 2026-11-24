@@ -1618,3 +1618,24 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-TRIP-002
+    type: requirement
+    title: Events are found from many pictures close together in time
+    status: implemented
+    release: v0.12.0
+    description: >
+      At least 12 pictures with a recorded date, none more than 90 minutes
+      after the one before, are an event (a party, a wedding, a day out),
+      found among the pictures the viewer may see without hidden items or
+      second copies. An Events page lists them newest first, each named by
+      the town most of its positioned pictures are nearest to, with its
+      time and the named people most often in it (at most 3, only people
+      the viewer knows). A run of days, such as a trip, shows its events
+      at the top. Dates guessed from file names or times make no event.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

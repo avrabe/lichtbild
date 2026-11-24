@@ -474,6 +474,7 @@ artifacts:
         - A page shows what the last sync brought in, newest first
         - On someone's birthday the home page shows their photos
         - Blurry and nearly black or white photos are listed to put away, and on the house library at most 5% of photos are listed as blurry
+        - Parties and days out are found as events, and a trip shows its events
     links:
       - type: satisfies
         target: REQ-MEDIA-005
@@ -485,3 +486,5 @@ artifacts:
         target: REQ-FACE-007
       - type: satisfies
         target: REQ-WEB-030
+      - type: satisfies
+        target: REQ-TRIP-002

@@ -223,6 +223,7 @@ pub fn router(state: AppState) -> Router {
         .route("/fix/text", axum::routing::post(fix_text))
         .route("/fix/off", axum::routing::post(fix_off))
         .route("/trips", get(trips_page))
+        .route("/events", get(events_page))
         .route("/countries", get(countries_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
@@ -691,6 +692,7 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
+         <li><a href=\"events\"><b>Events</b><span>Parties and days out, found by time</span></a></li>\
          <li><a href=\"countries\"><b>Countries</b><span>Where you have been</span></a></li>\
          <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
@@ -1060,6 +1062,7 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
              <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
+             <a href=\"events\"><b>Events</b><span>Parties and days out</span></a>\
              <a href=\"countries\"><b>Countries</b><span>Where you have been</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
@@ -4816,6 +4819,156 @@ pub(crate) fn trips_of(
     Ok((crate::trips::find(&items, &pos, places), items))
 }
 
+/// An event with what its tile shows: the cover's hash and who is in it.
+pub(crate) struct EventTile {
+    ev: crate::events::Event,
+    hash: String,
+    people: Vec<String>,
+}
+
+/// The viewer's events (REQ-TRIP-002) between two days (inclusive) or all,
+/// newest first, with the named people most often in each (at most 3).
+pub(crate) fn events_of(
+    idx: &index::Index,
+    dups: &crate::dups::Dups,
+    people: &crate::people::People,
+    viewer: &Viewer,
+    positions: &crate::place::Cache,
+    places: Option<&crate::places::Places>,
+    within: Option<(&str, &str)>,
+) -> anyhow::Result<Vec<EventTile>> {
+    let me = person(viewer);
+    let hidden = idx.hidden(&me)?;
+    let labels = &viewer.labels;
+    let items: Vec<(u64, index::Record)> = idx
+        .all()?
+        .into_iter()
+        .filter(|(id, r)| {
+            r.shown()
+                && labels.contains(&r.label)
+                && within.is_none_or(|(a, b)| {
+                    let d = r.taken_local.get(..10).unwrap_or("");
+                    d >= a && d <= b
+                })
+                && dups.shown(*id, labels, &hidden).shown
+        })
+        .collect();
+    let pos = positions.get(idx)?;
+    let events = crate::events::find(&items, &pos, places);
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
+    let seen = seen_people(idx, people, viewer)?;
+    let named: HashMap<u64, String> = idx
+        .people()?
+        .into_iter()
+        .filter(|(id, p)| !p.hidden && !p.name.is_empty() && seen.contains(id))
+        .map(|(id, p)| (id, p.name))
+        .collect();
+    Ok(events
+        .into_iter()
+        .map(|ev| {
+            let mut count: HashMap<u64, usize> = HashMap::new();
+            for id in &ev.ids {
+                let Some(h) = hashes.get(id) else { continue };
+                let mut here = std::collections::HashSet::new();
+                for f in people.in_photo(h) {
+                    if let crate::people::Who::Person(p) = f.who {
+                        if named.contains_key(&p) && here.insert(p) {
+                            *count.entry(p).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            let mut top: Vec<(u64, usize)> = count.into_iter().collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1).then(named[&a.0].cmp(&named[&b.0])));
+            EventTile {
+                hash: hashes.get(&ev.cover).cloned().unwrap_or_default(),
+                people: top
+                    .into_iter()
+                    .take(3)
+                    .map(|(p, _)| named[&p].clone())
+                    .collect(),
+                ev,
+            }
+        })
+        .collect())
+}
+
+/// Tiles for events, each opening its day or days at its first picture.
+fn event_tiles(who: &str, tiles: &[EventTile]) -> String {
+    let mut s = String::from("<section class=\"thingtiles trips events\">");
+    for t in tiles {
+        let (a, b) = (t.ev.start.date(), t.ev.end.date());
+        let title = t.ev.place.clone().unwrap_or_else(|| "Event".to_string());
+        let when = if a == b {
+            format!(
+                "{}, {}–{}",
+                day_span(a, b),
+                t.ev.start.format("%H:%M"),
+                t.ev.end.format("%H:%M")
+            )
+        } else {
+            day_span(a, b)
+        };
+        let with = if t.people.is_empty() {
+            String::new()
+        } else {
+            format!("<small>with {}</small>", esc(&t.people.join(", ")))
+        };
+        s += &format!(
+            "<a class=\"thing\" href=\"days/{w}?from={a}&amp;to={b}&amp;title={tq}#i{first}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small>{with}</a>",
+            w = esc(who),
+            a = a.format("%Y-%m-%d"),
+            b = b.format("%Y-%m-%d"),
+            tq = urlencode(&title),
+            first = t.ev.ids[0],
+            id = t.ev.cover,
+            h = esc(t.hash.get(..12).unwrap_or("")),
+            title = esc(&title),
+            n = t.ev.ids.len(),
+            when = esc(&when),
+        );
+    }
+    s + "</section>"
+}
+
+/// GET /events: many pictures close together in time, newest first
+/// (REQ-TRIP-002).
+async fn events_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, people, v2) = (
+        st.index.clone(),
+        st.dups.clone(),
+        st.people.clone(),
+        viewer.clone(),
+    );
+    let (pc, places) = (st.positions.clone(), st.places.clone());
+    let res = tokio::task::spawn_blocking(move || {
+        events_of(&idx, &dups, &people, &v2, &pc, places.as_deref(), None)
+    })
+    .await;
+    let mut tiles = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let total = tiles.len();
+    tiles.truncate(SET_MAX);
+    let mut body = format!(
+        "<div class=\"thead\"><h1>Events</h1><span class=\"dim\">{}</span></div><p class=\"dim\">At least {} pictures, none more than {} minutes after the one before: a party, a wedding, a day out. Named by the nearest town and the people most often in them.</p>",
+        set_count(total),
+        crate::events::MIN_ITEMS,
+        crate::events::GAP_MIN,
+    );
+    if tiles.is_empty() {
+        body += "<p>No events found yet.</p>";
+    } else {
+        body += &event_tiles(&default_who(&viewer), &tiles);
+    }
+    page_for(&st, "lichtbild events", &body).into_response()
+}
+
 async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
     let (idx, dups, labels, me) = (
         st.index.clone(),
@@ -5487,11 +5640,44 @@ async fn days_page(
     let head = esc(&dq.heading());
     let w = esc(&who);
     let nav = day_nav(&w, &dq, before.as_deref(), after.as_deref());
+    // A run of days (a trip): its events first (REQ-TRIP-002).
+    let events = match (&dq.md, dq.from.clone(), dq.to.clone()) {
+        (None, Some(f), Some(t)) if f != t && !items.is_empty() => {
+            let (idx, dups, people, v2) = (
+                st.index.clone(),
+                st.dups.clone(),
+                st.people.clone(),
+                viewer.clone(),
+            );
+            let (pc, places) = (st.positions.clone(), st.places.clone());
+            let tiles = tokio::task::spawn_blocking(move || {
+                events_of(
+                    &idx,
+                    &dups,
+                    &people,
+                    &v2,
+                    &pc,
+                    places.as_deref(),
+                    Some((&f, &t)),
+                )
+            })
+            .await;
+            match tiles {
+                Ok(Ok(t)) if !t.is_empty() => format!(
+                    "<h2 class=\"evhead\">Events on these days</h2>{}",
+                    event_tiles(&who, &t)
+                ),
+                Ok(Err(e)) => return internal(e),
+                _ => String::new(),
+            }
+        }
+        _ => String::new(),
+    };
     let body = if items.is_empty() {
         format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{events}{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
