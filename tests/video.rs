@@ -433,9 +433,23 @@ async fn a_live_photo_is_one_item_with_its_clip() {
     assert_eq!(st, StatusCode::PARTIAL_CONTENT);
 
     // A rescan keeps the pair; the photo gone, the clip is a video again.
-    assert_eq!(scan::run(&e.cfg, &idx, &opts()).unwrap().live_photos, 1);
+    let again = scan::run(&e.cfg, &idx, &opts()).unwrap();
+    assert!(
+        again.reconciled,
+        "a paired clip still counts as indexed: {:?}",
+        again.problems
+    );
+    assert_eq!(again.live_photos, 1);
+    // A clip favourited before it was paired is no favourite tile of its own.
+    idx.set_fav("operator", c, true).unwrap();
+    let (_, _, body) = get(&app, "/favourites", None).await;
+    assert!(!String::from_utf8(body)
+        .unwrap()
+        .contains(&format!("id=\"i{c}\"")));
     std::fs::remove_file(&photo).unwrap();
-    assert_eq!(scan::run(&e.cfg, &idx, &opts()).unwrap().live_photos, 0);
+    let freed = scan::run(&e.cfg, &idx, &opts()).unwrap();
+    assert!(freed.reconciled, "{:?}", freed.problems);
+    assert_eq!(freed.live_photos, 0);
     assert_eq!(record(&idx, "v/IMG_0001.MOV").live_of, None);
     let app = web::router(AppState::new(&e.cfg, idx.clone()));
     let (_, _, body) = get(&app, "/t/p1", None).await;

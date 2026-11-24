@@ -314,6 +314,13 @@ impl People {
 
     /// False until the faces were first read from the index after a start,
     /// which takes about a minute on a Pi with tens of thousands of faces.
+    /// The first read is over, even if it failed: People then says there
+    /// are no faces rather than that they are loading.
+    pub fn mark_loaded(&self) {
+        self.loaded
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
     pub fn loaded(&self) -> bool {
         self.loaded.load(std::sync::atomic::Ordering::Acquire)
     }

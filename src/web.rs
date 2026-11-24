@@ -897,7 +897,19 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     let md_today = today.get(5..10).unwrap_or("").to_string();
     let people = st.people.clone();
     let v2 = viewer.clone();
+    // A 29 February birthday shows on 28 February in other years.
+    let leap = chrono::NaiveDate::from_ymd_opt(
+        chrono::Local::now()
+            .format("%Y")
+            .to_string()
+            .parse()
+            .unwrap_or(2000),
+        2,
+        29,
+    )
+    .is_some();
     let md = md_today.clone();
+    let also = (md_today == "02-28" && !leap).then(|| "02-29".to_string());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Home> {
         let counts = idx.counts()?;
         let hidden = idx.hidden(&me)?;
@@ -951,7 +963,9 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
             .filter(|(_, p)| {
                 !p.hidden
                     && !p.name.is_empty()
-                    && p.birthday.as_deref().is_some_and(|b| b.ends_with(&md))
+                    && p.birthday.as_deref().is_some_and(|b| {
+                        b.ends_with(&md) || also.as_deref().is_some_and(|a| b.ends_with(a))
+                    })
             })
             .collect();
         if !due.is_empty() {
@@ -4833,6 +4847,7 @@ pub(crate) struct EventTile {
 
 /// The viewer's events (REQ-TRIP-002) between two days (inclusive) or all,
 /// newest first, with the named people most often in each (at most 3).
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn events_of(
     idx: &index::Index,
     dups: &crate::dups::Dups,
@@ -4840,11 +4855,11 @@ pub(crate) fn events_of(
     viewer: &Viewer,
     positions: &crate::place::Cache,
     places: Option<&crate::places::Places>,
+    labels: &[String],
     within: Option<(&str, &str)>,
 ) -> anyhow::Result<Vec<EventTile>> {
     let me = person(viewer);
     let hidden = idx.hidden(&me)?;
-    let labels = &viewer.labels;
     let items: Vec<(u64, index::Record)> = idx
         .all()?
         .into_iter()
@@ -4950,7 +4965,16 @@ async fn events_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     );
     let (pc, places) = (st.positions.clone(), st.places.clone());
     let res = tokio::task::spawn_blocking(move || {
-        events_of(&idx, &dups, &people, &v2, &pc, places.as_deref(), None)
+        events_of(
+            &idx,
+            &dups,
+            &people,
+            &v2,
+            &pc,
+            places.as_deref(),
+            &v2.labels,
+            None,
+        )
     })
     .await;
     let mut tiles = match res {
@@ -5655,6 +5679,7 @@ async fn days_page(
                 viewer.clone(),
             );
             let (pc, places) = (st.positions.clone(), st.places.clone());
+            let scoped = scope(&viewer, &who).unwrap_or_default();
             let tiles = tokio::task::spawn_blocking(move || {
                 events_of(
                     &idx,
@@ -5663,6 +5688,7 @@ async fn days_page(
                     &v2,
                     &pc,
                     places.as_deref(),
+                    &scoped,
                     Some((&f, &t)),
                 )
             })

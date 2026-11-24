@@ -3041,7 +3041,10 @@ async fn the_family_tree_follows_from_relations_and_offers_the_rest() {
     // Through a hidden person nothing is offered, and their name is not shown.
     e.idx.set_person_hidden(dad, true).unwrap();
     let page = get(format!("/person/{wife}")).await;
-    assert!(!page.contains("partner of the parent") && !page.contains(">Dad<"), "{page}");
+    assert!(
+        !page.contains("partner of the parent") && !page.contains(">Dad<"),
+        "{page}"
+    );
     e.idx.set_person_hidden(dad, false).unwrap();
     let page = get(format!("/person/{wife}")).await;
     assert!(page.contains("Maybe related"), "{page}");

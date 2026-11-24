@@ -1045,6 +1045,12 @@ async fn many_pictures_close_together_are_an_event() {
         )
         .unwrap();
     }
+    // One picture in the other library on the same day.
+    std::fs::write(
+        e.state.roots.get("p2").unwrap().join("IMG_other.jpg"),
+        common::jpeg_with_exif("2023:08:12 12:00:00", "+02:00", None, 99),
+    )
+    .unwrap();
     let cfg = config(&e._fx, &e._fx.data);
     scan::run(&cfg, &e.idx, &Options::default()).unwrap();
     e.state.dups.rebuild(&e.idx).unwrap();
@@ -1061,6 +1067,10 @@ async fn many_pictures_close_together_are_an_event() {
     assert_eq!(page.matches("class=\"thing\"").count(), 1, "{page}");
     let (_, days) = get(&app, "/days/all?from=2023-08-11&to=2023-08-13", false).await;
     assert!(days.contains("Events on these days"), "{days}");
+    // Another library's days do not show this library's event.
+    let (_, other) = get(&app, "/days/p2?from=2023-08-11&to=2023-08-13", false).await;
+    assert!(other.contains("<h1>"), "{other}");
+    assert!(!other.contains("Events on these days"), "{other}");
     let (_, one) = get(&app, "/days/all?from=2023-08-12&to=2023-08-12", false).await;
     assert!(
         !one.contains("Events on these days"),

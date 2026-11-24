@@ -256,7 +256,10 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
         }
         let regroup_faces = |when: &str| match people.rebuild(&idx) {
             Ok(n) => tracing::info!("faces {when}: {n}"),
-            Err(e) => tracing::error!("faces {when} failed: {e:#}"),
+            Err(e) => {
+                people.mark_loaded();
+                tracing::error!("faces {when} failed: {e:#}")
+            }
         };
         regroup_faces("at start");
         if !cfg.scan_at_start {

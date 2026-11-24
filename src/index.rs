@@ -376,6 +376,15 @@ impl Index {
             e?;
             n += 1;
         }
+        // Live Photo clips are indexed but kept out of the timeline
+        // (REQ-MEDIA-005); they still count as indexed files (SC-002).
+        let items = r.open_table(ITEMS)?;
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.label == label && !rec.missing && rec.live_of.is_some() {
+                n += 1;
+            }
+        }
         Ok(n)
     }
 
@@ -892,7 +901,7 @@ impl Index {
         for id in ids {
             let Some(raw) = items.get(id)? else { continue };
             let rec = decode(raw.value())?;
-            if labels.contains(&rec.label) && keep(id, &rec) {
+            if rec.live_of.is_none() && labels.contains(&rec.label) && keep(id, &rec) {
                 out.push(Item::of(id, rec));
             }
         }

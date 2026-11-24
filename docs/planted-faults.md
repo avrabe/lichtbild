@@ -223,6 +223,8 @@ at nice 0.
 | F215 | REQ-FACE-008 | someone else's face is taken for a person's portrait | `the_family_tree_follows_from_relations_and_offers_the_rest` |
 | F216 | REQ-FACE-008 | parents are drawn below their children | `relations::tests` |
 | F217 | REQ-FACE-008 | a suggestion goes through someone the viewer does not know | `relations::tests` |
+| F218 | REQ-TRIP-002 | one library's days show another library's events | `many_pictures_close_together_are_an_event` |
+| F219 | REQ-MEDIA-005 | a rescan with a Live Photo does not reconcile | `a_live_photo_is_one_item_with_its_clip` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
