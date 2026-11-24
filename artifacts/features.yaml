@@ -472,6 +472,7 @@ artifacts:
         - An iPhone Live Photo shows once in the timeline and plays its clip from the viewer
         - Right after a start, People says faces are still loading rather than that there are none
         - A page shows what the last sync brought in, newest first
+        - On someone's birthday the home page shows their photos
     links:
       - type: satisfies
         target: REQ-MEDIA-005
@@ -479,3 +480,5 @@ artifacts:
         target: REQ-FACE-006
       - type: satisfies
         target: REQ-WEB-029
+      - type: satisfies
+        target: REQ-FACE-007

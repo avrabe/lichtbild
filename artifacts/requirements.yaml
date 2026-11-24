@@ -1578,3 +1578,23 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-FACE-007
+    type: requirement
+    title: On a person's birthday the home page shows their photos
+    status: implemented
+    release: v0.12.0
+    description: >
+      A named person can be given a birthday (year-month-day, or month-day
+      when the year is not known) from their page, by someone who sees
+      them, with a same-site request; it holds for the house and shows on
+      their page. On that month and day, each viewer's home page shows up
+      to 12 of the photos of that person they may see, with the age they
+      turn when the year is known. Hidden people get no birthday section.
+      Other dates are refused.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

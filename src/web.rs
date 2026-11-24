@@ -201,6 +201,10 @@ pub fn router(state: AppState) -> Router {
         .route("/person/{id}/delete", axum::routing::post(person_delete))
         .route("/person/{id}/relate", axum::routing::post(person_relate))
         .route("/person/{id}/hide", axum::routing::post(person_hide))
+        .route(
+            "/person/{id}/birthday",
+            axum::routing::post(person_birthday),
+        )
         .route("/people/hide", axum::routing::post(people_hide))
         .route(
             "/person/{id}/unrelate",
@@ -853,8 +857,17 @@ pub fn scope(viewer: &Viewer, who: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The home page's cards and its "on this day" pictures.
-type Home = (Vec<Card>, Vec<(u64, index::Record)>);
+/// The home page's cards, its "on this day" pictures and today's birthdays.
+type Home = (Vec<Card>, Vec<(u64, index::Record)>, Vec<Birthday>);
+
+/// A person whose birthday is today, with some of their photos (REQ-FACE-007).
+struct Birthday {
+    id: u64,
+    name: String,
+    /// The age they turn, when the year is known.
+    turns: Option<i32>,
+    photos: Vec<index::Item>,
+}
 
 /// One card on the home page: a library (or the merged view), its newest
 /// pictures, how many it holds and which years.
@@ -873,6 +886,9 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     let labels = viewer.labels.clone();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let md_today = today.get(5..10).unwrap_or("").to_string();
+    let people = st.people.clone();
+    let v2 = viewer.clone();
+    let md = md_today.clone();
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Home> {
         let counts = idx.counts()?;
         let hidden = idx.hidden(&me)?;
@@ -918,10 +934,43 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
             .filter(|(id, r)| r.thumb == "ok" && dups.shown(*id, &labels, &hidden).shown)
             .take(14)
             .collect();
-        Ok((cards, otd))
+        // Birthdays today among the people the viewer has photos of.
+        let mut birthdays = Vec::new();
+        let due: Vec<(u64, index::Person)> = idx
+            .people()?
+            .into_iter()
+            .filter(|(_, p)| {
+                !p.hidden
+                    && !p.name.is_empty()
+                    && p.birthday.as_deref().is_some_and(|b| b.ends_with(&md))
+            })
+            .collect();
+        if !due.is_empty() {
+            let seen = seen_people(&idx, &people, &v2)?;
+            let year: i32 = today.get(..4).and_then(|y| y.parse().ok()).unwrap_or(0);
+            for (id, p) in due.into_iter().filter(|(id, _)| seen.contains(id)) {
+                let (mut photos, _) =
+                    photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(id))?;
+                photos.retain(|it| it.thumb_ok);
+                photos.truncate(12);
+                let turns = p
+                    .birthday
+                    .as_deref()
+                    .filter(|b| b.len() == 10)
+                    .and_then(|b| b.get(..4)?.parse::<i32>().ok())
+                    .map(|born| year - born);
+                birthdays.push(Birthday {
+                    id,
+                    name: p.name,
+                    turns,
+                    photos,
+                });
+            }
+        }
+        Ok((cards, otd, birthdays))
     })
     .await;
-    let (cards, otd) = match res {
+    let (cards, otd, birthdays) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -956,6 +1005,30 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
         );
     }
     body += "</section>";
+    for b in &birthdays {
+        let who = default_who(&viewer);
+        let turns = b
+            .turns
+            .filter(|t| *t > 0)
+            .map(|t| format!(" <span class=\"dim\">turns {t}</span>"))
+            .unwrap_or_default();
+        body += &format!(
+            "<section class=\"otd bday\"><h2>🎂 <a href=\"person/{id}\">{name}</a>’s birthday{turns}</h2><div class=\"strip\">",
+            id = b.id,
+            name = esc(&b.name),
+        );
+        for it in &b.photos {
+            body += &format!(
+                "<a class=\"item\" href=\"v/{who}/{id}\" title=\"{t}\">{img}<span class=\"year\">{y}</span></a>",
+                who = esc(&who),
+                id = it.id,
+                t = esc(&it.taken_local.replace('T', " ")),
+                img = thumb(it.id, &it.hash),
+                y = esc(it.taken_local.get(..4).unwrap_or("")),
+            );
+        }
+        body += "</div></section>";
+    }
     if !otd.is_empty() {
         let who = if viewer.labels.len() > 1 {
             "all".to_string()
@@ -5951,13 +6024,32 @@ async fn person_page(
             )
         })
         .unwrap_or_default();
+    let born = p
+        .birthday
+        .as_deref()
+        .map(|b| {
+            format!(
+                "<p class=\"born dim\">Birthday: {}</p>",
+                esc(&birthday_text(b))
+            )
+        })
+        .unwrap_or_default();
+    let bday = if p.name.is_empty() {
+        String::new()
+    } else {
+        let v = p.birthday.as_deref().unwrap_or("");
+        format!(
+            "<form method=\"post\" action=\"person/{pid}/birthday\"><label>Birthday <input type=\"text\" name=\"birthday\" value=\"{v}\" maxlength=\"10\" inputmode=\"numeric\" pattern=\"([0-9]{{4}}-)?[0-9]{{2}}-[0-9]{{2}}\" placeholder=\"1990-03-04 or 03-04\" aria-label=\"Birthday, year-month-day or month-day\"></label><button type=\"submit\">Save</button> <span class=\"dim\">Empty takes it off. On the day, the home page shows their photos.</span></form>",
+            v = esc(v)
+        )
+    };
     let manage = format!(
-        "<details class=\"albumtools\"><summary>Rename, hide or take the name off</summary>{hide}\
+        "<details class=\"albumtools\"><summary>Rename, birthday, hide or take the name off</summary>{hide}{bday}\
          <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{born}{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -6265,6 +6357,82 @@ fn sees_person(
 
 /// POST /person/{id}/rename: a new name; someone else's name puts both
 /// together.
+/// A birthday as typed: "" clears it; "YYYY-MM-DD" (a date input) or
+/// "MM-DD" sets it. None for anything else.
+pub fn parse_birthday(s: &str) -> Option<Option<String>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(None);
+    }
+    let ok = |y: i32, md: &str| {
+        chrono::NaiveDate::parse_from_str(&format!("{y}-{md}"), "%Y-%m-%d").is_ok()
+    };
+    match s.len() {
+        5 if s.as_bytes()[2] == b'-' && ok(2000, s) => Some(Some(s.to_string())),
+        10 => {
+            let y: i32 = s.get(..4)?.parse().ok()?;
+            let this_year: i32 = chrono::Local::now().format("%Y").to_string().parse().ok()?;
+            (s.as_bytes()[4] == b'-' && (1850..=this_year).contains(&y) && ok(y, s.get(5..)?))
+                .then(|| Some(s.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// "4 March", and the year when it is known.
+fn birthday_text(b: &str) -> String {
+    let md = b.get(b.len().saturating_sub(5)..).unwrap_or("");
+    let m: usize = md.get(..2).and_then(|m| m.parse().ok()).unwrap_or(0);
+    let d: u32 = md.get(3..).and_then(|d| d.parse().ok()).unwrap_or(0);
+    let name = MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("");
+    match b.len() {
+        10 => format!("{d} {name} {}", &b[..4]),
+        _ => format!("{d} {name}"),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BirthdayForm {
+    birthday: Option<String>,
+}
+
+/// POST /person/{id}/birthday: set or clear a person's birthday, for
+/// everyone in the house; only someone who sees the person may (REQ-FACE-007).
+async fn person_birthday(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<BirthdayForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(b) = parse_birthday(f.birthday.as_deref().unwrap_or("")) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a birthday is a date, or month and day as MM-DD",
+        )
+            .into_response();
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if idx.person(pid)?.is_none_or(|p| p.name.is_empty())
+            || !sees_person(&idx, &people, &viewer, pid)?
+        {
+            return Ok(false);
+        }
+        idx.set_birthday(pid, b.as_deref())
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
 async fn person_rename(
     State(st): State<AppState>,
     Extension(viewer): Extension<Viewer>,

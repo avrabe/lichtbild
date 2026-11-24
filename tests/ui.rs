@@ -927,3 +927,26 @@ async fn recently_added_shows_the_newest_files_first() {
     assert!(group.contains(&format!("id=\"i{new}\"")), "{group}");
     assert!(group.contains("1999"));
 }
+
+// A birthday is a real date with a year in the past, or month and day.
+// rivet: verifies REQ-FACE-007
+#[test]
+fn birthdays_are_real_dates() {
+    use lichtbild::web::parse_birthday as b;
+    assert_eq!(b(""), Some(None));
+    assert_eq!(b("03-04"), Some(Some("03-04".into())));
+    assert_eq!(b("02-29"), Some(Some("02-29".into())));
+    assert_eq!(b(" 1990-03-04 "), Some(Some("1990-03-04".into())));
+    for bad in [
+        "13-01",
+        "02-30",
+        "1990-02-30",
+        "3000-01-01",
+        "1700-01-01",
+        "0304",
+        "x",
+        "1990/03/04",
+    ] {
+        assert_eq!(b(bad), None, "{bad}");
+    }
+}

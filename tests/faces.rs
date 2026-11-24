@@ -113,6 +113,7 @@ fn one_persons_faces_match_and_others_do_not() {
 // rivet: verifies REQ-FACE-002
 // rivet: verifies REQ-FACE-003
 // rivet: verifies REQ-FACE-006
+// rivet: verifies REQ-FACE-007
 #[tokio::test]
 async fn the_pass_groups_people_and_a_name_finds_them() {
     let Some(m) = model() else { return };
@@ -254,6 +255,38 @@ async fn the_pass_groups_people_and_a_name_finds_them() {
         v.contains(">Astra</a>") && v.contains("Who is this?"),
         "{v}"
     );
+
+    // A birthday (REQ-FACE-007): kept for the house, shown on her page,
+    // and on the day the home page shows her photos; nonsense is refused.
+    let pid = p.trim_start_matches('/').trim_start_matches("person/");
+    let (s, _, _) = send("POST", &format!("/person/{pid}/birthday"), "birthday=13-45").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let today = chrono::Local::now();
+    let born = format!(
+        "{}-{}",
+        today.format("%Y").to_string().parse::<i32>().unwrap() - 30,
+        today.format("%m-%d")
+    );
+    let (s, _, _) = send(
+        "POST",
+        &format!("/person/{pid}/birthday"),
+        &format!("birthday={born}"),
+    )
+    .await;
+    assert!(s.is_redirection(), "{s}");
+    let (_, _, page) = send("GET", &p, "").await;
+    assert!(page.contains("Birthday: "), "{page}");
+    let (_, _, home) = send("GET", "/", "").await;
+    assert!(
+        home.contains("’s birthday") && home.contains("turns 30"),
+        "{home}"
+    );
+    assert!(home.contains(&format!("thumb/{}?", a1.0)));
+    // Another day: no birthday on the home page.
+    let (s, _, _) = send("POST", &format!("/person/{pid}/birthday"), "birthday=").await;
+    assert!(s.is_redirection());
+    let (_, _, home) = send("GET", "/", "").await;
+    assert!(!home.contains("’s birthday"));
 }
 
 // Photos go to a child in batches; a picture that cannot be read fails

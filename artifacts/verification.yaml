@@ -1947,3 +1947,18 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-029
+
+  - id: VER-138
+    type: verification
+    title: A birthday shows on the person page and their photos on the home page on the day
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_groups_people_and_a_name_finds_them (tests/faces.rs), birthdays_are_real_dates (tests/ui.rs)"
+      test-location: tests/faces.rs
+      steps:
+        - run: "LICHTBILD_TEST_VISION_DIR=<models> cargo test --test faces the_pass_groups_people_and_a_name_finds_them"
+        - run: "cargo test --test ui birthdays_are_real_dates"
+    links:
+      - type: verifies
+        target: REQ-FACE-007
