@@ -46,6 +46,9 @@ const LOOKED: TableDefinition<&str, &str> = TableDefinition::new("looked");
 /// fingerprint duplicates are found by (REQ-DUP-001). A flat picture
 /// stores (0, false).
 const FINGERPRINTS: TableDefinition<&str, (u64, bool)> = TableDefinition::new("fingerprints");
+/// Content hash -> (sharpness, mean grey, clipped share) of its thumbnail
+/// (REQ-WEB-030).
+const QUALITY: TableDefinition<&str, (f32, f32, f32)> = TableDefinition::new("quality");
 /// SHA-256 of a session id -> (person, identity, expiry in Unix seconds), so a
 /// restart does not sign anyone out (crate::auth::SessionStore).
 const SESSIONS: TableDefinition<&str, (&str, &str, u64)> = TableDefinition::new("sessions");
@@ -107,6 +110,12 @@ pub fn rel_bytes(rel: &Path) -> &[u8] {
     rel.as_os_str().as_bytes()
 }
 
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
+}
+
 pub fn rel_from_bytes(b: &[u8]) -> PathBuf {
     PathBuf::from(std::ffi::OsStr::from_bytes(b))
 }
@@ -134,6 +143,24 @@ pub struct Record {
     /// Length and codec, for a video (REQ-MEDIA-001).
     #[serde(default)]
     pub video: Option<crate::video::VideoMeta>,
+    /// A Live Photo: the id of its short clip, shown with it (REQ-MEDIA-005).
+    #[serde(default)]
+    pub live: Option<u64>,
+    /// The clip of a Live Photo: the photo's id. Such a clip is not an
+    /// item of its own: no timeline, search, map or pass lists it.
+    #[serde(default)]
+    pub live_of: Option<u64>,
+    /// When lichtbild first indexed this file, in seconds since 1970; 0 for
+    /// files indexed before v0.12.0 (REQ-WEB-029).
+    #[serde(default)]
+    pub added: u64,
+}
+
+impl Record {
+    /// Listed as an item of its own: live and not a Live Photo's clip.
+    pub fn shown(&self) -> bool {
+        !self.missing && self.live_of.is_none()
+    }
 }
 
 /// What the index knows about one file, for change detection.
@@ -168,6 +195,8 @@ pub struct Item {
     pub copies: usize,
     /// The viewer's favourite.
     pub fav: bool,
+    /// A Live Photo, with a clip (REQ-MEDIA-005).
+    pub live: bool,
 }
 
 /// A name given to faces (REQ-FACE-003), shared in the household.
@@ -182,6 +211,13 @@ pub struct Person {
     /// in name suggestions, search by name or relations; the photos stay.
     #[serde(default)]
     pub hidden: bool,
+    /// "MM-DD", or "YYYY-MM-DD" when the year is known (REQ-FACE-007).
+    #[serde(default)]
+    pub birthday: Option<String>,
+    /// The face chosen to stand for this person: (content hash, face
+    /// number), shown on People and in the family tree (REQ-FACE-008).
+    #[serde(default)]
+    pub portrait: Option<(String, u32)>,
 }
 
 /// An album (REQ-WEB-017): whose it is, its name, when it was made.
@@ -210,6 +246,7 @@ impl Item {
             video_ms: rec.video.map(|v| v.duration_ms),
             copies: 1,
             fav: false,
+            live: rec.live.is_some(),
         }
     }
 }
@@ -257,6 +294,7 @@ impl Index {
             w.open_table(BY_TIME)?;
             w.open_table(TRANSCRIPTS)?;
             w.open_table(FINGERPRINTS)?;
+            w.open_table(QUALITY)?;
             w.open_table(SESSIONS)?;
             w.open_table(HIDDEN)?;
             w.open_table(FAVS)?;
@@ -337,6 +375,15 @@ impl Index {
         for e in t.range((label, "", 0)..(label, TAKEN_MAX, 0))? {
             e?;
             n += 1;
+        }
+        // Live Photo clips are indexed but kept out of the timeline
+        // (REQ-MEDIA-005); they still count as indexed files (SC-002).
+        let items = r.open_table(ITEMS)?;
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if rec.label == label && !rec.missing && rec.live_of.is_some() {
+                n += 1;
+            }
         }
         Ok(n)
     }
@@ -442,7 +489,7 @@ impl Index {
             Ok(match items.get(n)? {
                 Some(raw) => {
                     let rec = decode(raw.value())?;
-                    !rec.missing && keep(n, &rec)
+                    rec.shown() && keep(n, &rec)
                 }
                 None => false,
             })
@@ -693,6 +740,63 @@ impl Index {
         Ok(out)
     }
 
+    /// Photos with a thumbnail and no quality measure yet: their content
+    /// hashes, one per hash.
+    pub fn missing_quality(&self) -> Result<Vec<String>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let q = r.open_table(QUALITY)?;
+        let mut seen = std::collections::HashSet::new();
+        let mut out = Vec::new();
+        for e in items.iter()? {
+            let rec = decode(e?.1.value())?;
+            if !rec.shown()
+                || rec.video.is_some()
+                || rec.thumb != "ok"
+                || !seen.insert(rec.hash.clone())
+            {
+                continue;
+            }
+            if q.get(rec.hash.as_str())?.is_none() {
+                out.push(rec.hash);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Store quality measures, in one write.
+    pub fn set_qualities(&self, qs: &[(String, crate::best::Quality)]) -> Result<()> {
+        let w = self.db.begin_write()?;
+        {
+            let mut t = w.open_table(QUALITY)?;
+            for (hash, q) in qs {
+                t.insert(hash.as_str(), (q.sharp, q.mean, q.clipped))?;
+            }
+        }
+        w.commit()?;
+        Ok(())
+    }
+
+    /// Every stored quality measure by content hash.
+    pub fn qualities(&self) -> Result<HashMap<String, crate::best::Quality>> {
+        let r = self.db.begin_read()?;
+        let t = r.open_table(QUALITY)?;
+        let mut out = HashMap::new();
+        for e in t.iter()? {
+            let (k, v) = e?;
+            let (sharp, mean, clipped) = v.value();
+            out.insert(
+                k.value().to_string(),
+                crate::best::Quality {
+                    sharp,
+                    mean,
+                    clipped,
+                },
+            );
+        }
+        Ok(out)
+    }
+
     /// Hide or show again an item for one person.
     pub fn set_hidden(&self, person: &str, id: u64, hidden: bool) -> Result<()> {
         self.mark(HIDDEN, person, id, hidden)
@@ -797,11 +901,38 @@ impl Index {
         for id in ids {
             let Some(raw) = items.get(id)? else { continue };
             let rec = decode(raw.value())?;
-            if labels.contains(&rec.label) && keep(id, &rec) {
+            if rec.live_of.is_none() && labels.contains(&rec.label) && keep(id, &rec) {
                 out.push(Item::of(id, rec));
             }
         }
         out.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        Ok(out)
+    }
+
+    /// The most recently indexed items in `labels` that `keep` accepts,
+    /// newest first by when they were indexed (ids grow with every new
+    /// file), at most `limit` (REQ-WEB-029).
+    pub fn recent(
+        &self,
+        labels: &[String],
+        limit: usize,
+        keep: impl Fn(u64, &Record) -> bool,
+    ) -> Result<Vec<(Item, u64)>> {
+        let r = self.db.begin_read()?;
+        let items = r.open_table(ITEMS)?;
+        let mut out = Vec::new();
+        for e in items.iter()?.rev() {
+            let (k, v) = e?;
+            let rec = decode(v.value())?;
+            let id = k.value();
+            if rec.shown() && labels.contains(&rec.label) && keep(id, &rec) {
+                let added = rec.added;
+                out.push((Item::of(id, rec), added));
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
         Ok(out)
     }
 
@@ -951,7 +1082,7 @@ impl Index {
         let (mut videos, mut done, mut speech) = (0, 0, 0);
         for e in items.iter()? {
             let rec = decode(e?.1.value())?;
-            if rec.missing
+            if !rec.shown()
                 || rec.video.is_none()
                 || !labels.contains(&rec.label)
                 || !seen.insert(rec.hash.clone())
@@ -1176,6 +1307,8 @@ impl Index {
                 by: by.to_string(),
                 created: now,
                 hidden: false,
+                birthday: None,
+                portrait: None,
             };
             t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
         }
@@ -1236,6 +1369,34 @@ impl Index {
             found = p.is_some();
             if let Some(mut p) = p {
                 p.hidden = hidden;
+                t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
+            }
+        }
+        w.commit()?;
+        Ok(found)
+    }
+
+    /// Set or clear a person's birthday; false when there is no such person.
+    pub fn set_birthday(&self, id: u64, birthday: Option<&str>) -> Result<bool> {
+        self.change_person(id, |p| p.birthday = birthday.map(str::to_string))
+    }
+
+    /// Choose the face that stands for a person (REQ-FACE-008).
+    pub fn set_portrait(&self, id: u64, hash: &str, face: u32) -> Result<bool> {
+        self.change_person(id, |p| p.portrait = Some((hash.to_string(), face)))
+    }
+
+    fn change_person(&self, id: u64, f: impl FnOnce(&mut Person)) -> Result<bool> {
+        let w = self.db.begin_write()?;
+        let found;
+        {
+            let mut t = w.open_table(PEOPLE)?;
+            let p: Option<Person> = t
+                .get(id)?
+                .and_then(|v| serde_json::from_slice(v.value()).ok());
+            found = p.is_some();
+            if let Some(mut p) = p {
+                f(&mut p);
                 t.insert(id, serde_json::to_vec(&p)?.as_slice())?;
             }
         }
@@ -1770,6 +1931,38 @@ impl Index {
 
     /// Live videos whose content has no transcript from `model` yet,
     /// oldest id first: (id, record).
+    /// Join every Live Photo with its clip and free clips whose photo is
+    /// gone (REQ-MEDIA-005). A clip leaves the timeline; it comes back as a
+    /// video of its own when it is no longer paired. Returns the pairs.
+    pub fn pair_live(&self) -> Result<usize> {
+        let all = self.all()?;
+        let pairs = crate::live::pairs(all.iter().map(|(id, r)| (*id, r)));
+        let clip_of: HashMap<u64, u64> = pairs.iter().map(|(p, c)| (*c, *p)).collect();
+        {
+            let b = self.batch()?;
+            for (id, rec) in &all {
+                let live = pairs.get(id).copied();
+                let live_of = clip_of.get(id).copied();
+                if rec.live == live && rec.live_of == live_of {
+                    continue;
+                }
+                let mut new = rec.clone();
+                new.live = live;
+                new.live_of = live_of;
+                b.store(*id, &new)?;
+                if !rec.missing {
+                    match (rec.live_of.is_some(), live_of.is_some()) {
+                        (false, true) => b.unlink(*id, rec)?,
+                        (true, false) => b.link(*id, &new)?,
+                        _ => {}
+                    }
+                }
+            }
+            b.commit()?;
+        }
+        Ok(pairs.len())
+    }
+
     pub fn videos_to_transcribe(&self, model: &str) -> Result<Vec<(u64, Record)>> {
         let r = self.db.begin_read()?;
         let items = r.open_table(ITEMS)?;
@@ -1779,7 +1972,7 @@ impl Index {
         for e in items.iter()? {
             let (k, v) = e?;
             let rec = decode(v.value())?;
-            if rec.missing || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
+            if !rec.shown() || rec.video.is_none() || !seen.insert(rec.hash.clone()) {
                 continue;
             }
             let done = match t.get(rec.hash.as_str())? {
@@ -1863,12 +2056,17 @@ impl Batch {
     ) -> Result<()> {
         let key = (label, rel_bytes(rel));
         let existing = self.w.open_table(PATHS)?.get(key)?.map(|g| g.value());
+        // A Live Photo's pairing stays until the next pairing looks again.
+        let mut paired = (None, None);
+        let mut added = now_secs();
         let id = match existing {
             Some(id) => {
                 if let Some(old) = self.load(id)? {
                     if !old.missing {
                         self.unlink(id, &old)?;
                     }
+                    paired = (old.live, old.live_of);
+                    added = old.added;
                 }
                 id
             }
@@ -1897,8 +2095,14 @@ impl Batch {
             missing: false,
             preview,
             video: info.video.clone(),
+            live: paired.0,
+            live_of: paired.1,
+            added,
         };
         self.store(id, &rec)?;
+        if rec.live_of.is_some() {
+            return Ok(());
+        }
         self.link(id, &rec)
     }
 
@@ -1914,6 +2118,8 @@ impl Batch {
         self.store(id, &rec)?;
         if missing {
             self.unlink(id, &rec)
+        } else if rec.live_of.is_some() {
+            Ok(())
         } else {
             self.link(id, &rec)
         }

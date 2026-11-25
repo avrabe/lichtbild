@@ -12,10 +12,44 @@ use std::sync::Mutex;
 
 use crate::index::Item;
 
-/// How good one thumbnail looks; higher is better. None when it cannot be
-/// read.
-pub fn score(jpeg: &[u8]) -> Option<f32> {
-    let img = image::load_from_memory(jpeg).ok()?.to_luma8();
+/// What one thumbnail looks like: edge energy, brightness, clipping.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Quality {
+    /// ln(1 + variance of the Laplacian over the grey values).
+    pub sharp: f32,
+    /// Mean grey value, 0..255.
+    pub mean: f32,
+    /// Share of pixels at 0..4 or 251..255.
+    pub clipped: f32,
+}
+
+/// Below this edge energy a photo is offered as blurry (REQ-WEB-030):
+/// a variance of the Laplacian under about 19 on a thumbnail.
+pub const BLURRY: f32 = 3.0;
+
+impl Quality {
+    /// Higher is better; compares shots of one moment.
+    pub fn score(&self) -> f32 {
+        self.sharp - 2.0 * ((self.mean - 127.5).abs() / 127.5) - 3.0 * self.clipped
+    }
+
+    /// Why a photo may be one to put away, if it looks like one.
+    pub fn flaw(&self) -> Option<&'static str> {
+        if self.mean < 30.0 && self.clipped > 0.4 {
+            Some("too dark")
+        } else if self.mean > 230.0 && self.clipped > 0.4 {
+            Some("too bright")
+        } else if self.sharp < BLURRY {
+            Some("blurry")
+        } else {
+            None
+        }
+    }
+}
+
+/// Measure a decoded thumbnail. None when it is too small.
+pub fn measure(img: &image::DynamicImage) -> Option<Quality> {
+    let img = img.to_luma8();
     let (w, h) = img.dimensions();
     if w < 3 || h < 3 {
         return None;
@@ -34,8 +68,35 @@ pub fn score(jpeg: &[u8]) -> Option<f32> {
     let all = f64::from(w * h);
     let mean = img.pixels().map(|p| f64::from(p[0])).sum::<f64>() / all;
     let clipped = img.pixels().filter(|p| p[0] <= 4 || p[0] >= 251).count() as f64 / all;
-    let s = (1.0 + var).ln() - 2.0 * ((mean - 127.5).abs() / 127.5) - 3.0 * clipped;
-    Some(s as f32)
+    Some(Quality {
+        sharp: (1.0 + var).ln() as f32,
+        mean: mean as f32,
+        clipped: clipped as f32,
+    })
+}
+
+/// How good one thumbnail looks; higher is better. None when it cannot be
+/// read.
+pub fn score(jpeg: &[u8]) -> Option<f32> {
+    measure(&image::load_from_memory(jpeg).ok()?).map(|q| q.score())
+}
+
+/// Measure every photo's thumbnail that has no measure yet, once; returns
+/// how many were measured (REQ-WEB-030).
+pub fn quality_pass(data_dir: &Path, idx: &crate::index::Index) -> anyhow::Result<usize> {
+    let mut n = 0;
+    for chunk in idx.missing_quality()?.chunks(500) {
+        let done: Vec<(String, Quality)> = chunk
+            .iter()
+            .filter_map(|hash| {
+                let img = image::open(crate::scan::thumb_path(data_dir, hash)).ok()?;
+                Some((hash.clone(), measure(&img)?))
+            })
+            .collect();
+        idx.set_qualities(&done)?;
+        n += done.len();
+    }
+    Ok(n)
 }
 
 /// Scores by content hash, read once from the thumbnails.
@@ -114,6 +175,18 @@ mod tests {
         assert!(sharp > soft, "{sharp} {soft}");
         assert!(sharp > dark, "{sharp} {dark}");
         assert!(score(b"not a picture").is_none());
+        let q = |b: &[u8]| measure(&image::load_from_memory(b).unwrap()).unwrap();
+        let checks = jpeg(|x, y| if (x / 4 + y / 4) % 2 == 0 { 60 } else { 190 });
+        assert_eq!(q(&checks).flaw(), None);
+        assert_eq!(q(&jpeg(|_, _| 128)).flaw(), Some("blurry"));
+        assert_eq!(
+            q(&jpeg(|x, y| ((x + y) % 3) as u8)).flaw(),
+            Some("too dark")
+        );
+        assert_eq!(
+            q(&jpeg(|x, y| 252 + ((x + y) % 3) as u8)).flaw(),
+            Some("too bright")
+        );
     }
 
     fn item(id: u64, fav: bool) -> Item {

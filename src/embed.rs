@@ -189,7 +189,7 @@ impl Space {
     pub fn rebuild(&self, idx: &crate::index::Index) -> Result<usize> {
         let mut items: HashMap<String, Vec<(u64, String)>> = HashMap::new();
         for (id, r) in idx.all()? {
-            if !r.missing {
+            if r.shown() {
                 items.entry(r.hash).or_default().push((id, r.label));
             }
         }

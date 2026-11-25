@@ -119,6 +119,7 @@ async fn every_page_has_the_app_menu() {
         "/map",
         "/hidden",
         "/duplicates",
+        "/recent",
     ] {
         let (s, page) = get(&app, uri, false).await;
         assert_eq!(s, StatusCode::OK, "{uri}");
@@ -882,4 +883,199 @@ async fn refusals_and_empty_answers_say_what_to_do_next() {
     // On a phone the info sheet scrolls.
     let (_, css) = get(&app, "/static/lichtbild.css", false).await;
     assert!(css.contains("max-height: 60vh; max-height: calc(58dvh - 20px); overflow-y: auto; overscroll-behavior: contain;"));
+}
+
+// Recently added lists what the scans brought in under the day it was
+// indexed, the newest day first; the menu and the home page lead there.
+// rivet: verifies REQ-WEB-029
+#[tokio::test]
+async fn recently_added_shows_the_newest_files_first() {
+    let e = env();
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/recent", false).await;
+    assert_eq!(s, StatusCode::OK);
+    let today = chrono::Utc::now();
+    let added = format!("Added {} ", today.format("%-d"));
+    assert!(page.contains(&added), "{page}");
+    assert!(page.contains(&today.format("%Y").to_string()));
+    let (_, home) = get(&app, "/", false).await;
+    assert!(home.contains("href=\"recent\""));
+
+    // A file found by a later scan comes first, though taken long ago.
+    let fx_root = e.state.roots.get("p1").unwrap().clone();
+    std::fs::write(fx_root.join("a/IMG_19990101_101010.jpg"), jpeg(24, 16, 42)).unwrap();
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    let new = e
+        .idx
+        .all()
+        .unwrap()
+        .into_iter()
+        .find(|(_, r)| r.rel == b"a/IMG_19990101_101010.jpg")
+        .map(|(id, r)| {
+            assert!(r.added > 0);
+            id
+        })
+        .unwrap();
+    let app = web::router(e.state.clone());
+    let (_, page) = get(&app, "/recent", false).await;
+    let labels = vec!["p1".to_string(), "p2".to_string()];
+    let newest = e.idx.recent(&labels, 1, |_, _| true).unwrap();
+    assert_eq!(newest[0].0.id, new, "the newest file first");
+    // Indexed today like the rest, it sits in today's group, by date taken.
+    let group = page.split("<section class=\"added\">").nth(1).unwrap();
+    assert!(group.contains(&format!("id=\"i{new}\"")), "{group}");
+    assert!(group.contains("1999"));
+}
+
+// A birthday is a real date with a year in the past, or month and day.
+// rivet: verifies REQ-FACE-007
+#[test]
+fn birthdays_are_real_dates() {
+    use lichtbild::web::parse_birthday as b;
+    assert_eq!(b(""), Some(None));
+    assert_eq!(b("03-04"), Some(Some("03-04".into())));
+    assert_eq!(b("02-29"), Some(Some("02-29".into())));
+    assert_eq!(b(" 1990-03-04 "), Some(Some("1990-03-04".into())));
+    for bad in [
+        "13-01",
+        "02-30",
+        "1990-02-30",
+        "3000-01-01",
+        "1700-01-01",
+        "0304",
+        "x",
+        "1990/03/04",
+    ] {
+        assert_eq!(b(bad), None, "{bad}");
+    }
+}
+
+// Photos that look blurry or nearly black are offered to put away, worst
+// first; sharp ones and hidden ones are not; nothing hides by itself.
+// rivet: verifies REQ-WEB-030
+#[tokio::test]
+async fn blurry_and_dark_photos_are_offered_for_review() {
+    let e = env();
+    let root = e.state.roots.get("p1").unwrap().clone();
+    let save = |name: &str, f: &dyn Fn(u32, u32) -> u8| {
+        image::GrayImage::from_fn(200, 150, |x, y| image::Luma([f(x, y)]))
+            .save(root.join(name))
+            .unwrap();
+    };
+    save("a/IMG_20230101_100000.jpg", &|_, _| 128);
+    save("a/IMG_20230102_100000.jpg", &|x, y| ((x + y) % 3) as u8);
+    save("a/IMG_20230103_100000.jpg", &|x, y| {
+        if (x / 6 + y / 6) % 2 == 0 {
+            40
+        } else {
+            210
+        }
+    });
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    let n = lichtbild::best::quality_pass(&cfg.data_dir, &e.idx).unwrap();
+    assert!(n >= 3, "{n}");
+    assert_eq!(
+        lichtbild::best::quality_pass(&cfg.data_dir, &e.idx).unwrap(),
+        0,
+        "once"
+    );
+    let id = |rel: &str| {
+        e.idx
+            .all()
+            .unwrap()
+            .into_iter()
+            .find(|(_, r)| r.rel == rel.as_bytes())
+            .unwrap()
+            .0
+    };
+    let (flat, dark, sharp) = (
+        id("a/IMG_20230101_100000.jpg"),
+        id("a/IMG_20230102_100000.jpg"),
+        id("a/IMG_20230103_100000.jpg"),
+    );
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/review", false).await;
+    assert_eq!(s, StatusCode::OK);
+    let section = |title: &str| {
+        page.split("<section class=\"added\">")
+            .find(|p| p.starts_with(&format!("<h2>{title} ")))
+            .unwrap_or_default()
+            .to_string()
+    };
+    assert!(
+        section("Blurry").contains(&format!("id=\"i{flat}\"")),
+        "{page}"
+    );
+    assert!(
+        section("Too dark").contains(&format!("id=\"i{dark}\"")),
+        "{page}"
+    );
+    assert!(!page.contains(&format!("id=\"i{sharp}\"")));
+    let (_, menu) = get(&app, "/", false).await;
+    assert!(menu.contains("href=\"review\""));
+
+    // A favourite is never offered; hidden for this person (the operator,
+    // without login): off the list.
+    e.idx.set_fav("operator", dark, true).unwrap();
+    let (_, page) = get(&app, "/review", false).await;
+    assert!(
+        !page.contains(&format!("id=\"i{dark}\"")),
+        "a favourite is kept"
+    );
+    e.idx.set_hidden("operator", flat, true).unwrap();
+    let (_, page) = get(&app, "/review", false).await;
+    assert!(!page.contains(&format!("id=\"i{flat}\"")));
+}
+
+// Many pictures close together in time are an event: listed on Events
+// and at the top of the days they fall on; a few pictures are not.
+// rivet: verifies REQ-TRIP-002
+#[tokio::test]
+async fn many_pictures_close_together_are_an_event() {
+    let e = env();
+    let root = e.state.roots.get("p1").unwrap().clone();
+    std::fs::create_dir_all(root.join("party")).unwrap();
+    for i in 0..14u8 {
+        let date = format!("2023:08:12 19:{:02}:00", i * 4);
+        std::fs::write(
+            root.join(format!("party/IMG_{i:02}.jpg")),
+            common::jpeg_with_exif(&date, "+02:00", None, 100 + i),
+        )
+        .unwrap();
+    }
+    // One picture in the other library on the same day.
+    std::fs::write(
+        e.state.roots.get("p2").unwrap().join("IMG_other.jpg"),
+        common::jpeg_with_exif("2023:08:12 12:00:00", "+02:00", None, 99),
+    )
+    .unwrap();
+    let cfg = config(&e._fx, &e._fx.data);
+    scan::run(&cfg, &e.idx, &Options::default()).unwrap();
+    e.state.dups.rebuild(&e.idx).unwrap();
+    let app = web::router(e.state.clone());
+    let (s, page) = get(&app, "/events", false).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(page.contains("<i>14</i>"), "{page}");
+    assert!(
+        page.contains("days/all?from=2023-08-12&amp;to=2023-08-12"),
+        "{page}"
+    );
+    assert!(page.contains("19:00–19:52"), "{page}");
+    // The fixture's few other pictures make no event.
+    assert_eq!(page.matches("class=\"thing\"").count(), 1, "{page}");
+    let (_, days) = get(&app, "/days/all?from=2023-08-11&to=2023-08-13", false).await;
+    assert!(days.contains("Events on these days"), "{days}");
+    // Another library's days do not show this library's event.
+    let (_, other) = get(&app, "/days/p2?from=2023-08-11&to=2023-08-13", false).await;
+    assert!(other.contains("<h1>"), "{other}");
+    assert!(!other.contains("Events on these days"), "{other}");
+    let (_, one) = get(&app, "/days/all?from=2023-08-12&to=2023-08-12", false).await;
+    assert!(
+        !one.contains("Events on these days"),
+        "a single day is its own event"
+    );
+    let (_, home) = get(&app, "/", false).await;
+    assert!(home.contains("href=\"events\""));
 }

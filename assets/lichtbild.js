@@ -1336,3 +1336,32 @@ document.addEventListener("click", function (e) {
     try { window.sessionStorage.setItem(KEY, window.location.pathname); } catch (e) { /* ignore */ }
   });
 })();
+
+// Live Photos (REQ-MEDIA-005): the clip plays once in place of the photo on
+// a tap, click or Enter on LIVE, or while a mouse rests on it.
+(function () {
+  var btn = document.querySelector(".viewer button.livebtn");
+  if (!btn) return;
+  var stage = btn.parentNode;
+  var img = stage.querySelector("img.photo");
+  var clip = stage.querySelector("video.liveclip");
+  if (!img || !clip) return;
+  function stop() {
+    clip.pause();
+    clip.hidden = true;
+    img.hidden = false;
+    btn.classList.remove("on");
+  }
+  function play() {
+    img.hidden = true;
+    clip.hidden = false;
+    btn.classList.add("on");
+    clip.currentTime = 0;
+    var p = clip.play();
+    if (p && p.catch) p.catch(stop);
+  }
+  clip.addEventListener("ended", stop);
+  btn.addEventListener("click", function () { if (clip.hidden) play(); else stop(); });
+  btn.addEventListener("mouseenter", function () { if (matchMedia("(hover: hover)").matches) play(); });
+  btn.addEventListener("mouseleave", function () { if (matchMedia("(hover: hover)").matches) stop(); });
+})();

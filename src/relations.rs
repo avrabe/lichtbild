@@ -9,8 +9,8 @@ use std::collections::HashMap;
 pub type Row = ((u64, u64, u8), u8);
 
 /// A kind of relation, stored as its number (never renumber; new kinds go
-/// at the end). Directed kinds (parent, grandparent, aunt or uncle,
-/// godparent, teacher) are stored with the elder first; the others read
+/// at the end). Directed kinds (parent, step-parent, grandparent, aunt or
+/// uncle, godparent, teacher) are stored with the elder first; the others read
 /// the same from both sides and are stored with the smaller id first.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(u8)]
@@ -32,6 +32,8 @@ pub enum Kind {
     Teacher = 14,
     Teammate = 15,
     Acquaintance = 16,
+    StepParent = 17,
+    HalfSibling = 18,
 }
 
 /// Every kind: (kind, form value and label from the first side, from the
@@ -45,7 +47,7 @@ type Def = (
     u8,
 );
 
-const DEFS: [Def; 17] = [
+const DEFS: [Def; 19] = [
     (Kind::Partner, ("partner", "partner of"), None, 3),
     (
         Kind::Parent,
@@ -53,7 +55,19 @@ const DEFS: [Def; 17] = [
         Some(("child", "child of")),
         3,
     ),
+    (
+        Kind::StepParent,
+        ("stepparent", "step-parent of"),
+        Some(("stepchild", "step-child of")),
+        3,
+    ),
     (Kind::Sibling, ("sibling", "sibling of"), None, 3),
+    (
+        Kind::HalfSibling,
+        ("halfsibling", "half-sibling of"),
+        None,
+        3,
+    ),
     (
         Kind::Grandparent,
         ("grandparent", "grandparent of"),
@@ -230,6 +244,167 @@ pub fn closeness(rels: &[Row], known: impl Fn(u64) -> bool) -> HashMap<u64, u8> 
     out
 }
 
+/// A relation the stored ones suggest but nobody said yet (REQ-FACE-008):
+/// `other` stands to the person through `via`; the choices are form values
+/// with their labels, read from the person's side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Suggestion {
+    pub other: u64,
+    pub via: u64,
+    /// "partner of your parent", read with the names filled in by the page.
+    pub why: &'static str,
+    pub choices: Vec<(&'static str, &'static str)>,
+}
+
+/// One step from `p`: (other, what the other is to `p`).
+fn steps(rels: &[Row], p: u64) -> Vec<(u64, Kind, bool)> {
+    rels.iter()
+        .filter_map(|&((a, b, k), _)| {
+            let kind = Kind::from_u8(k)?;
+            if a == p {
+                Some((b, kind, true))
+            } else if b == p {
+                Some((a, kind, false))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+/// The relations of `p` that follow from the stored ones, among people in
+/// `known`, for people `p` has no relation with yet: a parent's partner
+/// (parent or step-parent), a parent's parent (grandparent), a parent's
+/// child (sibling or half-sibling), a partner's parent (in-law) and a
+/// partner's child (child or step-child).
+pub fn suggest(rels: &[Row], p: u64, known: impl Fn(u64) -> bool) -> Vec<Suggestion> {
+    let mine = steps(rels, p);
+    let related: std::collections::HashSet<u64> = mine.iter().map(|s| s.0).collect();
+    // `x` is the parent of `p`: stored (x, p, Parent) or (x, p, StepParent).
+    // Only through people in `known`: a suggestion names the one it goes
+    // through, and a viewer sees no one they do not know.
+    let parents: Vec<u64> = mine
+        .iter()
+        .filter(|(o, k, first)| matches!(k, Kind::Parent | Kind::StepParent) && !first && known(*o))
+        .map(|s| s.0)
+        .collect();
+    let partners: Vec<u64> = mine
+        .iter()
+        .filter(|(o, k, _)| *k == Kind::Partner && known(*o))
+        .map(|s| s.0)
+        .collect();
+    let mut out: Vec<Suggestion> = Vec::new();
+    let mut add = |other: u64, via: u64, why, choices: Vec<(&'static str, &'static str)>| {
+        if other != p
+            && known(other)
+            && !related.contains(&other)
+            && !out.iter().any(|s| s.other == other)
+        {
+            out.push(Suggestion {
+                other,
+                via,
+                why,
+                choices,
+            });
+        }
+    };
+    for &par in &parents {
+        for (o, k, first) in steps(rels, par) {
+            match (k, first) {
+                (Kind::Partner | Kind::ExPartner, _) => add(
+                    o,
+                    par,
+                    "partner of the parent",
+                    vec![("child", "child of"), ("stepchild", "step-child of")],
+                ),
+                (Kind::Parent, false) => add(
+                    o,
+                    par,
+                    "parent of the parent",
+                    vec![("grandchild", "grandchild of")],
+                ),
+                (Kind::Parent | Kind::StepParent, true) => add(
+                    o,
+                    par,
+                    "child of the parent",
+                    vec![
+                        ("sibling", "sibling of"),
+                        ("halfsibling", "half-sibling of"),
+                    ],
+                ),
+                _ => {}
+            }
+        }
+    }
+    for &par in &partners {
+        for (o, k, first) in steps(rels, par) {
+            match (k, first) {
+                (Kind::Parent, false) => add(
+                    o,
+                    par,
+                    "parent of the partner",
+                    vec![("inlaw", "in-law of")],
+                ),
+                (Kind::Parent, true) => add(
+                    o,
+                    par,
+                    "child of the partner",
+                    vec![("parent", "parent of"), ("stepparent", "step-parent of")],
+                ),
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// A family tree around `p` (REQ-FACE-008): each person reached through
+/// parent, step-parent, grandparent, partner, sibling and half-sibling
+/// relations, with their generation (parents -1, children +1) and how they
+/// were reached ("partner's parent"), at most `depth` steps away.
+pub fn family(
+    rels: &[Row],
+    p: u64,
+    depth: usize,
+    known: impl Fn(u64) -> bool,
+) -> Vec<(u64, i32, String)> {
+    let mut out: Vec<(u64, i32, String)> = vec![(p, 0, String::new())];
+    let mut seen = std::collections::HashSet::from([p]);
+    let mut frontier = vec![(p, 0i32, String::new())];
+    for _ in 0..depth {
+        let mut next = Vec::new();
+        for (x, g, path) in &frontier {
+            for (o, k, first) in steps(rels, *x) {
+                let (dg, word) = match (k, first) {
+                    (Kind::Parent, true) => (1, "child"),
+                    (Kind::Parent, false) => (-1, "parent"),
+                    (Kind::StepParent, true) => (1, "step-child"),
+                    (Kind::StepParent, false) => (-1, "step-parent"),
+                    (Kind::Grandparent, true) => (2, "grandchild"),
+                    (Kind::Grandparent, false) => (-2, "grandparent"),
+                    (Kind::Partner, _) => (0, "partner"),
+                    (Kind::ExPartner, _) => (0, "former partner"),
+                    (Kind::Sibling, _) => (0, "sibling"),
+                    (Kind::HalfSibling, _) => (0, "half-sibling"),
+                    _ => continue,
+                };
+                if !known(o) || !seen.insert(o) {
+                    continue;
+                }
+                let label = if path.is_empty() {
+                    word.to_string()
+                } else {
+                    format!("{path}’s {word}")
+                };
+                out.push((o, g + dg, label.clone()));
+                next.push((o, g + dg, label));
+            }
+        }
+        frontier = next;
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,9 +424,9 @@ mod tests {
         assert_eq!(Kind::Teacher.label(false), "student of");
         // Every kind has a number of its own and a form value on each side.
         let kinds: Vec<u8> = (0..=255).filter(|v| Kind::from_u8(*v).is_some()).collect();
-        assert_eq!(kinds, (0..=16).collect::<Vec<u8>>());
+        assert_eq!(kinds, (0..=18).collect::<Vec<u8>>());
         let values: Vec<&str> = choices().iter().map(|c| c.0).collect();
-        assert_eq!(values.len(), 22);
+        assert_eq!(values.len(), 25);
         assert!(values.iter().all(|v| parse(v).is_some()));
     }
 
@@ -277,5 +452,48 @@ mod tests {
         assert_eq!(c.get(&1), Some(&3));
         assert_eq!(c.get(&2), Some(&1));
         assert_eq!(c.get(&9), None);
+    }
+
+    #[test]
+    fn a_parents_partner_is_offered_as_parent_or_step_parent() {
+        // 1 me, 2 my wife, 3 her dad, 4 his wife, 5 her brother, 6 dad's dad.
+        let rels = vec![
+            ((1, 2, Kind::Partner as u8), 3),
+            ((3, 2, Kind::Parent as u8), 3),
+            ((3, 4, Kind::Partner as u8), 3),
+            ((3, 5, Kind::Parent as u8), 3),
+            ((6, 3, Kind::Parent as u8), 3),
+        ];
+        let s = suggest(&rels, 2, |_| true);
+        let got: Vec<(u64, &str, Vec<&str>)> = s
+            .iter()
+            .map(|x| (x.other, x.why, x.choices.iter().map(|c| c.0).collect()))
+            .collect();
+        assert!(
+            got.contains(&(4, "partner of the parent", vec!["child", "stepchild"])),
+            "{got:?}"
+        );
+        assert!(got.contains(&(5, "child of the parent", vec!["sibling", "halfsibling"])));
+        assert!(got.contains(&(6, "parent of the parent", vec!["grandchild"])));
+        // Me: my wife's dad is an in-law.
+        let mine = suggest(&rels, 1, |_| true);
+        assert_eq!(mine[0].other, 3);
+        assert_eq!(mine[0].choices[0].0, "inlaw");
+        // Once she says, it is no longer offered; unknown people never are.
+        let mut said = rels.clone();
+        said.push(((4, 2, Kind::StepParent as u8), 3));
+        assert!(suggest(&said, 2, |_| true).iter().all(|x| x.other != 4));
+        assert!(suggest(&rels, 2, |o| o != 4).iter().all(|x| x.other != 4));
+        // Nothing goes through someone unknown: without her dad, nothing
+        // that only he links is offered.
+        assert!(suggest(&rels, 2, |o| o != 3).is_empty());
+        // The tree from me: wife beside me, her dad above, his wife beside him.
+        let tree = family(&said, 1, 4, |_| true);
+        let at = |id: u64| tree.iter().find(|t| t.0 == id).map(|t| (t.1, t.2.as_str()));
+        assert_eq!(at(1), Some((0, "")));
+        assert_eq!(at(2), Some((0, "partner")));
+        assert_eq!(at(3), Some((-1, "partner’s parent")));
+        assert_eq!(at(4).map(|a| a.0), Some(-1));
+        assert_eq!(at(6), Some((-2, "partner’s parent’s parent")));
     }
 }

@@ -182,6 +182,8 @@ pub fn router(state: AppState) -> Router {
         .route("/fav-many", axum::routing::post(fav_many))
         .route("/unfav-many", axum::routing::post(unfav_many))
         .route("/favourites", get(favourites_page))
+        .route("/recent", get(recent_page))
+        .route("/review", get(review_page))
         .route("/albums", get(albums_page).post(album_create))
         .route("/album/{id}", get(album_page))
         .route("/album-add", axum::routing::post(album_add))
@@ -200,6 +202,15 @@ pub fn router(state: AppState) -> Router {
         .route("/person/{id}/delete", axum::routing::post(person_delete))
         .route("/person/{id}/relate", axum::routing::post(person_relate))
         .route("/person/{id}/hide", axum::routing::post(person_hide))
+        .route(
+            "/person/{id}/birthday",
+            axum::routing::post(person_birthday),
+        )
+        .route(
+            "/person/{id}/portrait",
+            axum::routing::post(person_portrait),
+        )
+        .route("/person/{id}/family", get(family_page))
         .route("/people/hide", axum::routing::post(people_hide))
         .route(
             "/person/{id}/unrelate",
@@ -217,6 +228,7 @@ pub fn router(state: AppState) -> Router {
         .route("/fix/text", axum::routing::post(fix_text))
         .route("/fix/off", axum::routing::post(fix_off))
         .route("/trips", get(trips_page))
+        .route("/events", get(events_page))
         .route("/countries", get(countries_page))
         .route("/duplicates", get(duplicates_page))
         .route("/duplicates.csv", get(duplicates_csv))
@@ -685,14 +697,17 @@ fn app_menu(st: &AppState) -> String {
          <li><a href=\"./\"><b>Home</b><span>Timelines, on this day</span></a></li>\
          <li><a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a></li>\
          <li><a href=\"trips\"><b>Trips</b><span>Days away from home, found by place</span></a></li>\
+         <li><a href=\"events\"><b>Events</b><span>Parties and days out, found by time</span></a></li>\
          <li><a href=\"countries\"><b>Countries</b><span>Where you have been</span></a></li>\
          <li><a href=\"people\"><b>People</b><span>Who is in your photos</span></a></li>\
          <li><a href=\"things\"><b>Things</b><span>Cats, bikes, cakes… in your photos</span></a></li>\
          <li><a href=\"words\"><b>Words</b><span>What was said and written</span></a></li>\
+         <li><a href=\"recent\"><b>Recently added</b><span>What the last scans brought in</span></a></li>\
          <li class=\"sep\"><a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a></li>\
          <li><a href=\"albums\"><b>Albums</b><span>Your own collections</span></a></li>\
          <li><a href=\"hidden\"><b>Hidden</b><span>What you chose not to see</span></a></li>\
          <li><a href=\"duplicates\"><b>Duplicate files</b><span>Identical files to clean up</span></a></li>\
+         <li><a href=\"review\"><b>Blurry or badly lit</b><span>Shots you may want to put away</span></a></li>\
          <li><a href=\"status\"><b>Status</b><span>Scan, transcripts, version</span></a></li>\
          <li><button type=\"button\" class=\"theme\" data-now=\"auto\"><b>Day or night</b><span>Auto follows this device</span></button></li>\
          <li><button type=\"button\" class=\"keyhelp\"><b>Keys and gestures</b><span>Press ? on any page</span></button></li>\
@@ -851,8 +866,17 @@ pub fn scope(viewer: &Viewer, who: &str) -> Option<Vec<String>> {
     }
 }
 
-/// The home page's cards and its "on this day" pictures.
-type Home = (Vec<Card>, Vec<(u64, index::Record)>);
+/// The home page's cards, its "on this day" pictures and today's birthdays.
+type Home = (Vec<Card>, Vec<(u64, index::Record)>, Vec<Birthday>);
+
+/// A person whose birthday is today, with some of their photos (REQ-FACE-007).
+struct Birthday {
+    id: u64,
+    name: String,
+    /// The age they turn, when the year is known.
+    turns: Option<i32>,
+    photos: Vec<index::Item>,
+}
 
 /// One card on the home page: a library (or the merged view), its newest
 /// pictures, how many it holds and which years.
@@ -871,6 +895,21 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     let labels = viewer.labels.clone();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
     let md_today = today.get(5..10).unwrap_or("").to_string();
+    let people = st.people.clone();
+    let v2 = viewer.clone();
+    // A 29 February birthday shows on 28 February in other years.
+    let leap = chrono::NaiveDate::from_ymd_opt(
+        chrono::Local::now()
+            .format("%Y")
+            .to_string()
+            .parse()
+            .unwrap_or(2000),
+        2,
+        29,
+    )
+    .is_some();
+    let md = md_today.clone();
+    let also = (md_today == "02-28" && !leap).then(|| "02-29".to_string());
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Home> {
         let counts = idx.counts()?;
         let hidden = idx.hidden(&me)?;
@@ -916,10 +955,45 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
             .filter(|(id, r)| r.thumb == "ok" && dups.shown(*id, &labels, &hidden).shown)
             .take(14)
             .collect();
-        Ok((cards, otd))
+        // Birthdays today among the people the viewer has photos of.
+        let mut birthdays = Vec::new();
+        let due: Vec<(u64, index::Person)> = idx
+            .people()?
+            .into_iter()
+            .filter(|(_, p)| {
+                !p.hidden
+                    && !p.name.is_empty()
+                    && p.birthday.as_deref().is_some_and(|b| {
+                        b.ends_with(&md) || also.as_deref().is_some_and(|a| b.ends_with(a))
+                    })
+            })
+            .collect();
+        if !due.is_empty() {
+            let seen = seen_people(&idx, &people, &v2)?;
+            let year: i32 = today.get(..4).and_then(|y| y.parse().ok()).unwrap_or(0);
+            for (id, p) in due.into_iter().filter(|(id, _)| seen.contains(id)) {
+                let (mut photos, _) =
+                    photos_of(&idx, &people, &labels, &me, crate::people::Who::Person(id))?;
+                photos.retain(|it| it.thumb_ok);
+                photos.truncate(12);
+                let turns = p
+                    .birthday
+                    .as_deref()
+                    .filter(|b| b.len() == 10)
+                    .and_then(|b| b.get(..4)?.parse::<i32>().ok())
+                    .map(|born| year - born);
+                birthdays.push(Birthday {
+                    id,
+                    name: p.name,
+                    turns,
+                    photos,
+                });
+            }
+        }
+        Ok((cards, otd, birthdays))
     })
     .await;
-    let (cards, otd) = match res {
+    let (cards, otd, birthdays) = match res {
         Ok(Ok(x)) => x,
         Ok(Err(e)) => return internal(e),
         Err(e) => return internal(e),
@@ -954,6 +1028,30 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
         );
     }
     body += "</section>";
+    for b in &birthdays {
+        let who = default_who(&viewer);
+        let turns = b
+            .turns
+            .filter(|t| *t > 0)
+            .map(|t| format!(" <span class=\"dim\">turns {t}</span>"))
+            .unwrap_or_default();
+        body += &format!(
+            "<section class=\"otd bday\"><h2>🎂 <a href=\"person/{id}\">{name}</a>’s birthday{turns}</h2><div class=\"strip\">",
+            id = b.id,
+            name = esc(&b.name),
+        );
+        for it in &b.photos {
+            body += &format!(
+                "<a class=\"item\" href=\"v/{who}/{id}\" title=\"{t}\">{img}<span class=\"year\">{y}</span></a>",
+                who = esc(&who),
+                id = it.id,
+                t = esc(&it.taken_local.replace('T', " ")),
+                img = thumb(it.id, &it.hash),
+                y = esc(it.taken_local.get(..4).unwrap_or("")),
+            );
+        }
+        body += "</div></section>";
+    }
     if !otd.is_empty() {
         let who = if viewer.labels.len() > 1 {
             "all".to_string()
@@ -978,10 +1076,12 @@ async fn home(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) 
     }
     body += "<nav class=\"tiles\">\
              <a href=\"favourites\"><b>Favourites</b><span>The ones you love</span></a>\
+             <a href=\"recent\"><b>Recently added</b><span>What the last scans brought in</span></a>\
              <a href=\"albums\"><b>Albums</b><span>Your own collections</span></a>\
              <a href=\"people\"><b>People</b><span>Who is in your photos</span></a>\
              <a href=\"map\"><b>Map</b><span>Where pictures were taken</span></a>\
              <a href=\"trips\"><b>Trips</b><span>Days away from home</span></a>\
+             <a href=\"events\"><b>Events</b><span>Parties and days out</span></a>\
              <a href=\"countries\"><b>Countries</b><span>Where you have been</span></a>\
              <a href=\"things\"><b>Things</b><span>What is in your photos</span></a>\
              <a href=\"words\"><b>Words</b><span>What was said and written</span></a>\
@@ -1240,6 +1340,11 @@ pub fn render_items(
             .video_ms
             .map(|ms| format!("<span class=\"dur\">{}</span>", duration(ms)))
             .unwrap_or_default();
+        let dur = if it.live {
+            format!("{dur}<span class=\"livetag\" title=\"Live Photo\">LIVE</span>")
+        } else {
+            dur
+        };
         let dur = if it.copies > 1 {
             format!(
                 "{dur}<span class=\"copies\" title=\"{n} copies\">×{n}</span>",
@@ -1948,10 +2053,19 @@ pub fn photo_html(id: u64, rec: &index::Record) -> String {
              <p><a href=\"original/{id}\" download>Download the original</a></p></div>"
         );
     }
-    format!(
+    let img = format!(
         "<img class=\"photo\" src=\"{}\" alt=\"\">",
         esc(&photo_src(id, rec))
-    )
+    );
+    match rec.live {
+        // A Live Photo (REQ-MEDIA-005): its clip plays over the photo while
+        // the LIVE button is held or hovered (assets/lichtbild.js).
+        Some(clip) => format!(
+            "{img}<video class=\"liveclip\" muted playsinline preload=\"none\" src=\"original/{clip}\" hidden></video>\
+             <button type=\"button\" class=\"livebtn\" title=\"Live Photo: hold to play\" aria-label=\"Play the Live Photo\">LIVE</button>"
+        ),
+        None => img,
+    }
 }
 
 /// What the viewer shows for an item: the JPEG preview when the original is
@@ -3690,6 +3804,172 @@ async fn favourites_page(
     page_for(&st, "lichtbild favourites", &body).into_response()
 }
 
+/// How many items Recently added shows.
+const RECENT_MAX: usize = 500;
+
+/// The day a file was first indexed, from seconds since 1970 (UTC).
+fn added_day(secs: u64) -> Option<String> {
+    let t = chrono::DateTime::from_timestamp(i64::try_from(secs).ok()?, 0)?;
+    (secs > 0).then(|| t.format("%Y-%m-%dT00:00").to_string())
+}
+
+/// GET /recent: what the last scans brought in, newest first, in groups
+/// by the day they were indexed (REQ-WEB-029); nothing hidden, one copy.
+async fn recent_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let who = if viewer.labels.len() == 1 {
+        viewer.labels[0].clone()
+    } else {
+        "all".to_string()
+    };
+    let Some(labels) = scope(&viewer, &who) else {
+        return (StatusCode::NOT_FOUND, "no such timeline").into_response();
+    };
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<(index::Item, u64)>> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let mut items = idx.recent(&labels, RECENT_MAX, |id, _| {
+            !hidden.contains(&id) && dups.shown(id, &labels, &hidden).shown
+        })?;
+        for (it, _) in &mut items {
+            it.copies = dups.shown(it.id, &labels, &hidden).copies;
+            it.fav = favs.contains(&it.id);
+        }
+        Ok(items)
+    })
+    .await;
+    let items = match res {
+        Ok(Ok(i)) => i,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from("<div class=\"thead\"><h1>Recently added</h1></div>");
+    if items.is_empty() {
+        body += "<p class=\"dim\">Nothing yet: the first scan is still running, or the libraries are empty.</p>";
+        return page_for(&st, "lichtbild recently added", &body).into_response();
+    }
+    // Groups of one indexing day, newest first; within one, by date taken.
+    let mut groups: Vec<(Option<String>, Vec<index::Item>)> = Vec::new();
+    for (it, added) in items {
+        let day = added_day(added);
+        match groups.last_mut() {
+            Some((d, g)) if *d == day => g.push(it),
+            _ => groups.push((day, vec![it])),
+        }
+    }
+    for (day, mut g) in groups {
+        g.sort_by(|a, b| (&b.taken_local, b.id).cmp(&(&a.taken_local, a.id)));
+        let title = match &day {
+            Some(d) => format!("Added {}", long_date(d).trim_end_matches(", 00:00")),
+            None => "Indexed before lichtbild noted the day".to_string(),
+        };
+        let ones = vec![1; g.len()];
+        body += &format!(
+            "<section class=\"added\"><h2>{} <span class=\"dim\">{}</span></h2><div class=\"timeline\">\n{}</div></section>\n",
+            esc(&title),
+            g.len(),
+            render_items(&who, &g, &ones, None, false, ""),
+        );
+    }
+    page_for(&st, "lichtbild recently added", &body).into_response()
+}
+
+/// How many photos each group of the review page shows.
+const REVIEW_MAX: usize = 300;
+
+/// GET /review: photos that look blurry, too dark or too bright, worst
+/// first, to hide with Select (REQ-WEB-030). Nothing is hidden by itself.
+async fn review_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let who = default_who(&viewer);
+    let labels = viewer.labels.clone();
+    let idx = st.index.clone();
+    let dups = st.dups.clone();
+    let me = person(&viewer);
+    type Groups = Vec<(&'static str, Vec<index::Item>, usize)>;
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<(Groups, usize)> {
+        let hidden = idx.hidden(&me)?;
+        let favs = idx.favs(&me)?;
+        let qs = idx.qualities()?;
+        let mut by: HashMap<&'static str, Vec<(f32, u64, index::Record)>> = HashMap::new();
+        let mut measured = 0;
+        for (id, r) in idx.all()? {
+            if !r.shown()
+                || r.video.is_some()
+                || !labels.contains(&r.label)
+                || hidden.contains(&id)
+                || favs.contains(&id)
+                || !dups.shown(id, &labels, &hidden).shown
+            {
+                continue;
+            }
+            let Some(q) = qs.get(&r.hash) else { continue };
+            measured += 1;
+            if let Some(f) = q.flaw() {
+                by.entry(f).or_default().push((q.score(), id, r));
+            }
+        }
+        let mut out = Vec::new();
+        for f in ["blurry", "too dark", "too bright"] {
+            let Some(mut v) = by.remove(f) else { continue };
+            v.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            let total = v.len();
+            let items = v
+                .into_iter()
+                .take(REVIEW_MAX)
+                .map(|(_, id, r)| index::Item {
+                    id,
+                    label: r.label,
+                    taken_local: r.taken_local,
+                    date_source: r.date_source,
+                    thumb_ok: r.thumb == "ok",
+                    hash: r.hash,
+                    width: r.width,
+                    height: r.height,
+                    live: r.live.is_some(),
+                    ..index::Item::default()
+                })
+                .collect();
+            out.push((f, items, total));
+        }
+        Ok((out, measured))
+    })
+    .await;
+    let (groups, measured) = match res {
+        Ok(Ok(x)) => x,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let mut body = String::from(
+        "<div class=\"thead\"><h1>Blurry or badly lit</h1><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\
+         <p class=\"dim\">Photos that look shaken or out of focus, or nearly black or white, the worst first. Nothing is hidden by itself: choose with Select and hide them for you. Favourites are never listed.</p>",
+    );
+    if groups.is_empty() {
+        body += &format!(
+            "<p class=\"dim\">None found among {measured} measured photos. Photos are measured after each scan.</p>"
+        );
+    }
+    for (f, items, total) in &groups {
+        let ones = vec![1; items.len()];
+        let n = if *total > items.len() {
+            format!("worst {} of {total}", items.len())
+        } else {
+            total.to_string()
+        };
+        body += &format!(
+            "<section class=\"added\"><h2>{} <span class=\"dim\">{n}</span></h2><div class=\"timeline\">\n{}</div></section>\n",
+            match *f {
+                "blurry" => "Blurry",
+                "too dark" => "Too dark",
+                _ => "Too bright",
+            },
+            render_items(&who, items, &ones, None, false, ""),
+        );
+    }
+    page_for(&st, "lichtbild review", &body).into_response()
+}
+
 /// POST /unhide/{id}: show the item again.
 async fn unhide(
     State(st): State<AppState>,
@@ -4551,11 +4831,171 @@ pub(crate) fn trips_of(
         .all()?
         .into_iter()
         .filter(|(id, r)| {
-            !r.missing && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
+            r.shown() && labels.contains(&r.label) && dups.shown(*id, labels, &hidden).shown
         })
         .collect();
     let pos = positions.get(idx)?;
     Ok((crate::trips::find(&items, &pos, places), items))
+}
+
+/// An event with what its tile shows: the cover's hash and who is in it.
+pub(crate) struct EventTile {
+    ev: crate::events::Event,
+    hash: String,
+    people: Vec<String>,
+}
+
+/// The viewer's events (REQ-TRIP-002) between two days (inclusive) or all,
+/// newest first, with the named people most often in each (at most 3).
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn events_of(
+    idx: &index::Index,
+    dups: &crate::dups::Dups,
+    people: &crate::people::People,
+    viewer: &Viewer,
+    positions: &crate::place::Cache,
+    places: Option<&crate::places::Places>,
+    labels: &[String],
+    within: Option<(&str, &str)>,
+) -> anyhow::Result<Vec<EventTile>> {
+    let me = person(viewer);
+    let hidden = idx.hidden(&me)?;
+    let items: Vec<(u64, index::Record)> = idx
+        .all()?
+        .into_iter()
+        .filter(|(id, r)| {
+            r.shown()
+                && labels.contains(&r.label)
+                && within.is_none_or(|(a, b)| {
+                    let d = r.taken_local.get(..10).unwrap_or("");
+                    d >= a && d <= b
+                })
+                && dups.shown(*id, labels, &hidden).shown
+        })
+        .collect();
+    let pos = positions.get(idx)?;
+    let events = crate::events::find(&items, &pos, places);
+    if events.is_empty() {
+        return Ok(Vec::new());
+    }
+    let hashes: HashMap<u64, String> = items.into_iter().map(|(id, r)| (id, r.hash)).collect();
+    let seen = seen_people(idx, people, viewer)?;
+    let named: HashMap<u64, String> = idx
+        .people()?
+        .into_iter()
+        .filter(|(id, p)| !p.hidden && !p.name.is_empty() && seen.contains(id))
+        .map(|(id, p)| (id, p.name))
+        .collect();
+    Ok(events
+        .into_iter()
+        .map(|ev| {
+            let mut count: HashMap<u64, usize> = HashMap::new();
+            for id in &ev.ids {
+                let Some(h) = hashes.get(id) else { continue };
+                let mut here = std::collections::HashSet::new();
+                for f in people.in_photo(h) {
+                    if let crate::people::Who::Person(p) = f.who {
+                        if named.contains_key(&p) && here.insert(p) {
+                            *count.entry(p).or_default() += 1;
+                        }
+                    }
+                }
+            }
+            let mut top: Vec<(u64, usize)> = count.into_iter().collect();
+            top.sort_by(|a, b| b.1.cmp(&a.1).then(named[&a.0].cmp(&named[&b.0])));
+            EventTile {
+                hash: hashes.get(&ev.cover).cloned().unwrap_or_default(),
+                people: top
+                    .into_iter()
+                    .take(3)
+                    .map(|(p, _)| named[&p].clone())
+                    .collect(),
+                ev,
+            }
+        })
+        .collect())
+}
+
+/// Tiles for events, each opening its day or days at its first picture.
+fn event_tiles(who: &str, tiles: &[EventTile]) -> String {
+    let mut s = String::from("<section class=\"thingtiles trips events\">");
+    for t in tiles {
+        let (a, b) = (t.ev.start.date(), t.ev.end.date());
+        let title = t.ev.place.clone().unwrap_or_else(|| "Event".to_string());
+        let when = if a == b {
+            format!(
+                "{}, {}–{}",
+                day_span(a, b),
+                t.ev.start.format("%H:%M"),
+                t.ev.end.format("%H:%M")
+            )
+        } else {
+            day_span(a, b)
+        };
+        let with = if t.people.is_empty() {
+            String::new()
+        } else {
+            format!("<small>with {}</small>", esc(&t.people.join(", ")))
+        };
+        s += &format!(
+            "<a class=\"thing\" href=\"days/{w}?from={a}&amp;to={b}&amp;title={tq}#i{first}\"><img src=\"thumb/{id}?h={h}\" loading=\"lazy\" alt=\"\"><span><b>{title}</b><i>{n}</i></span><small>{when}</small>{with}</a>",
+            w = esc(who),
+            a = a.format("%Y-%m-%d"),
+            b = b.format("%Y-%m-%d"),
+            tq = urlencode(&title),
+            first = t.ev.ids[0],
+            id = t.ev.cover,
+            h = esc(t.hash.get(..12).unwrap_or("")),
+            title = esc(&title),
+            n = t.ev.ids.len(),
+            when = esc(&when),
+        );
+    }
+    s + "</section>"
+}
+
+/// GET /events: many pictures close together in time, newest first
+/// (REQ-TRIP-002).
+async fn events_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
+    let (idx, dups, people, v2) = (
+        st.index.clone(),
+        st.dups.clone(),
+        st.people.clone(),
+        viewer.clone(),
+    );
+    let (pc, places) = (st.positions.clone(), st.places.clone());
+    let res = tokio::task::spawn_blocking(move || {
+        events_of(
+            &idx,
+            &dups,
+            &people,
+            &v2,
+            &pc,
+            places.as_deref(),
+            &v2.labels,
+            None,
+        )
+    })
+    .await;
+    let mut tiles = match res {
+        Ok(Ok(t)) => t,
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let total = tiles.len();
+    tiles.truncate(SET_MAX);
+    let mut body = format!(
+        "<div class=\"thead\"><h1>Events</h1><span class=\"dim\">{}</span></div><p class=\"dim\">At least {} pictures, none more than {} minutes after the one before: a party, a wedding, a day out. Named by the nearest town and the people most often in them.</p>",
+        set_count(total),
+        crate::events::MIN_ITEMS,
+        crate::events::GAP_MIN,
+    );
+    if tiles.is_empty() {
+        body += "<p>No events found yet.</p>";
+    } else {
+        body += &event_tiles(&default_who(&viewer), &tiles);
+    }
+    page_for(&st, "lichtbild events", &body).into_response()
 }
 
 async fn trips_page(State(st): State<AppState>, Extension(viewer): Extension<Viewer>) -> Response {
@@ -4665,7 +5105,7 @@ async fn countries_page(
         let pos = pc.get(&idx)?;
         let mut by: HashMap<String, Country> = HashMap::new();
         for (id, r) in idx.all()? {
-            if r.missing || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
+            if !r.shown() || !labels.contains(&r.label) || !dups.shown(id, &labels, &hidden).shown {
                 continue;
             }
             let Some(p) = pos.get(&id) else { continue };
@@ -5229,11 +5669,46 @@ async fn days_page(
     let head = esc(&dq.heading());
     let w = esc(&who);
     let nav = day_nav(&w, &dq, before.as_deref(), after.as_deref());
+    // A run of days (a trip): its events first (REQ-TRIP-002).
+    let events = match (&dq.md, dq.from.clone(), dq.to.clone()) {
+        (None, Some(f), Some(t)) if f != t && !items.is_empty() => {
+            let (idx, dups, people, v2) = (
+                st.index.clone(),
+                st.dups.clone(),
+                st.people.clone(),
+                viewer.clone(),
+            );
+            let (pc, places) = (st.positions.clone(), st.places.clone());
+            let scoped = scope(&viewer, &who).unwrap_or_default();
+            let tiles = tokio::task::spawn_blocking(move || {
+                events_of(
+                    &idx,
+                    &dups,
+                    &people,
+                    &v2,
+                    &pc,
+                    places.as_deref(),
+                    &scoped,
+                    Some((&f, &t)),
+                )
+            })
+            .await;
+            match tiles {
+                Ok(Ok(t)) if !t.is_empty() => format!(
+                    "<h2 class=\"evhead\">Events on these days</h2>{}",
+                    event_tiles(&who, &t)
+                ),
+                Ok(Err(e)) => return internal(e),
+                _ => String::new(),
+            }
+        }
+        _ => String::new(),
+    };
     let body = if items.is_empty() {
         format!("<h1>{head}</h1>{nav}<p class=\"dim\">No pictures from these days.</p>")
     } else {
         format!(
-            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
+            "<div class=\"thead\"><h1>{head}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?{q}\" title=\"Slideshow\">▶ Slideshow</a>{story}<button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{events}{nav}<div class=\"timeline days\">\n{}</div>\n{nav}{albums}",
             render_items(&who, &items, &runs, None, false, ""),
             n = set_count(items.len()),
             q = dq.query(),
@@ -5541,6 +6016,18 @@ fn face_at(
 /// A person's or group's tile: the best face to show (one someone named,
 /// then the largest).
 fn cover(faces: &[&SeenFace]) -> Option<(u64, u32)> {
+    cover_with(faces, None)
+}
+
+/// As `cover`, but the chosen portrait first when the viewer sees it.
+fn cover_with(faces: &[&SeenFace], portrait: Option<&(String, u32)>) -> Option<(u64, u32)> {
+    if let Some(f) = portrait.and_then(|(h, k)| {
+        faces
+            .iter()
+            .find(|f| f.face.key.0 == *h && f.face.key.1 == *k)
+    }) {
+        return Some((f.item, f.face.key.1));
+    }
     faces
         .iter()
         .max_by(|a, b| {
@@ -5600,6 +6087,10 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
             .filter(|(_, p)| p.hidden)
             .map(|(id, _)| *id)
             .collect();
+        let portraits: HashMap<u64, (String, u32)> = all
+            .iter()
+            .filter_map(|(id, p)| Some((*id, p.portrait.clone()?)))
+            .collect();
         let names: HashMap<u64, String> = all.into_iter().map(|(id, p)| (id, p.name)).collect();
         let known: std::collections::HashSet<u64> = seen
             .iter()
@@ -5626,13 +6117,23 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
                 crate::people::Who::Person(p) => {
                     let Some(name) = names.get(p) else { continue };
                     if off.contains(p) {
-                        put_away.push((format!("person/{p}"), name.clone(), photos(v), cover(v)));
+                        put_away.push((
+                            format!("person/{p}"),
+                            name.clone(),
+                            photos(v),
+                            cover_with(v, portraits.get(p)),
+                        ));
                         continue;
                     }
                     let c = close.get(p).copied().unwrap_or(0);
                     named.push((
                         c,
-                        (format!("person/{p}"), name.clone(), photos(v), cover(v)),
+                        (
+                            format!("person/{p}"),
+                            name.clone(),
+                            photos(v),
+                            cover_with(v, portraits.get(p)),
+                        ),
                     ));
                 }
                 crate::people::Who::Group(_) => {
@@ -5672,6 +6173,8 @@ async fn people_page(State(st): State<AppState>, Extension(viewer): Extension<Vi
     if named.is_empty() && groups.is_empty() {
         body += if !st.faces_on {
             "<p class=\"dim\">No faces: the face models are not in the vision directory.</p>"
+        } else if !st.people.loaded() {
+            "<p class=\"dim\">Faces are still loading after the start; this takes about a minute. <a href=\"people\">Look again</a>.</p>"
         } else if st.people.is_empty() {
             "<p class=\"dim\">No faces yet.</p>"
         } else {
@@ -5767,6 +6270,8 @@ async fn person_page(
         Vec<RelRow>,
         String,
         Option<String>,
+        Vec<(u64, u32)>,
+        Vec<(crate::relations::Suggestion, String, String)>,
     );
     let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Page>> {
         let Some(p) = idx.person(pid)? else {
@@ -5795,21 +6300,49 @@ async fn person_page(
             total = items.len();
             with_name = names.get(&o).cloned();
         }
-        let rels = crate::relations::of(&idx.relations()?, pid, |o| {
-            seen.contains(&o) && !off.contains(&o)
-        })
-        .into_iter()
-        .filter_map(|r| {
-            let name = names.get(&r.other)?.clone();
-            let (a, b) = if r.first {
-                (pid, r.other)
-            } else {
-                (r.other, pid)
-            };
-            let key = crate::relations::key(a, b, r.kind as u8)?;
-            Some((r.other, name, r.label, r.weight, key))
-        })
-        .collect();
+        let all_rels = idx.relations()?;
+        let maybe: Vec<(crate::relations::Suggestion, String, String)> =
+            crate::relations::suggest(&all_rels, pid, |o| seen.contains(&o) && !off.contains(&o))
+                .into_iter()
+                .filter(|sg| {
+                    [sg.other, sg.via]
+                        .iter()
+                        .all(|o| seen.contains(o) && !off.contains(o))
+                })
+                .filter_map(|sg| {
+                    let o = names.get(&sg.other)?.clone();
+                    let v = names.get(&sg.via)?.clone();
+                    Some((sg, o, v))
+                })
+                .collect();
+        // Faces to choose the portrait from: one per photo, largest first.
+        let hidden = idx.hidden(&me)?;
+        let mut mine: Vec<(f32, u64, u32)> = seen_faces(&idx, &people, &labels, &hidden)?
+            .into_iter()
+            .filter(|f| f.face.who == crate::people::Who::Person(pid))
+            .map(|f| (f.face.b[2] * f.face.b[3], f.item, f.face.key.1))
+            .collect();
+        mine.sort_by(|a, b| b.0.total_cmp(&a.0));
+        let mut one = std::collections::HashSet::new();
+        let faces: Vec<(u64, u32)> = mine
+            .into_iter()
+            .filter(|(_, item, _)| one.insert(*item))
+            .take(30)
+            .map(|(_, item, k)| (item, k))
+            .collect();
+        let rels = crate::relations::of(&all_rels, pid, |o| seen.contains(&o) && !off.contains(&o))
+            .into_iter()
+            .filter_map(|r| {
+                let name = names.get(&r.other)?.clone();
+                let (a, b) = if r.first {
+                    (pid, r.other)
+                } else {
+                    (r.other, pid)
+                };
+                let key = crate::relations::key(a, b, r.kind as u8)?;
+                Some((r.other, name, r.label, r.weight, key))
+            })
+            .collect();
         Ok(Some((
             p,
             items,
@@ -5817,10 +6350,12 @@ async fn person_page(
             rels,
             names_list(&idx, &seen),
             with_name,
+            faces,
+            maybe,
         )))
     })
     .await;
-    let (p, items, total, rels, names, with_name) = match res {
+    let (p, items, total, rels, names, with_name, faces, maybe) = match res {
         Ok(Ok(Some(x))) => x,
         Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
         Ok(Err(e)) => return internal(e),
@@ -5860,13 +6395,76 @@ async fn person_page(
             )
         })
         .unwrap_or_default();
+    // Relations that follow from the ones said (REQ-FACE-008): one tap.
+    let maybe_html = if maybe.is_empty() || p.hidden {
+        String::new()
+    } else {
+        let mut o = String::from("<section class=\"maybe\"><h2>Maybe related</h2><ul>");
+        for (sg, other, via) in &maybe {
+            let buttons: String = sg
+                .choices
+                .iter()
+                .map(|(v, l)| {
+                    format!(
+                        "<form method=\"post\" action=\"person/{pid}/relate\" class=\"inline\"><input type=\"hidden\" name=\"kind\" value=\"{v}\"><input type=\"hidden\" name=\"name\" value=\"{n}\"><button type=\"submit\" class=\"tbtn\">{name} is {l} {n}</button></form>",
+                        n = esc(other),
+                    )
+                })
+                .collect();
+            o += &format!(
+                "<li><a href=\"person/{}\">{}</a> <span class=\"dim\">({} {})</span> {buttons}</li>",
+                sg.other,
+                esc(other),
+                esc(sg.why),
+                esc(via),
+            );
+        }
+        o + "</ul><p class=\"dim\">Follows from the relations already said. Anything else: the form above.</p></section>"
+    };
+    let portrait = if faces.len() < 2 || p.name.is_empty() {
+        String::new()
+    } else {
+        let current = p.portrait.as_ref();
+        let picks: String = faces
+            .iter()
+            .map(|(item, k)| {
+                format!(
+                    "<form method=\"post\" action=\"person/{pid}/portrait\" class=\"inline\"><input type=\"hidden\" name=\"item\" value=\"{item}\"><input type=\"hidden\" name=\"face\" value=\"{k}\"><button type=\"submit\" class=\"pick\" aria-label=\"Use this face\">{}</button></form>",
+                    face_img(*item, *k)
+                )
+            })
+            .collect();
+        format!(
+            "<details class=\"albumtools portraits\"><summary>Choose the face for {name}{}</summary><div class=\"facepick\">{picks}</div><p class=\"dim\">Shown on People and in the family tree, for everyone who sees it.</p></details>",
+            if current.is_some() { " (chosen)" } else { "" },
+        )
+    };
+    let born = p
+        .birthday
+        .as_deref()
+        .map(|b| {
+            format!(
+                "<p class=\"born dim\">Birthday: {}</p>",
+                esc(&birthday_text(b))
+            )
+        })
+        .unwrap_or_default();
+    let bday = if p.name.is_empty() {
+        String::new()
+    } else {
+        let v = p.birthday.as_deref().unwrap_or("");
+        format!(
+            "<form method=\"post\" action=\"person/{pid}/birthday\"><label>Birthday <input type=\"text\" name=\"birthday\" value=\"{v}\" maxlength=\"10\" inputmode=\"numeric\" pattern=\"([0-9]{{4}}-)?[0-9]{{2}}-[0-9]{{2}}\" placeholder=\"1990-03-04 or 03-04\" aria-label=\"Birthday, year-month-day or month-day\"></label><button type=\"submit\">Save</button> <span class=\"dim\">Empty takes it off. On the day, the home page shows their photos.</span></form>",
+            v = esc(v)
+        )
+    };
     let manage = format!(
-        "<details class=\"albumtools\"><summary>Rename, hide or take the name off</summary>{hide}\
+        "<details class=\"albumtools\"><summary>Rename, birthday, hide or take the name off</summary>{hide}{bday}\
          <form method=\"post\" action=\"person/{pid}/rename\"><input type=\"text\" name=\"name\" value=\"{name}\" maxlength=\"80\" required aria-label=\"Name\"><button type=\"submit\">Rename</button> <span class=\"dim\">The name of someone already named puts both together.</span></form>\
          <form method=\"post\" action=\"person/{pid}/delete\"><button type=\"submit\" class=\"danger\">Take this name off</button> <span class=\"dim\">The photos stay; the faces wait for a name again.</span></form></details>"
     );
     let body = format!(
-        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{relations}{manage}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
+        "<div class=\"thead\"><h1>{title}</h1><span class=\"dim\">{n}</span><a class=\"tbtn\" href=\"show/{w}?person={pid}\" title=\"Slideshow\">▶ Slideshow</a><a class=\"tbtn\" href=\"person/{pid}/family\" title=\"Family tree\">🌳 Family tree</a><button type=\"button\" class=\"tbtn select\" hidden aria-pressed=\"false\">Select</button></div>\n{born}{relations}{maybe_html}{manage}{portrait}{together}<div class=\"timeline person\">\n{}</div>\n{albums}",
         render_items(&who, &items, &ones, None, false, ""),
         n = set_count(total),
         albums = album_template(&albums_of(&st, person(&viewer)).await),
@@ -6170,6 +6768,216 @@ fn sees_person(
     Ok(seen_faces(idx, people, &viewer.labels, &hidden)?
         .iter()
         .any(|f| f.face.who == crate::people::Who::Person(pid)))
+}
+
+/// A birthday as typed: "" clears it; "YYYY-MM-DD" (a date input) or
+/// "MM-DD" sets it. None for anything else.
+pub fn parse_birthday(s: &str) -> Option<Option<String>> {
+    let s = s.trim();
+    if s.is_empty() {
+        return Some(None);
+    }
+    let ok = |y: i32, md: &str| {
+        chrono::NaiveDate::parse_from_str(&format!("{y}-{md}"), "%Y-%m-%d").is_ok()
+    };
+    match s.len() {
+        5 if s.as_bytes()[2] == b'-' && ok(2000, s) => Some(Some(s.to_string())),
+        10 => {
+            let y: i32 = s.get(..4)?.parse().ok()?;
+            let this_year: i32 = chrono::Local::now().format("%Y").to_string().parse().ok()?;
+            (s.as_bytes()[4] == b'-' && (1850..=this_year).contains(&y) && ok(y, s.get(5..)?))
+                .then(|| Some(s.to_string()))
+        }
+        _ => None,
+    }
+}
+
+/// "4 March", and the year when it is known.
+fn birthday_text(b: &str) -> String {
+    let md = b.get(b.len().saturating_sub(5)..).unwrap_or("");
+    let m: usize = md.get(..2).and_then(|m| m.parse().ok()).unwrap_or(0);
+    let d: u32 = md.get(3..).and_then(|d| d.parse().ok()).unwrap_or(0);
+    let name = MONTHS.get(m.wrapping_sub(1)).copied().unwrap_or("");
+    match b.len() {
+        10 => format!("{d} {name} {}", &b[..4]),
+        _ => format!("{d} {name}"),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct BirthdayForm {
+    birthday: Option<String>,
+}
+
+/// POST /person/{id}/birthday: set or clear a person's birthday, for
+/// everyone in the house; only someone who sees the person may (REQ-FACE-007).
+async fn person_birthday(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<BirthdayForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let Some(b) = parse_birthday(f.birthday.as_deref().unwrap_or("")) else {
+        return (
+            StatusCode::BAD_REQUEST,
+            "a birthday is a date, or month and day as MM-DD",
+        )
+            .into_response();
+    };
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        if idx.person(pid)?.is_none_or(|p| p.name.is_empty())
+            || !sees_person(&idx, &people, &viewer, pid)?
+        {
+            return Ok(false);
+        }
+        idx.set_birthday(pid, b.as_deref())
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct PortraitForm {
+    item: u64,
+    face: u32,
+}
+
+/// POST /person/{id}/portrait: this face, in a photo the viewer sees,
+/// stands for the person (REQ-FACE-008).
+async fn person_portrait(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+    headers: axum::http::HeaderMap,
+    axum::Form(f): axum::Form<PortraitForm>,
+) -> Response {
+    if !same_site(&headers) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<bool> {
+        let Some((rec, face)) = face_at(&idx, &people, &viewer, f.item, f.face)? else {
+            return Ok(false);
+        };
+        if face.who != crate::people::Who::Person(pid)
+            || idx.hidden(&person(&viewer))?.contains(&f.item)
+        {
+            return Ok(false);
+        }
+        idx.set_portrait(pid, &rec.hash, f.face)
+    })
+    .await;
+    match res {
+        Ok(Ok(true)) => back_to(&st, Some(&format!("person/{pid}"))),
+        Ok(Ok(false)) => StatusCode::NOT_FOUND.into_response(),
+        Ok(Err(e)) => internal(e),
+        Err(e) => internal(e),
+    }
+}
+
+/// GET /person/{id}/family: the family tree around a person (REQ-FACE-008):
+/// generations as rows, the oldest at the top, each person with their
+/// face and how they are related; only people the viewer knows.
+async fn family_page(
+    State(st): State<AppState>,
+    Extension(viewer): Extension<Viewer>,
+    UrlPath(pid): UrlPath<u64>,
+) -> Response {
+    let (idx, people) = (st.index.clone(), st.people.clone());
+    let labels = viewer.labels.clone();
+    let me = person(&viewer);
+    type Node = (u64, i32, String, String, Option<(u64, u32)>);
+    let res = tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<Node>>> {
+        let hidden = idx.hidden(&me)?;
+        let seen = seen_faces(&idx, &people, &labels, &hidden)?;
+        let all = idx.people()?;
+        let off: std::collections::HashSet<u64> = all
+            .iter()
+            .filter(|(_, p)| p.hidden)
+            .map(|(id, _)| *id)
+            .collect();
+        let mut by: HashMap<u64, Vec<&SeenFace>> = HashMap::new();
+        for f in &seen {
+            if let crate::people::Who::Person(p) = f.face.who {
+                if !off.contains(&p) {
+                    by.entry(p).or_default().push(f);
+                }
+            }
+        }
+        if !by.contains_key(&pid) {
+            return Ok(None);
+        }
+        let info: HashMap<u64, index::Person> = all.into_iter().collect();
+        let tree = crate::relations::family(&idx.relations()?, pid, 6, |o| by.contains_key(&o));
+        Ok(Some(
+            tree.into_iter()
+                .filter_map(|(id, g, how)| {
+                    let p = info.get(&id)?;
+                    let c = cover_with(by.get(&id)?, p.portrait.as_ref());
+                    Some((id, g, how, p.name.clone(), c))
+                })
+                .collect(),
+        ))
+    })
+    .await;
+    let nodes = match res {
+        Ok(Ok(Some(n))) => n,
+        Ok(Ok(None)) => return (StatusCode::NOT_FOUND, "no such person").into_response(),
+        Ok(Err(e)) => return internal(e),
+        Err(e) => return internal(e),
+    };
+    let center = nodes.first().map(|n| n.3.clone()).unwrap_or_default();
+    let mut body = format!(
+        "<div class=\"thead\"><h1>Family of {}</h1><a class=\"tbtn\" href=\"person/{pid}\">← {}</a></div>",
+        esc(&center),
+        esc(&center)
+    );
+    if nodes.len() < 2 {
+        body += "<p class=\"dim\">No family yet. On a person's page, say who is whose parent, partner or sibling; the tree grows from those relations.</p>";
+        return page_for(&st, "lichtbild family", &body).into_response();
+    }
+    let (lo, hi) = nodes
+        .iter()
+        .fold((0, 0), |(l, h), n| (l.min(n.1), h.max(n.1)));
+    body += "<div class=\"tree\">";
+    for g in lo..=hi {
+        let row: Vec<&Node> = nodes.iter().filter(|n| n.1 == g).collect();
+        if row.is_empty() {
+            continue;
+        }
+        let gen = match g {
+            -2 => "Grandparents".to_string(),
+            -1 => "Parents".to_string(),
+            0 => "Same generation".to_string(),
+            1 => "Children".to_string(),
+            2 => "Grandchildren".to_string(),
+            g if g < 0 => format!("{} generations up", -g),
+            g => format!("{g} generations down"),
+        };
+        body += &format!("<section class=\"gen\"><h2>{gen}</h2><div class=\"genrow\">");
+        for (id, _, how, name, c) in row {
+            let img = c.map(|(i, k)| face_img(i, k)).unwrap_or_default();
+            body += &format!(
+                "<a class=\"node{me}\" href=\"person/{id}/family\">{img}<b>{}</b><small>{}</small></a>",
+                esc(name),
+                esc(how),
+                me = if *id == pid { " center" } else { "" },
+            );
+        }
+        body += "</div></section>";
+    }
+    body += "</div><p class=\"dim\">From the relations said on people's pages: parent, step-parent, grandparent, partner, sibling and half-sibling. A name opens their own tree.</p>";
+    page_for(&st, "lichtbild family", &body).into_response()
 }
 
 /// POST /person/{id}/rename: a new name; someone else's name puts both

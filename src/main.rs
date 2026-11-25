@@ -217,6 +217,11 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
                 Ok(_) => {}
                 Err(e) => tracing::error!("fingerprints {when} failed: {e:#}"),
             }
+            match lichtbild::best::quality_pass(&cfg.data_dir, &idx) {
+                Ok(n) if n > 0 => tracing::info!("sharpness and light {when}: {n} new"),
+                Ok(_) => {}
+                Err(e) => tracing::error!("sharpness and light {when} failed: {e:#}"),
+            }
             match dups.rebuild(&idx) {
                 Ok(r) => {
                     status.set_duplicates(r.groups, r.items);
@@ -251,7 +256,10 @@ fn spawn_scanner(cfg: Config, idx: Arc<Index>, state: &web::AppState) {
         }
         let regroup_faces = |when: &str| match people.rebuild(&idx) {
             Ok(n) => tracing::info!("faces {when}: {n}"),
-            Err(e) => tracing::error!("faces {when} failed: {e:#}"),
+            Err(e) => {
+                people.mark_loaded();
+                tracing::error!("faces {when} failed: {e:#}")
+            }
         };
         regroup_faces("at start");
         if !cfg.scan_at_start {

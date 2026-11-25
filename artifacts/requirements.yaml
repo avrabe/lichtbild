@@ -1520,3 +1520,148 @@ artifacts:
     links:
       - type: satisfies
         target: SSC-002
+
+  - id: REQ-MEDIA-005
+    type: requirement
+    title: A Live Photo is one item with its clip
+    status: implemented
+    release: v0.12.0
+    description: >
+      After each scan, a HEIC or JPEG photo and a MOV or MP4 clip of at most
+      4 s with the same name in the same folder of one library, taken at
+      the same moment as far as their dates tell, are one Live Photo. The
+      clip stays indexed (found = indexed + skipped holds) but is not an
+      item of its own: no timeline, day, search, map, words, duplicates or
+      transcript pass lists it. The photo's tile says LIVE, and its viewer
+      plays the clip in place of the photo on a tap, click or Enter, or
+      while a mouse rests on LIVE. Two candidates under one name are not
+      guessed between. When the photo is gone, the clip is a video of its
+      own again after the next scan.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: constraint-satisfies
+        target: SC-002
+
+  - id: REQ-FACE-006
+    type: requirement
+    title: People says when faces are still loading after a start
+    status: implemented
+    release: v0.12.0
+    description: >
+      Until the faces were first read from the index after a start (about a
+      minute on a Pi with 50,000 faces), the People page says that faces
+      are still loading and links to look again, instead of "No faces yet".
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-029
+    type: requirement
+    title: Recently added shows what the scans brought in
+    status: implemented
+    release: v0.12.0
+    description: >
+      Every file notes when it was first indexed. A Recently added page,
+      linked from the menu and the home page, shows the 500 most recently
+      indexed items the viewer may see, without hidden items or second
+      copies, in groups by the day they were indexed, the newest day
+      first, and within a day by date taken. Files indexed before this
+      release form one group of their own.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FACE-007
+    type: requirement
+    title: On a person's birthday the home page shows their photos
+    status: implemented
+    release: v0.12.0
+    description: >
+      A named person can be given a birthday (year-month-day, or month-day
+      when the year is not known) from their page, by someone who sees
+      them, with a same-site request; it holds for the house and shows on
+      their page. On that month and day, each viewer's home page shows up
+      to 12 of the photos of that person they may see, with the age they
+      turn when the year is known. Hidden people get no birthday section.
+      Other dates are refused.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-WEB-030
+    type: requirement
+    title: Blurry and badly lit photos are offered to put away
+    status: implemented
+    release: v0.12.0
+    description: >
+      After each scan every photo's thumbnail is measured once (edge
+      energy, mean brightness, clipped share) and the measure is stored by
+      content hash. A review page lists the photos the viewer may see that
+      look blurry, too dark or too bright, worst first, without favourites,
+      hidden items or second copies, to hide with Select. Nothing is hidden
+      by itself. On open photos the sharp ones measure 5.7 to 7.7 and the
+      same photos blurred 1.4 to 1.6; the blurry line is 3.0.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-TRIP-002
+    type: requirement
+    title: Events are found from many pictures close together in time
+    status: implemented
+    release: v0.12.0
+    description: >
+      At least 12 pictures with a recorded date, none more than 90 minutes
+      after the one before, are an event (a party, a wedding, a day out),
+      found among the pictures the viewer may see without hidden items or
+      second copies. An Events page lists them newest first, each named by
+      the town most of its positioned pictures are nearest to, with its
+      time and the named people most often in it (at most 3, only people
+      the viewer knows). A run of days, such as a trip, shows its events
+      at the top. Dates guessed from file names or times make no event.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002
+
+  - id: REQ-FACE-008
+    type: requirement
+    title: A family tree from the relations, with the ones that follow offered in one tap
+    status: implemented
+    release: v0.12.0
+    description: >
+      Owner request 2026-11-24. Step-parent and half-sibling are kinds of
+      relation too. A person's family tree shows everyone reached through
+      parent, step-parent, grandparent, partner, sibling and half-sibling
+      relations, one row per generation with the elders on top, each with
+      their face and how they are related ("partner's parent"); only people
+      the viewer knows, and a name opens their own tree. A person page
+      offers the relations that follow from the ones said, for people not
+      yet related: a parent's partner as parent or step-parent, a parent's
+      parent as grandparent, a parent's child as sibling or half-sibling, a
+      partner's parent as in-law, a partner's child as child or step-child;
+      one tap says it, and it is not offered again. A face of the person,
+      in a photo the viewer sees and has not hidden, can be chosen to stand
+      for them on People and in the tree, with a same-site request.
+    fields:
+      priority: should
+      category: functional
+    links:
+      - type: satisfies
+        target: SSC-002

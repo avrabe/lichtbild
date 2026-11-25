@@ -1904,3 +1904,106 @@ artifacts:
     links:
       - type: verifies
         target: REQ-WEB-028
+
+  - id: VER-135
+    type: verification
+    title: A photo and its short clip are one Live Photo, and the clip is freed when the photo goes
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "a_live_photo_is_one_item_with_its_clip (tests/video.rs) and live::tests (src/live.rs)"
+      test-location: tests/video.rs
+      steps:
+        - run: "cargo test --test video a_live_photo_is_one_item_with_its_clip"
+        - run: "cargo test --lib live::"
+    links:
+      - type: verifies
+        target: REQ-MEDIA-005
+
+  - id: VER-136
+    type: verification
+    title: People says faces are still loading before the first read, and lists them after
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_groups_people_and_a_name_finds_them"
+      test-location: tests/faces.rs
+      steps:
+        - run: "LICHTBILD_TEST_VISION_DIR=<models> cargo test --test faces the_pass_groups_people_and_a_name_finds_them"
+    links:
+      - type: verifies
+        target: REQ-FACE-006
+
+  - id: VER-137
+    type: verification
+    title: Recently added lists the newest file first and is in every menu
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "recently_added_shows_the_newest_files_first, every_page_has_the_app_menu"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui recently_added_shows_the_newest_files_first"
+    links:
+      - type: verifies
+        target: REQ-WEB-029
+
+  - id: VER-138
+    type: verification
+    title: A birthday shows on the person page and their photos on the home page on the day
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_pass_groups_people_and_a_name_finds_them (tests/faces.rs), birthdays_are_real_dates (tests/ui.rs)"
+      test-location: tests/faces.rs
+      steps:
+        - run: "LICHTBILD_TEST_VISION_DIR=<models> cargo test --test faces the_pass_groups_people_and_a_name_finds_them"
+        - run: "cargo test --test ui birthdays_are_real_dates"
+    links:
+      - type: verifies
+        target: REQ-FACE-007
+
+  - id: VER-139
+    type: verification
+    title: Flat and black photos are listed for review, sharp and hidden ones are not, each measured once
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "blurry_and_dark_photos_are_offered_for_review (tests/ui.rs), best::tests (src/best.rs)"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui blurry_and_dark_photos_are_offered_for_review"
+        - run: "cargo test --lib best::"
+    links:
+      - type: verifies
+        target: REQ-WEB-030
+
+  - id: VER-140
+    type: verification
+    title: Fourteen pictures in an hour are one event on Events and on the days around it; few or guessed ones are none
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "many_pictures_close_together_are_an_event (tests/ui.rs), events::tests (src/events.rs)"
+      test-location: tests/ui.rs
+      steps:
+        - run: "cargo test --test ui many_pictures_close_together_are_an_event"
+        - run: "cargo test --lib events::"
+    links:
+      - type: verifies
+        target: REQ-TRIP-002
+
+  - id: VER-141
+    type: verification
+    title: The tree and the offered relations follow from the said ones, and only a person's own face becomes their portrait
+    status: draft
+    fields:
+      method: automated-test
+      test-name: "the_family_tree_follows_from_relations_and_offers_the_rest (tests/auth.rs), relations::tests (src/relations.rs)"
+      test-location: tests/auth.rs
+      steps:
+        - run: "cargo test --test auth the_family_tree_follows_from_relations_and_offers_the_rest"
+        - run: "cargo test --lib relations::"
+    links:
+      - type: verifies
+        target: REQ-FACE-008

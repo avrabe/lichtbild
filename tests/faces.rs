@@ -112,6 +112,8 @@ fn one_persons_faces_match_and_others_do_not() {
 // the faces of a photo.
 // rivet: verifies REQ-FACE-002
 // rivet: verifies REQ-FACE-003
+// rivet: verifies REQ-FACE-006
+// rivet: verifies REQ-FACE-007
 #[tokio::test]
 async fn the_pass_groups_people_and_a_name_finds_them() {
     let Some(m) = model() else { return };
@@ -147,6 +149,22 @@ async fn the_pass_groups_people_and_a_name_finds_them() {
 
     let state = AppState::new(&cfg, idx.clone());
     state.search.rebuild(&idx, None).unwrap();
+    // Before the faces are read after a start, People says they are on
+    // their way instead of "No faces yet" (REQ-FACE-006).
+    let early = web::router(state.clone())
+        .oneshot(
+            Request::builder()
+                .uri("/people")
+                .header("host", "localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let early = early.into_body().collect().await.unwrap().to_bytes();
+    let early = String::from_utf8_lossy(&early);
+    assert!(early.contains("Faces are still loading"), "{early}");
+    assert!(!early.contains("No faces yet"));
     assert_eq!(state.people.rebuild(&idx).unwrap(), 11);
     let id = |n: &str| {
         idx.all()
@@ -237,6 +255,38 @@ async fn the_pass_groups_people_and_a_name_finds_them() {
         v.contains(">Astra</a>") && v.contains("Who is this?"),
         "{v}"
     );
+
+    // A birthday (REQ-FACE-007): kept for the house, shown on her page,
+    // and on the day the home page shows her photos; nonsense is refused.
+    let pid = p.trim_start_matches('/').trim_start_matches("person/");
+    let (s, _, _) = send("POST", &format!("/person/{pid}/birthday"), "birthday=13-45").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    let today = chrono::Local::now();
+    let born = format!(
+        "{}-{}",
+        today.format("%Y").to_string().parse::<i32>().unwrap() - 30,
+        today.format("%m-%d")
+    );
+    let (s, _, _) = send(
+        "POST",
+        &format!("/person/{pid}/birthday"),
+        &format!("birthday={born}"),
+    )
+    .await;
+    assert!(s.is_redirection(), "{s}");
+    let (_, _, page) = send("GET", &p, "").await;
+    assert!(page.contains("Birthday: "), "{page}");
+    let (_, _, home) = send("GET", "/", "").await;
+    assert!(
+        home.contains("’s birthday") && home.contains("turns 30"),
+        "{home}"
+    );
+    assert!(home.contains(&format!("thumb/{}?", a1.0)));
+    // Another day: no birthday on the home page.
+    let (s, _, _) = send("POST", &format!("/person/{pid}/birthday"), "birthday=").await;
+    assert!(s.is_redirection());
+    let (_, _, home) = send("GET", "/", "").await;
+    assert!(!home.contains("’s birthday"));
 }
 
 // Photos go to a child in batches; a picture that cannot be read fails

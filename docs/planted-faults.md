@@ -208,6 +208,23 @@ at nice 0.
 | F200 | REQ-WEB-028 | the relations form is offered when no one else is named | `relations_between_people_are_seen_only_between_known_people` |
 | F201 | REQ-WEB-028 | a search without results gives no hint | `refusals_and_empty_answers_say_what_to_do_next` |
 | F202 | REQ-WEB-028 | /days/{who} without days is refused | `refusals_and_empty_answers_say_what_to_do_next` |
+| F203 | REQ-MEDIA-005 | a Live Photo's clip stays in the timeline | `a_live_photo_is_one_item_with_its_clip` |
+| F204 | REQ-MEDIA-005 | a long video is taken for a Live Photo's clip | `live::tests` |
+| F205 | REQ-FACE-006 | People says "No faces yet" while faces are loading | `the_pass_groups_people_and_a_name_finds_them` |
+| F206 | REQ-WEB-029 | Recently added lists the oldest files first | `recently_added_shows_the_newest_files_first` |
+| F207 | REQ-FACE-007 | the birthday section shows on the wrong days | `the_pass_groups_people_and_a_name_finds_them` |
+| F208 | REQ-FACE-007 | a birthday in the future is taken | `birthdays_are_real_dates` |
+| F209 | REQ-WEB-030 | blurry photos are not offered for review | `blurry_and_dark_photos_are_offered_for_review` |
+| F210 | REQ-WEB-030 | favourites are listed on the review page | `blurry_and_dark_photos_are_offered_for_review` |
+| F211 | REQ-TRIP-002 | a pause of hours does not end an event | `events::tests` |
+| F212 | REQ-TRIP-002 | dates guessed from file times make events | `events::tests` |
+| F213 | REQ-TRIP-002 | a trip's days do not show its events | `many_pictures_close_together_are_an_event` |
+| F214 | REQ-FACE-008 | a relation already said is offered again | `the_family_tree_follows_from_relations_and_offers_the_rest` |
+| F215 | REQ-FACE-008 | someone else's face is taken for a person's portrait | `the_family_tree_follows_from_relations_and_offers_the_rest` |
+| F216 | REQ-FACE-008 | parents are drawn below their children | `relations::tests` |
+| F217 | REQ-FACE-008 | a suggestion goes through someone the viewer does not know | `relations::tests` |
+| F218 | REQ-TRIP-002 | one library's days show another library's events | `many_pictures_close_together_are_an_event` |
+| F219 | REQ-MEDIA-005 | a rescan with a Live Photo does not reconcile | `a_live_photo_is_one_item_with_its_clip` |
 | F182 | REQ-FACE-005 | hidden faces are still listed with the photo | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F183 | REQ-FACE-005 | a hidden person is still suggested by name | `strangers_and_people_can_be_hidden_and_shown_again` |
 | F106 | REQ-SEE-001 | a whole-picture texture is kept as a thing | `whole_picture_boxes_need_a_sure_find` |
@@ -217,6 +234,10 @@ at nice 0.
 Not covered by a planted fault yet: REQ-IDX-001 (schema migration), REQ-CFG-001
 (error messages), REQ-REL-001 (checked by the release workflow itself at the
 first tag).
+
+The page checks a suggestion's people again (src/web.rs, person_page);
+with both checks in place, planting either alone cannot show a hidden
+name, so F217 plants into suggest() and its unit test catches it.
 
 Retired: F75 (a stored session survives the person's removal from the
 configuration). Since the stored session is also bound to the identity the

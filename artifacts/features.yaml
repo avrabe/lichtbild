@@ -454,3 +454,42 @@ artifacts:
         target: REQ-FACE-005
       - type: satisfies
         target: REQ-NAV-002
+
+  - id: FEAT-019
+    type: feature
+    title: Live Photos, what came in, better shots, birthdays and events
+    status: implemented
+    release: v0.12.0
+    description: >
+      Owner choice 2026-11-24 after comparing lichtbild with Immich and
+      others: Live Photos as one item, a Recently added page, a sharpness
+      and exposure check, birthday memories, events within trips, and a
+      People page that says when faces are still loading. Later the same
+      day: a family tree with the relations that follow, and a chosen face
+      per person. Nothing is
+      shared outside the house.
+    fields:
+      phase: phase-1
+      acceptance-criteria:
+        - An iPhone Live Photo shows once in the timeline and plays its clip from the viewer
+        - Right after a start, People says faces are still loading rather than that there are none
+        - A page shows what the last sync brought in, newest first
+        - On someone's birthday the home page shows their photos
+        - Blurry and nearly black or white photos are listed to put away, and on the house library at most 5% of photos are listed as blurry
+        - Parties and days out are found as events, and a trip shows its events
+        - A family tree shows the generations, and a wife whose father has a partner is offered her as mother or step-mother
+    links:
+      - type: satisfies
+        target: REQ-MEDIA-005
+      - type: satisfies
+        target: REQ-FACE-006
+      - type: satisfies
+        target: REQ-WEB-029
+      - type: satisfies
+        target: REQ-FACE-007
+      - type: satisfies
+        target: REQ-WEB-030
+      - type: satisfies
+        target: REQ-TRIP-002
+      - type: satisfies
+        target: REQ-FACE-008
